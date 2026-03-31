@@ -10,6 +10,7 @@
 #include "test_hittest.h"
 #include "test_calc.h"
 #include "test_grid.h"
+#include "test_remaining.h"
 #include <cstdio>
 
 int g_passed = 0;
@@ -52,6 +53,9 @@ int main() {
     printf("\n");
 
     testGridLayout();
+    printf("\n");
+
+    testRemaining();
     printf("\n");
 
     printf("=== Results: %d passed, %d failed ===\n", g_passed, g_failed);

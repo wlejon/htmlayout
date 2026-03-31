@@ -169,6 +169,97 @@ static float evalCalc(const std::string& expr, float referenceSize, float fontSi
     return parser.parseExpr();
 }
 
+bool isIntrinsicSizingKeyword(const std::string& value) {
+    return value == "min-content" || value == "max-content" || value == "fit-content";
+}
+
+float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
+    if (!node) return 0.0f;
+
+    auto& style = node->computedStyle();
+    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    if (fontSize <= 0.0f) fontSize = 16.0f;
+    const std::string& fontFamily = styleVal(style, "font-family");
+    const std::string& fontWeight = styleVal(style, "font-weight");
+
+    float maxChildMin = 0.0f;
+
+    for (auto* child : node->children()) {
+        if (child->isTextNode()) {
+            // Min-content: each word on its own line, take the widest word
+            std::string text = child->textContent();
+            std::string word;
+            float widestWord = 0.0f;
+            for (size_t i = 0; i <= text.size(); i++) {
+                char c = (i < text.size()) ? text[i] : ' ';
+                if (std::isspace(static_cast<unsigned char>(c))) {
+                    if (!word.empty()) {
+                        float w = metrics.measureWidth(word, fontFamily, fontSize, fontWeight);
+                        widestWord = std::max(widestWord, w);
+                        word.clear();
+                    }
+                } else {
+                    word += c;
+                }
+            }
+            maxChildMin = std::max(maxChildMin, widestWord);
+        } else {
+            auto& cs = child->computedStyle();
+            if (styleVal(cs, "display") == "none") continue;
+            float childMin = computeMinContentWidth(child, metrics);
+            // Add padding/border
+            float ph = resolveLength(styleVal(cs, "padding-left"), 0, fontSize) +
+                       resolveLength(styleVal(cs, "padding-right"), 0, fontSize);
+            float bh = resolveLength(styleVal(cs, "border-left-width"), 0, fontSize) +
+                       resolveLength(styleVal(cs, "border-right-width"), 0, fontSize);
+            maxChildMin = std::max(maxChildMin, childMin + ph + bh);
+        }
+    }
+    return maxChildMin;
+}
+
+float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
+    if (!node) return 0.0f;
+
+    auto& style = node->computedStyle();
+    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    if (fontSize <= 0.0f) fontSize = 16.0f;
+    const std::string& fontFamily = styleVal(style, "font-family");
+    const std::string& fontWeight = styleVal(style, "font-weight");
+
+    float maxChildMax = 0.0f;
+
+    for (auto* child : node->children()) {
+        if (child->isTextNode()) {
+            // Max-content: no wrapping, measure the whole text as one line
+            std::string text = child->textContent();
+            // Collapse whitespace
+            std::string collapsed;
+            bool lastSpace = false;
+            for (char c : text) {
+                if (std::isspace(static_cast<unsigned char>(c))) {
+                    if (!lastSpace && !collapsed.empty()) { collapsed += ' '; lastSpace = true; }
+                } else {
+                    collapsed += c; lastSpace = false;
+                }
+            }
+            if (!collapsed.empty() && collapsed.back() == ' ') collapsed.pop_back();
+            float w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
+            maxChildMax = std::max(maxChildMax, w);
+        } else {
+            auto& cs = child->computedStyle();
+            if (styleVal(cs, "display") == "none") continue;
+            float childMax = computeMaxContentWidth(child, metrics);
+            float ph = resolveLength(styleVal(cs, "padding-left"), 0, fontSize) +
+                       resolveLength(styleVal(cs, "padding-right"), 0, fontSize);
+            float bh = resolveLength(styleVal(cs, "border-left-width"), 0, fontSize) +
+                       resolveLength(styleVal(cs, "border-right-width"), 0, fontSize);
+            maxChildMax = std::max(maxChildMax, childMax + ph + bh);
+        }
+    }
+    return maxChildMax;
+}
+
 float resolveLength(const std::string& value, float referenceSize, float fontSize) {
     if (value.empty() || value == "auto" || value == "none" || value == "normal") {
         return 0.0f;

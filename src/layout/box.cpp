@@ -1,6 +1,8 @@
 #include "layout/box.h"
 #include "layout/formatting_context.h"
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 
 namespace htmlayout::layout {
 
@@ -70,6 +72,67 @@ bool createsStackingContext(const css::ComputedStyle& style) {
     return false;
 }
 
+// Parse translate(x, y) or translate(x) from a transform string.
+// Returns {tx, ty}. Only handles translate(), translateX(), translateY() with px values.
+std::pair<float, float> parseTranslate(const std::string& transform) {
+    float tx = 0.0f, ty = 0.0f;
+    size_t pos = 0;
+
+    while (pos < transform.size()) {
+        // Find translate functions
+        size_t tpos = transform.find("translate", pos);
+        if (tpos == std::string::npos) break;
+
+        size_t nameEnd = tpos + 9; // past "translate"
+        if (nameEnd >= transform.size()) break;
+
+        bool isX = false, isY = false;
+        if (transform[nameEnd] == 'X') { isX = true; nameEnd++; }
+        else if (transform[nameEnd] == 'Y') { isY = true; nameEnd++; }
+
+        // Find '('
+        if (nameEnd >= transform.size() || transform[nameEnd] != '(') {
+            pos = nameEnd;
+            continue;
+        }
+        nameEnd++; // skip '('
+
+        // Parse first value
+        size_t closeParen = transform.find(')', nameEnd);
+        if (closeParen == std::string::npos) break;
+
+        std::string args = transform.substr(nameEnd, closeParen - nameEnd);
+
+        // Split by comma
+        auto parseVal = [](const std::string& s) -> float {
+            float val = 0.0f;
+            const char* begin = s.data();
+            const char* end = begin + s.size();
+            // Skip leading whitespace
+            while (begin < end && (*begin == ' ' || *begin == '\t')) begin++;
+            auto [ptr, ec] = std::from_chars(begin, end, val);
+            // Assume px if no unit or explicit px
+            return val;
+        };
+
+        size_t comma = args.find(',');
+        if (isX) {
+            tx += parseVal(args);
+        } else if (isY) {
+            ty += parseVal(args);
+        } else if (comma != std::string::npos) {
+            tx += parseVal(args.substr(0, comma));
+            ty += parseVal(args.substr(comma + 1));
+        } else {
+            tx += parseVal(args);
+        }
+
+        pos = closeParen + 1;
+    }
+
+    return {tx, ty};
+}
+
 LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
     if (!node) return nullptr;
 
@@ -81,8 +144,17 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
     // visibility:hidden still occupies space but is not hit-testable
     if (styleVal(style, "visibility") == "hidden") return nullptr;
 
-    // Check if point is within this node's border box
-    if (!pointInBox(node->box, x, y)) return nullptr;
+    // Apply transform: adjust the test point by inverse translation
+    float testX = x, testY = y;
+    const std::string& transform = styleVal(style, "transform");
+    if (!transform.empty() && transform != "none") {
+        auto [tx, ty] = parseTranslate(transform);
+        testX = x - tx;
+        testY = y - ty;
+    }
+
+    // Check if point is within this node's border box (using transform-adjusted coords)
+    if (!pointInBox(node->box, testX, testY)) return nullptr;
 
     // Overflow clipping: if overflow is hidden/scroll/auto, clip to border box
     const std::string& overflow = styleVal(style, "overflow");
@@ -110,7 +182,7 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
         [](const auto& a, const auto& b) { return a.first > b.first; });
 
     for (auto& [z, child] : zChildren) {
-        LayoutNode* hit = hitTestRecursive(child, x, y);
+        LayoutNode* hit = hitTestRecursive(child, testX, testY);
         if (hit) return hit;
     }
 

@@ -7,6 +7,21 @@ namespace htmlayout::layout {
 // its computed display property, then dispatches to the right one.
 void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics);
 
+// Sentinel values for intrinsic sizing keywords
+constexpr float SIZING_MIN_CONTENT = -10.0f;
+constexpr float SIZING_MAX_CONTENT = -20.0f;
+constexpr float SIZING_FIT_CONTENT = -30.0f;
+
+// Check if a CSS value is an intrinsic sizing keyword
+bool isIntrinsicSizingKeyword(const std::string& value);
+
+// Compute min-content width: the narrowest an element can be without overflow.
+// Each word goes on its own line.
+float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics);
+
+// Compute max-content width: the width if the content never wraps.
+float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics);
+
 // Resolve CSS length values (px, em, rem, %, vw, vh, vmin, vmax, ch, pt, auto) to pixels.
 // Supports calc() expressions.
 float resolveLength(const std::string& value, float referenceSize, float fontSize);

@@ -15,6 +15,9 @@ const std::string& styleVal(const css::ComputedStyle& style, const std::string& 
 
 float resolveDimension(const std::string& value, float available, float fontSize) {
     if (value.empty() || value == "auto" || value == "none") return -1.0f; // sentinel: auto
+    if (value == "min-content") return SIZING_MIN_CONTENT;
+    if (value == "max-content") return SIZING_MAX_CONTENT;
+    if (value == "fit-content") return SIZING_FIT_CONTENT;
     return resolveLength(value, available, fontSize);
 }
 
@@ -53,7 +56,17 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     float specifiedWidth = resolveDimension(styleVal(style, "width"), availableWidth, fontSize);
     float contentWidth;
-    if (specifiedWidth >= 0.0f) {
+    if (specifiedWidth == SIZING_MIN_CONTENT) {
+        contentWidth = computeMinContentWidth(node, metrics);
+    } else if (specifiedWidth == SIZING_MAX_CONTENT) {
+        contentWidth = computeMaxContentWidth(node, metrics);
+    } else if (specifiedWidth == SIZING_FIT_CONTENT) {
+        float minC = computeMinContentWidth(node, metrics);
+        float maxC = computeMaxContentWidth(node, metrics);
+        float avail = availableWidth - marginH - paddingH - borderH;
+        if (avail < 0.0f) avail = 0.0f;
+        contentWidth = std::min(maxC, std::max(minC, avail));
+    } else if (specifiedWidth >= 0.0f) {
         // Box-sizing
         const std::string& boxSizing = styleVal(style, "box-sizing");
         if (boxSizing == "border-box") {
@@ -348,6 +361,100 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         child->box.contentRect.x = xPos;
         child->box.contentRect.y = yPos;
+    }
+
+    // Multi-column layout: redistribute children into columns if column-count or column-width is set
+    const std::string& colCountStr = styleVal(style, "column-count");
+    const std::string& colWidthStr = styleVal(style, "column-width");
+
+    bool hasMulticol = (!colCountStr.empty() && colCountStr != "auto") ||
+                       (!colWidthStr.empty() && colWidthStr != "auto");
+
+    if (hasMulticol) {
+        int columnCount = 1;
+        float columnWidth = 0.0f;
+
+        if (!colCountStr.empty() && colCountStr != "auto") {
+            try { columnCount = std::stoi(colCountStr); } catch (...) { columnCount = 1; }
+            if (columnCount < 1) columnCount = 1;
+        }
+
+        if (!colWidthStr.empty() && colWidthStr != "auto") {
+            columnWidth = resolveLength(colWidthStr, contentWidth, fontSize);
+        }
+
+        // Resolve column gap
+        const std::string& colGapStr = styleVal(style, "column-gap");
+        float columnGap = 0.0f;
+        if (!colGapStr.empty() && colGapStr != "normal") {
+            columnGap = resolveLength(colGapStr, contentWidth, fontSize);
+        }
+
+        // Determine actual column count and width
+        if (columnWidth > 0 && (colCountStr.empty() || colCountStr == "auto")) {
+            // Only column-width specified: compute count from available width
+            columnCount = std::max(1, static_cast<int>((contentWidth + columnGap) / (columnWidth + columnGap)));
+        }
+        // Compute actual column width from count
+        float actualColWidth = (contentWidth - columnGap * (columnCount - 1)) / columnCount;
+        if (actualColWidth < 0) actualColWidth = 0;
+
+        // Compute total content height (already computed as cursorY or specifiedHeight)
+        float totalHeight = node->box.contentRect.height;
+
+        // Target column height: divide total evenly
+        float targetColHeight = totalHeight / columnCount;
+        if (targetColHeight < 1.0f) targetColHeight = 1.0f;
+
+        // Redistribute in-flow children into columns
+        // Collect in-flow children (not absolute, not display:none)
+        std::vector<LayoutNode*> inFlowChildren;
+        for (auto* child : node->children()) {
+            if (child->isTextNode()) continue;
+            auto& cs = child->computedStyle();
+            if (styleVal(cs, "display") == "none") continue;
+            const std::string& cp = styleVal(cs, "position");
+            if (cp == "absolute" || cp == "fixed") continue;
+            inFlowChildren.push_back(child);
+        }
+
+        // Re-layout each child at column width and place into columns
+        int currentCol = 0;
+        float colY = 0.0f;
+        float maxColHeight = 0.0f;
+
+        for (auto* child : inFlowChildren) {
+            // Re-layout child at column width
+            layoutNode(child, actualColWidth, metrics);
+
+            float childFullH = child->box.margin.top + child->box.border.top +
+                               child->box.padding.top + child->box.contentRect.height +
+                               child->box.padding.bottom + child->box.border.bottom +
+                               child->box.margin.bottom;
+
+            // Check if child would overflow current column
+            if (colY > 0 && colY + childFullH > targetColHeight && currentCol < columnCount - 1) {
+                maxColHeight = std::max(maxColHeight, colY);
+                currentCol++;
+                colY = 0.0f;
+            }
+
+            float colX = currentCol * (actualColWidth + columnGap);
+
+            child->box.contentRect.x = colX + child->box.margin.left +
+                                       child->box.padding.left + child->box.border.left;
+            child->box.contentRect.y = colY + child->box.margin.top +
+                                       child->box.padding.top + child->box.border.top;
+
+            // Clamp child width to column width
+            if (child->box.contentRect.width > actualColWidth) {
+                child->box.contentRect.width = actualColWidth;
+            }
+
+            colY += childFullH;
+        }
+        maxColHeight = std::max(maxColHeight, colY);
+        node->box.contentRect.height = maxColHeight;
     }
 }
 
