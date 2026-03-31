@@ -1,9 +1,394 @@
 #include "layout/flex.h"
+#include "layout/formatting_context.h"
+#include <algorithm>
+#include <cmath>
+#include <numeric>
 
 namespace htmlayout::layout {
 
+namespace {
+
+const std::string& styleVal(const css::ComputedStyle& style, const std::string& prop) {
+    static const std::string empty;
+    auto it = style.find(prop);
+    return it != style.end() ? it->second : empty;
+}
+
+float resolveDim(const std::string& value, float available, float fontSize) {
+    if (value.empty() || value == "auto" || value == "none") return -1.0f;
+    return resolveLength(value, available, fontSize);
+}
+
+struct FlexItem {
+    LayoutNode* node;
+    float flexGrow;
+    float flexShrink;
+    float flexBasis;      // resolved basis (px), -1 = auto
+    float hypotheticalMain; // size after basis resolution
+    float minMain;
+    float maxMain;
+    float crossSize;
+    int order;
+    bool frozen = false;
+    float finalMain = 0;
+};
+
+struct FlexLine {
+    std::vector<FlexItem*> items;
+    float mainSize = 0;
+    float crossSize = 0;
+};
+
+} // anonymous namespace
+
 void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
-    // TODO: Implement flexbox layout
+    if (!node) return;
+
+    auto& style = node->computedStyle();
+    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    if (fontSize <= 0) fontSize = 16.0f;
+
+    // Resolve container edges
+    node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
+    node->box.padding = resolveEdges(style, "padding", availableWidth, fontSize);
+
+    Edges borderWidth{};
+    const char* sideNames[] = {"top", "right", "bottom", "left"};
+    float* bw[] = {&borderWidth.top, &borderWidth.right, &borderWidth.bottom, &borderWidth.left};
+    for (int i = 0; i < 4; i++) {
+        if (styleVal(style, std::string("border-") + sideNames[i] + "-style") != "none")
+            *bw[i] = resolveLength(styleVal(style, std::string("border-") + sideNames[i] + "-width"), availableWidth, fontSize);
+    }
+    node->box.border = borderWidth;
+
+    float paddingH = node->box.padding.left + node->box.padding.right;
+    float borderH = node->box.border.left + node->box.border.right;
+    float paddingV = node->box.padding.top + node->box.padding.bottom;
+    float borderV = node->box.border.top + node->box.border.bottom;
+
+    // Container dimensions
+    float specW = resolveDim(styleVal(style, "width"), availableWidth, fontSize);
+    float containerMain;
+    if (specW >= 0) {
+        if (styleVal(style, "box-sizing") == "border-box")
+            containerMain = specW - paddingH - borderH;
+        else
+            containerMain = specW;
+        if (containerMain < 0) containerMain = 0;
+    } else {
+        containerMain = availableWidth - node->box.margin.left - node->box.margin.right - paddingH - borderH;
+        if (containerMain < 0) containerMain = 0;
+    }
+
+    // Flex properties
+    const std::string& flexDir = styleVal(style, "flex-direction");
+    const std::string& flexWrap = styleVal(style, "flex-wrap");
+    const std::string& justifyContent = styleVal(style, "justify-content");
+    const std::string& alignItems = styleVal(style, "align-items");
+    const std::string& alignContent = styleVal(style, "align-content");
+
+    bool isRow = (flexDir == "row" || flexDir == "row-reverse" || flexDir.empty());
+    bool isReverse = (flexDir == "row-reverse" || flexDir == "column-reverse");
+    bool isWrap = (flexWrap == "wrap" || flexWrap == "wrap-reverse");
+
+    float mainAvailable = isRow ? containerMain : resolveDim(styleVal(style, "height"), 0, fontSize);
+    if (mainAvailable < 0) mainAvailable = containerMain; // fallback for column with auto height
+
+    float gapMain = resolveLength(styleVal(style, isRow ? "column-gap" : "row-gap"), mainAvailable, fontSize);
+    float gapCross = resolveLength(styleVal(style, isRow ? "row-gap" : "column-gap"), mainAvailable, fontSize);
+
+    // Collect flex items
+    std::vector<FlexItem> items;
+    for (auto* child : node->children()) {
+        if (child->isTextNode()) continue;
+        auto& cs = child->computedStyle();
+        if (styleVal(cs, "display") == "none") {
+            child->box = LayoutBox{};
+            continue;
+        }
+
+        FlexItem item;
+        item.node = child;
+        float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        if (childFontSize <= 0) childFontSize = fontSize;
+
+        item.flexGrow = resolveLength(styleVal(cs, "flex-grow"), 0, childFontSize);
+        item.flexShrink = resolveLength(styleVal(cs, "flex-shrink"), 0, childFontSize);
+        if (item.flexShrink < 0) item.flexShrink = 1.0f;
+        item.order = static_cast<int>(resolveLength(styleVal(cs, "order"), 0, childFontSize));
+
+        // Resolve flex-basis
+        const std::string& basis = styleVal(cs, "flex-basis");
+        if (basis == "auto" || basis.empty()) {
+            // Use width/height as basis
+            const std::string& dimProp = isRow ? "width" : "height";
+            float dim = resolveDim(styleVal(cs, dimProp), mainAvailable, childFontSize);
+            item.flexBasis = dim >= 0 ? dim : -1.0f;
+        } else {
+            item.flexBasis = resolveLength(basis, mainAvailable, childFontSize);
+        }
+
+        // Resolve min/max on main axis
+        if (isRow) {
+            item.minMain = resolveDim(styleVal(cs, "min-width"), mainAvailable, childFontSize);
+            item.maxMain = resolveDim(styleVal(cs, "max-width"), mainAvailable, childFontSize);
+        } else {
+            item.minMain = resolveDim(styleVal(cs, "min-height"), mainAvailable, childFontSize);
+            item.maxMain = resolveDim(styleVal(cs, "max-height"), mainAvailable, childFontSize);
+        }
+        if (item.minMain < 0) item.minMain = 0;
+
+        items.push_back(item);
+    }
+
+    // Sort by order
+    std::stable_sort(items.begin(), items.end(),
+        [](const FlexItem& a, const FlexItem& b) { return a.order < b.order; });
+
+    // Determine hypothetical main sizes
+    for (auto& item : items) {
+        if (item.flexBasis >= 0) {
+            item.hypotheticalMain = item.flexBasis;
+        } else {
+            // Auto basis: lay out to determine intrinsic size
+            layoutNode(item.node, isRow ? mainAvailable : containerMain, metrics);
+            item.hypotheticalMain = isRow ? item.node->box.contentRect.width : item.node->box.contentRect.height;
+            // Add padding/border to get outer size
+            if (isRow) {
+                item.hypotheticalMain += item.node->box.padding.left + item.node->box.padding.right +
+                                         item.node->box.border.left + item.node->box.border.right;
+            } else {
+                item.hypotheticalMain += item.node->box.padding.top + item.node->box.padding.bottom +
+                                         item.node->box.border.top + item.node->box.border.bottom;
+            }
+        }
+        // Clamp to min/max
+        if (item.maxMain >= 0 && item.hypotheticalMain > item.maxMain)
+            item.hypotheticalMain = item.maxMain;
+        if (item.hypotheticalMain < item.minMain)
+            item.hypotheticalMain = item.minMain;
+    }
+
+    // Split into flex lines
+    std::vector<FlexLine> lines;
+    {
+        FlexLine currentLine;
+        float lineMain = 0;
+        for (size_t i = 0; i < items.size(); i++) {
+            float itemMain = items[i].hypotheticalMain + (currentLine.items.empty() ? 0 : gapMain);
+            if (isWrap && !currentLine.items.empty() && lineMain + itemMain > mainAvailable) {
+                lines.push_back(std::move(currentLine));
+                currentLine = FlexLine{};
+                lineMain = 0;
+                itemMain = items[i].hypotheticalMain;
+            }
+            currentLine.items.push_back(&items[i]);
+            lineMain += itemMain;
+            currentLine.mainSize = lineMain;
+        }
+        if (!currentLine.items.empty()) lines.push_back(std::move(currentLine));
+    }
+
+    // Resolve flexible lengths per line
+    for (auto& line : lines) {
+        float totalHypothetical = 0;
+        float totalGaps = (line.items.size() > 1) ? gapMain * (line.items.size() - 1) : 0;
+        for (auto* item : line.items) totalHypothetical += item->hypotheticalMain;
+
+        float freeSpace = mainAvailable - totalHypothetical - totalGaps;
+
+        if (freeSpace > 0) {
+            // Distribute via flex-grow
+            float totalGrow = 0;
+            for (auto* item : line.items) totalGrow += item->flexGrow;
+            for (auto* item : line.items) {
+                if (totalGrow > 0) {
+                    item->finalMain = item->hypotheticalMain + freeSpace * (item->flexGrow / totalGrow);
+                } else {
+                    item->finalMain = item->hypotheticalMain;
+                }
+            }
+        } else if (freeSpace < 0) {
+            // Shrink via flex-shrink
+            float totalShrinkScaled = 0;
+            for (auto* item : line.items)
+                totalShrinkScaled += item->flexShrink * item->hypotheticalMain;
+            for (auto* item : line.items) {
+                if (totalShrinkScaled > 0) {
+                    float ratio = (item->flexShrink * item->hypotheticalMain) / totalShrinkScaled;
+                    item->finalMain = item->hypotheticalMain + freeSpace * ratio;
+                } else {
+                    item->finalMain = item->hypotheticalMain;
+                }
+            }
+        } else {
+            for (auto* item : line.items) item->finalMain = item->hypotheticalMain;
+        }
+
+        // Clamp to min/max
+        for (auto* item : line.items) {
+            if (item->maxMain >= 0 && item->finalMain > item->maxMain) item->finalMain = item->maxMain;
+            if (item->finalMain < item->minMain) item->finalMain = item->minMain;
+            if (item->finalMain < 0) item->finalMain = 0;
+        }
+
+        // Layout each item with its final main size
+        for (auto* item : line.items) {
+            auto& cs = item->node->computedStyle();
+            float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+            if (childFontSize <= 0) childFontSize = fontSize;
+
+            // Set the item's content size
+            float itemPadH = 0, itemPadV = 0, itemBorH = 0, itemBorV = 0;
+
+            // Layout the item to determine cross size
+            if (isRow) {
+                // Main = width, cross = height
+                float contentWidth = item->finalMain;
+                layoutNode(item->node, contentWidth, metrics);
+                item->node->box.contentRect.width = contentWidth -
+                    item->node->box.padding.left - item->node->box.padding.right -
+                    item->node->box.border.left - item->node->box.border.right;
+                if (item->node->box.contentRect.width < 0) item->node->box.contentRect.width = 0;
+
+                item->crossSize = item->node->box.contentRect.height +
+                    item->node->box.padding.top + item->node->box.padding.bottom +
+                    item->node->box.border.top + item->node->box.border.bottom +
+                    item->node->box.margin.top + item->node->box.margin.bottom;
+            } else {
+                // Main = height, cross = width
+                layoutNode(item->node, containerMain, metrics);
+                item->node->box.contentRect.height = item->finalMain -
+                    item->node->box.padding.top - item->node->box.padding.bottom -
+                    item->node->box.border.top - item->node->box.border.bottom;
+                if (item->node->box.contentRect.height < 0) item->node->box.contentRect.height = 0;
+
+                item->crossSize = item->node->box.contentRect.width +
+                    item->node->box.padding.left + item->node->box.padding.right +
+                    item->node->box.border.left + item->node->box.border.right +
+                    item->node->box.margin.left + item->node->box.margin.right;
+            }
+        }
+
+        // Determine line cross size
+        float maxCross = 0;
+        for (auto* item : line.items) maxCross = std::max(maxCross, item->crossSize);
+        line.crossSize = maxCross;
+    }
+
+    // Position items
+    float crossCursor = 0;
+    for (auto& line : lines) {
+        // Compute justify-content offsets
+        float totalMain = 0;
+        float totalGaps = (line.items.size() > 1) ? gapMain * (line.items.size() - 1) : 0;
+        for (auto* item : line.items) totalMain += item->finalMain;
+        float freeMain = mainAvailable - totalMain - totalGaps;
+        if (freeMain < 0) freeMain = 0;
+
+        float mainCursor = 0;
+        float gap = gapMain;
+        if (justifyContent == "center") {
+            mainCursor = freeMain / 2.0f;
+        } else if (justifyContent == "flex-end") {
+            mainCursor = freeMain;
+        } else if (justifyContent == "space-between" && line.items.size() > 1) {
+            gap = gapMain + freeMain / (line.items.size() - 1);
+        } else if (justifyContent == "space-around" && !line.items.empty()) {
+            float itemGap = freeMain / line.items.size();
+            mainCursor = itemGap / 2.0f;
+            gap = gapMain + itemGap;
+        } else if (justifyContent == "space-evenly" && !line.items.empty()) {
+            float itemGap = freeMain / (line.items.size() + 1);
+            mainCursor = itemGap;
+            gap = gapMain + itemGap;
+        }
+        // else flex-start: mainCursor = 0
+
+        if (isReverse) {
+            // Reverse the item positions
+            mainCursor = mainAvailable;
+        }
+
+        for (size_t i = 0; i < line.items.size(); i++) {
+            auto* item = line.items[i];
+            auto& cs = item->node->computedStyle();
+
+            // Cross-axis alignment
+            const std::string& selfAlign = styleVal(cs, "align-self");
+            const std::string& align = (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign;
+
+            float crossPos = crossCursor;
+            if (align == "center") {
+                crossPos = crossCursor + (line.crossSize - item->crossSize) / 2.0f;
+            } else if (align == "flex-end") {
+                crossPos = crossCursor + line.crossSize - item->crossSize;
+            } else if (align == "stretch") {
+                // Stretch to fill line cross size (only if no explicit cross dimension)
+                if (isRow) {
+                    const std::string& h = styleVal(cs, "height");
+                    if (h == "auto" || h.empty()) {
+                        float stretchCross = line.crossSize -
+                            item->node->box.margin.top - item->node->box.margin.bottom -
+                            item->node->box.padding.top - item->node->box.padding.bottom -
+                            item->node->box.border.top - item->node->box.border.bottom;
+                        if (stretchCross > 0) item->node->box.contentRect.height = stretchCross;
+                    }
+                } else {
+                    const std::string& w = styleVal(cs, "width");
+                    if (w == "auto" || w.empty()) {
+                        float stretchCross = line.crossSize -
+                            item->node->box.margin.left - item->node->box.margin.right -
+                            item->node->box.padding.left - item->node->box.padding.right -
+                            item->node->box.border.left - item->node->box.border.right;
+                        if (stretchCross > 0) item->node->box.contentRect.width = stretchCross;
+                    }
+                }
+                crossPos = crossCursor;
+            }
+            // else flex-start (default): crossPos stays at crossCursor
+
+            // Set position
+            float mainPos;
+            if (isReverse) {
+                mainCursor -= item->finalMain;
+                mainPos = mainCursor;
+                if (i + 1 < line.items.size()) mainCursor -= gap;
+            } else {
+                mainPos = mainCursor;
+                mainCursor += item->finalMain;
+                if (i + 1 < line.items.size()) mainCursor += gap;
+            }
+
+            if (isRow) {
+                item->node->box.contentRect.x = mainPos +
+                    item->node->box.margin.left + item->node->box.padding.left + item->node->box.border.left;
+                item->node->box.contentRect.y = crossPos +
+                    item->node->box.margin.top + item->node->box.padding.top + item->node->box.border.top;
+            } else {
+                item->node->box.contentRect.y = mainPos +
+                    item->node->box.margin.top + item->node->box.padding.top + item->node->box.border.top;
+                item->node->box.contentRect.x = crossPos +
+                    item->node->box.margin.left + item->node->box.padding.left + item->node->box.border.left;
+            }
+        }
+
+        crossCursor += line.crossSize + gapCross;
+    }
+
+    // Set container dimensions
+    node->box.contentRect.width = containerMain;
+
+    float specH = resolveDim(styleVal(style, "height"), 0, fontSize);
+    if (specH >= 0) {
+        if (styleVal(style, "box-sizing") == "border-box")
+            node->box.contentRect.height = specH - paddingV - borderV;
+        else
+            node->box.contentRect.height = specH;
+        if (node->box.contentRect.height < 0) node->box.contentRect.height = 0;
+    } else {
+        node->box.contentRect.height = crossCursor > 0 ? crossCursor - gapCross : 0;
+    }
 }
 
 } // namespace htmlayout::layout

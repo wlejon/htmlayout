@@ -6,6 +6,7 @@
 #include "test_shorthand.h"
 #include "test_layout.h"
 #include "test_inline.h"
+#include "test_flex.h"
 #include <cstdio>
 
 int g_passed = 0;
@@ -36,6 +37,9 @@ int main() {
     printf("\n");
 
     testInlineLayout();
+    printf("\n");
+
+    testFlexLayout();
     printf("\n");
 
     printf("=== Results: %d passed, %d failed ===\n", g_passed, g_failed);
