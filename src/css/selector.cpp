@@ -235,6 +235,18 @@ private:
             ss.attrValue = consumeName();
         }
         skipWS();
+        // Check for case-insensitive flag: 'i' or 'I' before ']'
+        if ((peek() == 'i' || peek() == 'I') && m_pos + 1 < m_text.size()) {
+            // Look ahead to see if next non-space is ']'
+            size_t saved = m_pos;
+            advance(); // skip 'i'
+            skipWS();
+            if (peek() == ']') {
+                ss.attrCaseInsensitive = true;
+            } else {
+                m_pos = saved; // not the flag, restore
+            }
+        }
         if (peek() == ']') advance();
         return ss;
     }
@@ -480,26 +492,32 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
             if (!elem.hasAttribute(ss.attrName)) return false;
             if (ss.attrOp == AttrMatchOp::Exists) return true;
             std::string val = elem.getAttribute(ss.attrName);
+            std::string cmpVal = ss.attrValue;
+            // Apply case-insensitive flag
+            if (ss.attrCaseInsensitive) {
+                val = toLower(val);
+                cmpVal = toLower(cmpVal);
+            }
             switch (ss.attrOp) {
                 case AttrMatchOp::Equals:
-                    return val == ss.attrValue;
+                    return val == cmpVal;
                 case AttrMatchOp::Includes: {
                     auto parts = splitWhitespace(val);
-                    return std::find(parts.begin(), parts.end(), ss.attrValue) != parts.end();
+                    return std::find(parts.begin(), parts.end(), cmpVal) != parts.end();
                 }
                 case AttrMatchOp::DashMatch:
-                    return val == ss.attrValue ||
-                           (val.size() > ss.attrValue.size() &&
-                            val.substr(0, ss.attrValue.size()) == ss.attrValue &&
-                            val[ss.attrValue.size()] == '-');
+                    return val == cmpVal ||
+                           (val.size() > cmpVal.size() &&
+                            val.substr(0, cmpVal.size()) == cmpVal &&
+                            val[cmpVal.size()] == '-');
                 case AttrMatchOp::Prefix:
-                    return val.size() >= ss.attrValue.size() &&
-                           val.substr(0, ss.attrValue.size()) == ss.attrValue;
+                    return val.size() >= cmpVal.size() &&
+                           val.substr(0, cmpVal.size()) == cmpVal;
                 case AttrMatchOp::Suffix:
-                    return val.size() >= ss.attrValue.size() &&
-                           val.substr(val.size() - ss.attrValue.size()) == ss.attrValue;
+                    return val.size() >= cmpVal.size() &&
+                           val.substr(val.size() - cmpVal.size()) == cmpVal;
                 case AttrMatchOp::Substring:
-                    return val.find(ss.attrValue) != std::string::npos;
+                    return val.find(cmpVal) != std::string::npos;
                 default: return false;
             }
         }

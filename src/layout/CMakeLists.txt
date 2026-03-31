@@ -3,6 +3,7 @@ add_library(htmlayout_layout STATIC
     block.cpp
     inline.cpp
     flex.cpp
+    grid.cpp
     table.cpp
     text.cpp
     formatting_context.cpp

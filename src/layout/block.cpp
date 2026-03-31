@@ -180,6 +180,37 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float childMarginTop = child->box.margin.top;
         float childMarginBottom = child->box.margin.bottom;
 
+        // Check if this child is an "empty box" — zero height, no padding, no border.
+        // Empty boxes have their top and bottom margins collapse together.
+        bool isEmptyBox = (child->box.contentRect.height == 0 &&
+                           child->box.padding.top == 0 && child->box.padding.bottom == 0 &&
+                           child->box.border.top == 0 && child->box.border.bottom == 0 &&
+                           child->children().empty());
+
+        float effectiveMargin;
+        if (isEmptyBox) {
+            // Margins collapse through empty box: top and bottom collapse together,
+            // then collapse with adjacent margins
+            float selfCollapsed = std::max(childMarginTop, childMarginBottom);
+            if (firstChild) {
+                effectiveMargin = selfCollapsed;
+                firstChild = false;
+            } else {
+                effectiveMargin = std::max(prevMarginBottom, selfCollapsed);
+            }
+            // The empty box doesn't advance the cursor beyond the collapsed margin
+            prevMarginBottom = effectiveMargin;
+
+            // Position the empty box at current cursor
+            cursorY += effectiveMargin;
+            auto [le2, re2] = getAvailableAtY(cursorY, 0);
+            child->box.contentRect.x = le2 + child->box.margin.left + child->box.padding.left + child->box.border.left;
+            child->box.contentRect.y = cursorY;
+            // Reset cursor: the margin is "passed through" to the next sibling
+            cursorY -= effectiveMargin;
+            continue;
+        }
+
         // Margin collapsing: adjacent vertical margins collapse to the larger value
         float collapsedMargin;
         if (firstChild) {
@@ -196,8 +227,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         child->box.contentRect.x = le2 + child->box.margin.left + child->box.padding.left + child->box.border.left;
         child->box.contentRect.y = cursorY + child->box.padding.top + child->box.border.top;
 
-        // Apply position: relative offset after normal positioning
-        if (childPos == "relative") {
+        // Apply position: relative/sticky offset after normal positioning
+        // (sticky behaves like relative during layout; scroll clamping is a paint-time concern)
+        if (childPos == "relative" || childPos == "sticky") {
             float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;
             const std::string& topVal = styleVal(childStyle, "top");

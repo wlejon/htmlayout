@@ -67,6 +67,8 @@ struct SimpleSelector {
     // :nth-child(an+b) coefficients
     int nthA = 0;
     int nthB = 0;
+    // Attribute case-insensitive flag [attr=val i]
+    bool attrCaseInsensitive = false;
     // :not() argument (parsed sub-selectors)
     std::vector<SimpleSelector> notArg;
     // :host() argument (parsed sub-selectors)

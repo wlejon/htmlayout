@@ -162,6 +162,29 @@ const std::vector<PropertyDef>& knownProperties() {
         {"caption-side",      "top",        true},
         {"empty-cells",       "show",       true},
 
+        // Grid layout
+        {"grid-template-columns", "none",   false},
+        {"grid-template-rows",    "none",   false},
+        {"grid-template-areas",   "none",   false},
+        {"grid-auto-columns",     "auto",   false},
+        {"grid-auto-rows",        "auto",   false},
+        {"grid-auto-flow",        "row",    false},
+        {"grid-row-start",        "auto",   false},
+        {"grid-row-end",          "auto",   false},
+        {"grid-column-start",     "auto",   false},
+        {"grid-column-end",       "auto",   false},
+        {"grid-row",              "auto",   false},
+        {"grid-column",           "auto",   false},
+        {"grid-area",             "auto",   false},
+        {"justify-items",         "stretch", false},
+        {"justify-self",          "auto",   false},
+        {"place-items",           "stretch", false},
+        {"place-content",         "normal", false},
+        {"place-self",            "auto",   false},
+
+        // position: sticky
+        // (position is already in the registry; sticky is a valid value)
+
         // Misc
         {"clip-path",         "none",       false},
         {"filter",            "none",       false},
@@ -621,6 +644,50 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         }
         out.push_back({"column-width", width});
         out.push_back({"column-count", count});
+        return out;
+    }
+
+    // grid-row shorthand: start / end
+    if (property == "grid-row") {
+        return {{property, value}};
+    }
+
+    // grid-column shorthand: start / end
+    if (property == "grid-column") {
+        return {{property, value}};
+    }
+
+    // grid-area shorthand: row-start / col-start / row-end / col-end
+    if (property == "grid-area") {
+        return {{property, value}};
+    }
+
+    // grid-template shorthand — just store sub-properties
+    if (property == "grid-template") {
+        return {{property, value}};
+    }
+
+    // place-items shorthand: align-items justify-items
+    if (property == "place-items") {
+        std::vector<ExpandedDecl> out;
+        out.push_back({"align-items", parts[0]});
+        out.push_back({"justify-items", parts.size() > 1 ? parts[1] : parts[0]});
+        return out;
+    }
+
+    // place-content shorthand: align-content justify-content
+    if (property == "place-content") {
+        std::vector<ExpandedDecl> out;
+        out.push_back({"align-content", parts[0]});
+        out.push_back({"justify-content", parts.size() > 1 ? parts[1] : parts[0]});
+        return out;
+    }
+
+    // place-self shorthand: align-self justify-self
+    if (property == "place-self") {
+        std::vector<ExpandedDecl> out;
+        out.push_back({"align-self", parts[0]});
+        out.push_back({"justify-self", parts.size() > 1 ? parts[1] : parts[0]});
         return out;
     }
 

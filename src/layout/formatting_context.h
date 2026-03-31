@@ -15,6 +15,10 @@ float resolveLength(const std::string& value, float referenceSize, float fontSiz
 float resolveLength(const std::string& value, float referenceSize, float fontSize,
                     float viewportWidth, float viewportHeight);
 
+// Resolve line-height value. "normal" resolves to ~1.2 * fontSize
+// rather than 0. A unitless number (e.g. "1.5") is a multiplier of fontSize.
+float resolveLineHeight(const std::string& value, float fontSize);
+
 // Parse edges (margin, padding, border-width) from computed style
 Edges resolveEdges(const css::ComputedStyle& style,
                    const std::string& prefix,

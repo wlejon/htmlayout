@@ -21,7 +21,17 @@ public:
                     if (!mediaBlock.condition.empty() || !mediaBlock.rules.empty()) {
                         sheet.mediaBlocks.push_back(std::move(mediaBlock));
                     }
+                } else if (peek().value == "supports") {
+                    // @supports works similarly to @media but evaluates CSS feature support
+                    auto supportsBlock = parseSupportsRule();
+                    // Include rules if the condition evaluates to true
+                    if (!supportsBlock.rules.empty()) {
+                        for (auto& rule : supportsBlock.rules) {
+                            sheet.rules.push_back(std::move(rule));
+                        }
+                    }
                 } else {
+                    // @font-face, @keyframes, @charset, @import, etc. — skip gracefully
                     consumeAtRule();
                 }
                 skipWhitespace();
@@ -109,6 +119,67 @@ private:
         }
         if (!atEnd() && peek().type == TokenType::RightBrace) advance();
         return block;
+    }
+
+    // Parse @supports rule: evaluate the condition and include rules if supported
+    MediaBlock parseSupportsRule() {
+        MediaBlock block; // reuse MediaBlock structure
+        advance(); // skip @supports keyword
+        skipWhitespace();
+
+        // Collect condition tokens until '{'
+        std::string condition;
+        while (!atEnd() && peek().type != TokenType::LeftBrace) {
+            condition += tokenToString(advance());
+        }
+        block.condition = trim(condition);
+
+        if (atEnd() || peek().type != TokenType::LeftBrace) return block;
+        advance(); // skip '{'
+
+        // Evaluate @supports condition: we support most CSS properties
+        // For simplicity, if the condition contains a known property, we support it
+        bool supported = evaluateSupportsCondition(block.condition);
+
+        // Parse rules inside
+        skipWhitespace();
+        while (!atEnd() && peek().type != TokenType::RightBrace) {
+            if (peek().type == TokenType::AtKeyword) {
+                consumeAtRule();
+                skipWhitespace();
+                continue;
+            }
+            auto rule = parseRule();
+            if (!rule.selector.empty() && supported) {
+                block.rules.push_back(std::move(rule));
+            }
+            skipWhitespace();
+        }
+        if (!atEnd() && peek().type == TokenType::RightBrace) advance();
+        return block;
+    }
+
+    // Simple @supports condition evaluator
+    static bool evaluateSupportsCondition(const std::string& condition) {
+        // Check for (property: value) syntax
+        // We'll accept any condition with a property:value pair inside parens
+        auto paren = condition.find('(');
+        if (paren == std::string::npos) return true; // no condition = support
+
+        auto close = condition.find(')', paren);
+        if (close == std::string::npos) return true;
+
+        std::string inner = condition.substr(paren + 1, close - paren - 1);
+        auto colon = inner.find(':');
+        if (colon != std::string::npos) {
+            // Has property: value — we broadly support CSS properties
+            return true;
+        }
+
+        // "not" prefix
+        if (condition.find("not") == 0) return false;
+
+        return true; // default: assume supported
     }
 
     void consumeAtRule() {

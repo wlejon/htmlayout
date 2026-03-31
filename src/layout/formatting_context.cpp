@@ -3,6 +3,7 @@
 #include "layout/inline.h"
 #include "layout/flex.h"
 #include "layout/table.h"
+#include "layout/grid.h"
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -184,6 +185,28 @@ float resolveLength(const std::string& value, float referenceSize, float fontSiz
     return resolveSingleLength(value, referenceSize, fontSize);
 }
 
+float resolveLineHeight(const std::string& value, float fontSize) {
+    if (value.empty() || value == "normal") {
+        return fontSize * 1.2f;
+    }
+
+    // Unitless number: multiplier of font-size
+    const char* begin = value.data();
+    const char* end = begin + value.size();
+    float num = 0.0f;
+    auto [ptr, ec] = std::from_chars(begin, end, num);
+    if (ec == std::errc()) {
+        std::string unit(ptr, end);
+        if (unit.empty()) {
+            // Unitless: treat as multiplier
+            return num * fontSize;
+        }
+    }
+
+    // Otherwise, resolve as a regular length
+    return resolveLength(value, 0, fontSize);
+}
+
 float resolveLength(const std::string& value, float referenceSize, float fontSize,
                     float viewportWidth, float viewportHeight) {
     if (value.empty() || value == "auto" || value == "none" || value == "normal") {
@@ -242,6 +265,8 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     if (display == "flex" || display == "inline-flex") {
         layoutFlex(node, availableWidth, metrics);
+    } else if (display == "grid" || display == "inline-grid") {
+        layoutGrid(node, availableWidth, metrics);
     } else if (display == "inline" || display == "inline-block") {
         layoutInline(node, availableWidth, metrics);
     } else if (display == "table" || display == "inline-table") {
