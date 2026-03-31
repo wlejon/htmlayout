@@ -80,8 +80,44 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
-    // 5. For inherited properties not explicitly set, inherit from parent
-    // 6. For non-inherited properties not explicitly set, use initial value
+    // 5. Resolve inherit/initial/unset/revert keywords
+    for (auto& [prop, val] : style) {
+        if (val == "inherit") {
+            // Force inheritance regardless of whether property normally inherits
+            if (parentStyle) {
+                auto it = parentStyle->find(prop);
+                if (it != parentStyle->end()) {
+                    val = it->second;
+                } else {
+                    val = initialValue(prop);
+                }
+            } else {
+                val = initialValue(prop);
+            }
+        } else if (val == "initial") {
+            val = initialValue(prop);
+        } else if (val == "unset" || val == "revert") {
+            // unset: if inherited property -> inherit, else -> initial
+            // revert: ideally rolls back to UA, but we treat as unset for now
+            if (isInherited(prop)) {
+                if (parentStyle) {
+                    auto it = parentStyle->find(prop);
+                    if (it != parentStyle->end()) {
+                        val = it->second;
+                    } else {
+                        val = initialValue(prop);
+                    }
+                } else {
+                    val = initialValue(prop);
+                }
+            } else {
+                val = initialValue(prop);
+            }
+        }
+    }
+
+    // 6. For inherited properties not explicitly set, inherit from parent
+    // 7. For non-inherited properties not explicitly set, use initial value
     for (auto& prop : knownProperties()) {
         if (style.find(prop.name) == style.end()) {
             if (prop.inherited && parentStyle) {

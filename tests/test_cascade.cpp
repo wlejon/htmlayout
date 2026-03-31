@@ -166,6 +166,46 @@ static void testImportantVsInline() {
           "cascade: !important author beats normal inline");
 }
 
+static void testInheritInitialUnset() {
+    printf("--- Cascade: inherit/initial/unset keywords ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        ".parent { color: red; margin-top: 20px; }\n"
+        ".child { color: inherit; margin-top: inherit; display: initial; }\n"
+    ));
+
+    MockElement parent; parent.tag = "div"; parent.classes = "parent";
+    MockElement child; child.tag = "div"; child.classes = "child";
+    parent.addChild(&child);
+
+    auto parentStyle = cascade.resolve(parent);
+    auto childStyle = cascade.resolve(child, {}, &parentStyle);
+
+    // color: inherit -> gets parent's red (color is normally inherited anyway)
+    check(childStyle["color"] == "red", "inherit keyword: color = red from parent");
+    // margin-top: inherit -> gets parent's 20px (margin-top is NOT normally inherited)
+    check(childStyle["margin-top"] == "20px", "inherit keyword: margin-top forced from parent");
+    // display: initial -> resets to "inline"
+    check(childStyle["display"] == "inline", "initial keyword: display reset to inline");
+
+    // Test unset: inherited prop -> inherit, non-inherited -> initial
+    Cascade cascade2;
+    cascade2.addStylesheet(parse(
+        ".parent { color: blue; margin-left: 30px; }\n"
+        ".child { color: unset; margin-left: unset; }\n"
+    ));
+    MockElement p2; p2.tag = "div"; p2.classes = "parent";
+    MockElement c2; c2.tag = "div"; c2.classes = "child";
+    p2.addChild(&c2);
+
+    auto ps2 = cascade2.resolve(p2);
+    auto cs2 = cascade2.resolve(c2, {}, &ps2);
+    // color is inherited -> unset means inherit -> blue
+    check(cs2["color"] == "blue", "unset keyword: inherited color = blue from parent");
+    // margin-left is not inherited -> unset means initial -> 0
+    check(cs2["margin-left"] == "0", "unset keyword: non-inherited margin-left = 0 (initial)");
+}
+
 static void testClear() {
     printf("--- Cascade: clear ---\n");
     Cascade cascade;
@@ -190,5 +230,6 @@ void testCascade() {
     testNoMatch();
     testInheritanceChain();
     testImportantVsInline();
+    testInheritInitialUnset();
     testClear();
 }
