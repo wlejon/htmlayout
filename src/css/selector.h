@@ -31,6 +31,33 @@ struct ElementRef {
     // Shadow DOM: which scope does this element belong to?
     // nullptr = document scope. Non-null = shadow root scope.
     virtual void* scope() const { return nullptr; }
+
+    // Shadow DOM: is this element a shadow host? (has an attached shadow root)
+    // If so, returns a pointer to its shadow root (used as scope for inner elements).
+    virtual void* shadowRoot() const { return nullptr; }
+
+    // Slot distribution: which slot is this element assigned to?
+    // Returns nullptr if not slotted.
+    virtual ElementRef* assignedSlot() const { return nullptr; }
+
+    // CSS Parts: the part name(s) exposed by this element (space-separated).
+    virtual std::string partName() const { return ""; }
+
+    // Custom elements: is this element defined (registered)?
+    virtual bool isDefined() const { return true; }
+
+    // Container queries: the container type of this element.
+    // Valid values: "none", "inline-size", "size"
+    virtual std::string containerType() const { return "none"; }
+
+    // Container queries: the container name of this element (space-separated names).
+    virtual std::string containerName() const { return ""; }
+
+    // Container queries: the current inline size of this element's content box.
+    virtual float containerInlineSize() const { return 0; }
+
+    // Container queries: the current block size of this element's content box.
+    virtual float containerBlockSize() const { return 0; }
 };
 
 // ---- Internal selector representation ----
@@ -71,10 +98,14 @@ struct SimpleSelector {
     bool attrCaseInsensitive = false;
     // :not() argument (parsed sub-selectors)
     std::vector<SimpleSelector> notArg;
-    // :host() argument (parsed sub-selectors)
+    // :host() / :host-context() argument (parsed sub-selectors)
     std::vector<SimpleSelector> hostArg;
     // :is()/:where()/:has() arguments (selector list, stored as compound selectors)
     std::vector<CompoundSelector> selectorListArg;
+    // ::slotted() argument (parsed compound selector)
+    std::vector<SimpleSelector> slottedArg;
+    // ::part() argument (part name)
+    std::string partArg;
 };
 
 struct CompoundSelector {

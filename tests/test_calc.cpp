@@ -254,8 +254,8 @@ static void testTableBasic() {
     check(table.box.contentRect.height > 0, "table has positive height");
     // Cells should be side by side
     check(cell1.box.contentRect.x < cell2.box.contentRect.x, "cell1 left of cell2");
-    // Row 2 should be below row 1
-    check(cell3.box.contentRect.y > cell1.box.contentRect.y, "row2 below row1");
+    // Row 2 should be below row 1 (cells are positioned relative to their row)
+    check(row2.box.contentRect.y > row1.box.contentRect.y, "row2 below row1");
 }
 
 static void testTableEqualColumns() {

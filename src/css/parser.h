@@ -25,10 +25,27 @@ struct MediaBlock {
     std::vector<Rule> rules;
 };
 
+// A @layer block: named cascade layer with contained rules
+struct LayerBlock {
+    std::string name;               // e.g. "reset", "base.utilities"
+    std::vector<Rule> rules;
+    std::vector<MediaBlock> mediaBlocks;
+};
+
+// A @container block: container query with contained rules
+struct ContainerBlock {
+    std::string name;               // container name (empty = any container)
+    std::string condition;           // e.g. "(min-width: 400px)"
+    std::vector<Rule> rules;
+};
+
 // A parsed stylesheet
 struct Stylesheet {
     std::vector<Rule> rules;
     std::vector<MediaBlock> mediaBlocks;
+    std::vector<LayerBlock> layerBlocks;
+    std::vector<ContainerBlock> containerBlocks;
+    std::vector<std::string> layerOrder;  // declared layer ordering from @layer statements
 };
 
 // Media query evaluation context — consumers set this to describe the viewport

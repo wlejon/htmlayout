@@ -49,9 +49,22 @@ private:
         std::vector<Declaration> declarations;
         void* scope = nullptr;  // which shadow root, or nullptr for global
         size_t order = 0;       // insertion order for stable sort
+        int layerOrder = -1;    // -1 = unlayered (highest priority), >=0 = layer index
+        // Container query: if non-empty, this rule only applies when the container condition is met
+        std::string containerName;     // required container name (empty = any)
+        std::string containerCondition; // e.g. "(min-width: 400px)"
     };
     std::vector<ScopedRule> rules_;
     size_t nextOrder_ = 0;
+
+    // Layer ordering: maps layer name -> index. Lower index = lower priority.
+    std::vector<std::string> layerNames_;
+    int getOrCreateLayerIndex(const std::string& name);
+
+    // Evaluate a container query condition against an element's container ancestors
+    bool evaluateContainerQuery(const ElementRef& elem,
+                                const std::string& containerName,
+                                const std::string& condition) const;
 };
 
 } // namespace htmlayout::css

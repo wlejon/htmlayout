@@ -31,6 +31,14 @@ struct MockElement : public htmlayout::css::ElementRef {
     bool focused = false;
     bool active = false;
     void* scopePtr = nullptr;
+    void* shadowRootPtr = nullptr;
+    MockElement* assignedSlotElem = nullptr;
+    std::string partNames;
+    bool defined = true;
+    std::string contType = "none";
+    std::string contName;
+    float contInlineSize = 0;
+    float contBlockSize = 0;
 
     std::string tagName() const override { return tag; }
     std::string id() const override { return elemId; }
@@ -79,6 +87,14 @@ struct MockElement : public htmlayout::css::ElementRef {
     bool isFocused() const override { return focused; }
     bool isActive() const override { return active; }
     void* scope() const override { return scopePtr; }
+    void* shadowRoot() const override { return shadowRootPtr; }
+    ElementRef* assignedSlot() const override { return assignedSlotElem; }
+    std::string partName() const override { return partNames; }
+    bool isDefined() const override { return defined; }
+    std::string containerType() const override { return contType; }
+    std::string containerName() const override { return contName; }
+    float containerInlineSize() const override { return contInlineSize; }
+    float containerBlockSize() const override { return contBlockSize; }
 
     void addChild(MockElement* child) {
         child->parentElem = this;

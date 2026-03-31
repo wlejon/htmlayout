@@ -255,10 +255,52 @@ private:
         SimpleSelector ss;
         advance(); // skip first ':'
         if (peek() == ':') {
-            // Pseudo-element ::before, ::after
+            // Pseudo-element ::before, ::after, ::slotted(), ::part()
             advance();
             ss.type = SimpleSelectorType::PseudoElement;
             ss.value = consumeName();
+
+            // Handle functional pseudo-elements
+            if (peek() == '(') {
+                advance(); // skip '('
+                skipWS();
+                if (ss.value == "slotted") {
+                    // ::slotted(selector) — parse compound selector argument
+                    std::string arg;
+                    int depth = 1;
+                    size_t argStart = m_pos;
+                    while (m_pos < m_text.size() && depth > 0) {
+                        if (peek() == '(') depth++;
+                        else if (peek() == ')') { depth--; if (depth == 0) break; }
+                        advance();
+                    }
+                    arg = m_text.substr(argStart, m_pos - argStart);
+                    if (peek() == ')') advance();
+
+                    SelectorParser subParser(arg);
+                    auto compound = subParser.parseCompound();
+                    ss.slottedArg = std::move(compound.simples);
+                } else if (ss.value == "part") {
+                    // ::part(name) — consume the part name
+                    std::string arg;
+                    while (m_pos < m_text.size() && peek() != ')') {
+                        arg += advance();
+                    }
+                    if (peek() == ')') advance();
+                    // Trim whitespace
+                    size_t a = arg.find_first_not_of(" \t");
+                    size_t b = arg.find_last_not_of(" \t");
+                    ss.partArg = (a != std::string::npos) ? arg.substr(a, b - a + 1) : "";
+                } else {
+                    // Unknown functional pseudo-element — skip to closing paren
+                    int depth = 1;
+                    while (m_pos < m_text.size() && depth > 0) {
+                        if (peek() == '(') depth++;
+                        else if (peek() == ')') depth--;
+                        advance();
+                    }
+                }
+            }
             return ss;
         }
         ss.type = SimpleSelectorType::PseudoClass;
@@ -324,8 +366,8 @@ private:
                     SelectorParser subParser(part);
                     ss.selectorListArg.push_back(subParser.parseCompound());
                 }
-            } else if (ss.value == "host") {
-                // :host(selector)
+            } else if (ss.value == "host" || ss.value == "host-context") {
+                // :host(selector) / :host-context(selector)
                 std::string arg;
                 int depth = 1;
                 size_t argStart = m_pos;
@@ -438,6 +480,20 @@ uint32_t computeSpecificity(const SelectorChain& chain) {
                         types += maxTypes;
                     } else if (s.value == "where") {
                         // :where() contributes zero specificity
+                    } else if (s.value == "host" || s.value == "host-context") {
+                        // :host/:host-context itself = pseudo-class specificity
+                        classes++;
+                        // Plus the specificity of the argument selectors
+                        for (auto& inner : s.hostArg) {
+                            switch (inner.type) {
+                                case SimpleSelectorType::Id: ids++; break;
+                                case SimpleSelectorType::Class:
+                                case SimpleSelectorType::Attribute:
+                                case SimpleSelectorType::PseudoClass: classes++; break;
+                                case SimpleSelectorType::Tag: types++; break;
+                                default: break;
+                            }
+                        }
                     } else {
                         classes++;
                     }
@@ -447,6 +503,20 @@ uint32_t computeSpecificity(const SelectorChain& chain) {
                     break;
                 case SimpleSelectorType::PseudoElement:
                     types++;
+                    // ::slotted(selector) specificity includes its argument
+                    if (s.value == "slotted") {
+                        for (auto& inner : s.slottedArg) {
+                            switch (inner.type) {
+                                case SimpleSelectorType::Id: ids++; break;
+                                case SimpleSelectorType::Class:
+                                case SimpleSelectorType::Attribute:
+                                case SimpleSelectorType::PseudoClass: classes++; break;
+                                case SimpleSelectorType::Tag: types++; break;
+                                default: break;
+                            }
+                        }
+                    }
+                    // ::part(name) has specificity of a pseudo-element (already counted above)
                     break;
                 case SimpleSelectorType::Universal:
                     break; // no specificity
@@ -535,11 +605,43 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
             if (name == "root") return elem.parent() == nullptr;
             if (name == "empty") return elem.children().empty();
             if (name == "host") {
-                // :host matches the shadow host - scope() is non-null means it's in a shadow tree
-                // The host itself has scope == itself's shadow root
-                // For now, :host without arguments just checks if element is a shadow host
-                // This is typically handled at cascade level, return false by default
+                // :host matches the shadow host element.
+                // An element is the shadow host if it has a shadow root.
+                if (!elem.shadowRoot()) return false;
+                // If :host has arguments, the host must also match those selectors
+                if (!ss.hostArg.empty()) {
+                    for (auto& inner : ss.hostArg) {
+                        if (!matchSimple(inner, elem)) return false;
+                    }
+                }
+                return true;
+            }
+            if (name == "host-context") {
+                // :host-context(selector) matches if the host or any of its ancestors
+                // matches the argument selector.
+                if (!elem.shadowRoot()) return false;
+                // Check the host itself
+                if (!ss.hostArg.empty()) {
+                    bool hostMatches = true;
+                    for (auto& inner : ss.hostArg) {
+                        if (!matchSimple(inner, elem)) { hostMatches = false; break; }
+                    }
+                    if (hostMatches) return true;
+                    // Walk ancestors
+                    ElementRef* ancestor = elem.parent();
+                    while (ancestor) {
+                        bool ancestorMatches = true;
+                        for (auto& inner : ss.hostArg) {
+                            if (!matchSimple(inner, *ancestor)) { ancestorMatches = false; break; }
+                        }
+                        if (ancestorMatches) return true;
+                        ancestor = ancestor->parent();
+                    }
+                }
                 return false;
+            }
+            if (name == "defined") {
+                return elem.isDefined();
             }
             if (name == "not") {
                 // :not() matches if NONE of the argument simple selectors match

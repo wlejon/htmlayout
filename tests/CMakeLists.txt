@@ -14,6 +14,7 @@ add_executable(htmlayout_test
     test_grid.cpp
     test_remaining.cpp
     test_final.cpp
+    test_webcomponents.cpp
 )
 target_include_directories(htmlayout_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(htmlayout_test PRIVATE htmlayout gumbo)

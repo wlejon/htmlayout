@@ -196,6 +196,10 @@ const std::vector<PropertyDef>& knownProperties() {
         {"user-select",       "auto",       false},
         {"will-change",       "auto",       false},
         {"contain",           "none",       false},
+
+        // Container queries
+        {"container-type",    "normal",     false},
+        {"container-name",    "none",       false},
     };
     return props;
 }
@@ -698,6 +702,29 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         out.push_back({"column-rule-width", bc.width});
         out.push_back({"column-rule-style", bc.style});
         out.push_back({"column-rule-color", bc.color});
+        return out;
+    }
+
+    // container shorthand: type / name
+    if (property == "container") {
+        std::vector<ExpandedDecl> out;
+        auto slashPos = value.find('/');
+        if (slashPos != std::string::npos) {
+            std::string type = value.substr(0, slashPos);
+            std::string name = value.substr(slashPos + 1);
+            // Trim
+            auto trimStr = [](std::string& s) {
+                size_t a = s.find_first_not_of(" \t"); size_t b = s.find_last_not_of(" \t");
+                s = (a != std::string::npos) ? s.substr(a, b - a + 1) : "";
+            };
+            trimStr(type);
+            trimStr(name);
+            out.push_back({"container-type", type});
+            out.push_back({"container-name", name});
+        } else {
+            out.push_back({"container-type", value});
+            out.push_back({"container-name", "none"});
+        }
         return out;
     }
 

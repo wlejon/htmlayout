@@ -30,6 +30,13 @@ public:
                             sheet.rules.push_back(std::move(rule));
                         }
                     }
+                } else if (peek().value == "layer") {
+                    parseLayerRule(sheet);
+                } else if (peek().value == "container") {
+                    auto containerBlock = parseContainerRule();
+                    if (!containerBlock.rules.empty()) {
+                        sheet.containerBlocks.push_back(std::move(containerBlock));
+                    }
                 } else {
                     // @font-face, @keyframes, @charset, @import, etc. — skip gracefully
                     consumeAtRule();
@@ -180,6 +187,118 @@ private:
         if (condition.find("not") == 0) return false;
 
         return true; // default: assume supported
+    }
+
+    // Parse @layer rule — two forms:
+    // 1. @layer name { rules }           — layer block
+    // 2. @layer name1, name2, ...;       — layer ordering declaration
+    void parseLayerRule(Stylesheet& sheet) {
+        advance(); // skip @layer keyword
+        skipWhitespace();
+
+        // Collect tokens until '{' or ';'
+        std::string nameStr;
+        while (!atEnd() && peek().type != TokenType::LeftBrace && peek().type != TokenType::Semicolon) {
+            nameStr += tokenToString(advance());
+        }
+        nameStr = trim(nameStr);
+
+        if (!atEnd() && peek().type == TokenType::Semicolon) {
+            // Layer ordering declaration: @layer name1, name2;
+            advance(); // skip ';'
+            // Split by comma and record order
+            std::string current;
+            for (char c : nameStr) {
+                if (c == ',') {
+                    std::string layerName = trim(current);
+                    if (!layerName.empty()) sheet.layerOrder.push_back(layerName);
+                    current.clear();
+                } else {
+                    current += c;
+                }
+            }
+            std::string last = trim(current);
+            if (!last.empty()) sheet.layerOrder.push_back(last);
+            return;
+        }
+
+        if (atEnd() || peek().type != TokenType::LeftBrace) return;
+        advance(); // skip '{'
+
+        LayerBlock layer;
+        layer.name = nameStr;
+
+        // Parse rules inside the layer block
+        skipWhitespace();
+        while (!atEnd() && peek().type != TokenType::RightBrace) {
+            if (peek().type == TokenType::AtKeyword) {
+                if (peek().value == "media") {
+                    auto mediaBlock = parseMediaRule();
+                    if (!mediaBlock.condition.empty() || !mediaBlock.rules.empty()) {
+                        layer.mediaBlocks.push_back(std::move(mediaBlock));
+                    }
+                } else {
+                    consumeAtRule();
+                }
+                skipWhitespace();
+                continue;
+            }
+            auto rule = parseRule();
+            if (!rule.selector.empty()) {
+                layer.rules.push_back(std::move(rule));
+            }
+            skipWhitespace();
+        }
+        if (!atEnd() && peek().type == TokenType::RightBrace) advance();
+
+        sheet.layerBlocks.push_back(std::move(layer));
+    }
+
+    // Parse @container rule: @container [name] (condition) { rules }
+    ContainerBlock parseContainerRule() {
+        ContainerBlock block;
+        advance(); // skip @container keyword
+        skipWhitespace();
+
+        // Collect tokens until '{'
+        std::string prelude;
+        while (!atEnd() && peek().type != TokenType::LeftBrace) {
+            prelude += tokenToString(advance());
+        }
+        prelude = trim(prelude);
+
+        // Parse prelude: optional name followed by condition in parens
+        // e.g., "sidebar (min-width: 400px)" or "(min-width: 400px)"
+        auto parenPos = prelude.find('(');
+        if (parenPos != std::string::npos) {
+            std::string before = trim(prelude.substr(0, parenPos));
+            if (!before.empty()) {
+                block.name = before;
+            }
+            block.condition = trim(prelude.substr(parenPos));
+        } else {
+            block.condition = prelude;
+        }
+
+        if (atEnd() || peek().type != TokenType::LeftBrace) return block;
+        advance(); // skip '{'
+
+        // Parse rules inside the container block
+        skipWhitespace();
+        while (!atEnd() && peek().type != TokenType::RightBrace) {
+            if (peek().type == TokenType::AtKeyword) {
+                consumeAtRule();
+                skipWhitespace();
+                continue;
+            }
+            auto rule = parseRule();
+            if (!rule.selector.empty()) {
+                block.rules.push_back(std::move(rule));
+            }
+            skipWhitespace();
+        }
+        if (!atEnd() && peek().type == TokenType::RightBrace) advance();
+        return block;
     }
 
     void consumeAtRule() {
