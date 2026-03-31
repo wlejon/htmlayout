@@ -62,14 +62,26 @@ std::vector<LineBox> buildLineBoxes(
     return lines;
 }
 
-// Apply text-align to position items within a line
-float alignLine(const LineBox& line, float availableWidth, const std::string& textAlign) {
+// Apply text-align to position items within a line.
+// Returns the starting x offset. For justify, distributes extra space between items.
+float alignLine(const LineBox& line, float availableWidth, const std::string& textAlign,
+                bool isLastLine = false) {
     float extraSpace = availableWidth - line.totalWidth;
     if (extraSpace <= 0) return 0;
 
     if (textAlign == "center") return extraSpace / 2.0f;
     if (textAlign == "right" || textAlign == "end") return extraSpace;
+    // "justify" is handled at the caller level (adjusts gaps between items)
     return 0; // left/start is default
+}
+
+// Calculate per-gap spacing for justify alignment.
+// Returns 0 if not justifying or only one item.
+float justifyGap(const LineBox& line, float availableWidth, bool isLastLine) {
+    if (isLastLine || line.items.size() <= 1) return 0;
+    float extraSpace = availableWidth - line.totalWidth;
+    if (extraSpace <= 0) return 0;
+    return extraSpace / static_cast<float>(line.items.size() - 1);
 }
 
 } // anonymous namespace
@@ -226,11 +238,15 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
 
     // Position items within line boxes
     float cursorY = 0;
-    for (auto& line : lineBoxes) {
-        float xOffset = alignLine(line, contentAvail, textAlign);
+    for (size_t lineIdx = 0; lineIdx < lineBoxes.size(); lineIdx++) {
+        auto& line = lineBoxes[lineIdx];
+        bool isLastLine = (lineIdx == lineBoxes.size() - 1);
+        float xOffset = alignLine(line, contentAvail, textAlign, isLastLine);
+        float gap = (textAlign == "justify") ? justifyGap(line, contentAvail, isLastLine) : 0;
         float cursorX = xOffset;
 
-        for (auto& item : line.items) {
+        for (size_t itemIdx = 0; itemIdx < line.items.size(); itemIdx++) {
+            auto& item = line.items[itemIdx];
             if (item.node && (item.isInlineBlock || !item.node->isTextNode())) {
                 // Position inline-block/inline element
                 const std::string& va = styleVal(item.node->computedStyle(), "vertical-align");
@@ -252,7 +268,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 item.node->box.contentRect.y = yPos + item.node->box.margin.top +
                     item.node->box.padding.top + item.node->box.border.top;
             }
-            cursorX += item.width;
+            cursorX += item.width + gap;
         }
 
         cursorY += line.maxHeight;

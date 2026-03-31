@@ -314,6 +314,39 @@ static void testInlineDisplayNone() {
     check(approx(hidden.box.contentRect.width, 0), "hidden child has zero width");
 }
 
+static void testInlineTextAlignJustify() {
+    printf("--- Inline: text-align justify ---\n");
+    // 4 inline-block items that wrap to 2 lines in 300px container.
+    // Items are 100px each, so line 1 gets 3 items (300px, full width),
+    // and line 2 gets 1 item (last line, not justified).
+    // Actually, for justify to work we need free space on non-last lines.
+    // Use 350px container with 100px items: 3 fit on line 1 (300px), 1 wraps.
+    // Extra space on line 1 = 350 - 300 = 50px, distributed across 2 gaps = 25px each.
+    InlineMockNode root;
+    initInline(root, "div");
+    root.style["display"] = "inline";
+    root.style["text-align"] = "justify";
+
+    InlineMockNode ib1, ib2, ib3, ib4;
+    for (auto* ib : {&ib1, &ib2, &ib3, &ib4}) {
+        initInline(*ib, "span");
+        ib->style["display"] = "inline-block";
+        ib->style["width"] = "100px";
+        ib->style["height"] = "30px";
+        root.addChild(ib);
+    }
+
+    FixedTextMetrics metrics;
+    layoutTree(&root, 350, metrics);
+
+    // Line 1: ib1(0), ib2(100+25=125), ib3(225+100=225+25=250)
+    check(approx(ib1.box.contentRect.x, 0), "justify: line1 first item at x=0");
+    check(approx(ib2.box.contentRect.x, 125), "justify: line1 second item at x=125 (25px gap)");
+    check(approx(ib3.box.contentRect.x, 250), "justify: line1 third item at x=250");
+    // Line 2 (last line): ib4 at x=0 (not justified)
+    check(approx(ib4.box.contentRect.x, 0), "justify: last line not justified (x=0)");
+}
+
 // ========== Entry point ==========
 
 void testInlineLayout() {
@@ -333,4 +366,5 @@ void testInlineLayout() {
     testInlineTextAlignRight();
     testInlineMultipleInlineBlocks();
     testInlineDisplayNone();
+    testInlineTextAlignJustify();
 }
