@@ -457,6 +457,142 @@ static void testBlockEmResolution() {
     check(approx(child.box.contentRect.height, 100.0f), "5em at 20px font-size = 100px");
 }
 
+// ========== Positioned Layout Tests ==========
+
+static void testPositionRelative() {
+    printf("--- Layout: position relative ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+
+    MockLayoutNode child;
+    initBlock(child);
+    child.setHeight("50px");
+    child.style["position"] = "relative";
+    child.style["top"] = "10px";
+    child.style["left"] = "20px";
+
+    root.addChild(&child);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // Relative: offset from normal position. Normal x=0, y=0.
+    check(approx(child.box.contentRect.x, 20.0f), "relative: x offset by left:20px");
+    check(approx(child.box.contentRect.y, 10.0f), "relative: y offset by top:10px");
+    // Root height is not affected by relative offset
+    check(approx(root.box.contentRect.height, 50.0f), "relative: doesn't affect parent height");
+}
+
+static void testPositionRelativeBottom() {
+    printf("--- Layout: position relative bottom/right ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+
+    MockLayoutNode child;
+    initBlock(child);
+    child.setHeight("50px");
+    child.style["position"] = "relative";
+    child.style["bottom"] = "15px";
+    child.style["right"] = "25px";
+
+    root.addChild(&child);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // bottom:15 means move UP by 15; right:25 means move LEFT by 25
+    check(approx(child.box.contentRect.y, -15.0f), "relative bottom: y offset up by 15px");
+    check(approx(child.box.contentRect.x, -25.0f), "relative right: x offset left by 25px");
+}
+
+static void testPositionAbsolute() {
+    printf("--- Layout: position absolute ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setHeight("400px");
+
+    MockLayoutNode inflow;
+    initBlock(inflow);
+    inflow.setHeight("50px");
+
+    MockLayoutNode absChild;
+    initBlock(absChild);
+    absChild.setWidth("100px");
+    absChild.setHeight("60px");
+    absChild.style["position"] = "absolute";
+    absChild.style["top"] = "20px";
+    absChild.style["left"] = "30px";
+
+    root.addChild(&inflow);
+    root.addChild(&absChild);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // Absolute child positioned at top:20, left:30 relative to containing block
+    check(approx(absChild.box.contentRect.x, 30.0f), "absolute: x = left:30px");
+    check(approx(absChild.box.contentRect.y, 20.0f), "absolute: y = top:20px");
+    check(approx(absChild.box.contentRect.width, 100.0f), "absolute: explicit width preserved");
+    check(approx(absChild.box.contentRect.height, 60.0f), "absolute: explicit height preserved");
+    // Absolute doesn't affect in-flow height — root keeps explicit 400px
+    check(approx(root.box.contentRect.height, 400.0f), "absolute: doesn't affect parent height");
+    // In-flow child is at y=0
+    check(approx(inflow.box.contentRect.y, 0.0f), "absolute: in-flow child unaffected");
+}
+
+static void testPositionAbsoluteBottomRight() {
+    printf("--- Layout: position absolute bottom/right ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("600px");
+    root.setHeight("400px");
+
+    MockLayoutNode absChild;
+    initBlock(absChild);
+    absChild.setWidth("100px");
+    absChild.setHeight("50px");
+    absChild.style["position"] = "absolute";
+    absChild.style["bottom"] = "10px";
+    absChild.style["right"] = "20px";
+
+    root.addChild(&absChild);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // bottom:10 -> y = cbHeight - bottom - height = 400 - 10 - 50 = 340
+    check(approx(absChild.box.contentRect.y, 340.0f), "absolute bottom: y = 400-10-50 = 340");
+    // right:20 -> x = cbWidth - right - width = 600 - 20 - 100 = 480
+    check(approx(absChild.box.contentRect.x, 480.0f), "absolute right: x = 600-20-100 = 480");
+}
+
+static void testPositionAbsoluteStretch() {
+    printf("--- Layout: position absolute stretch ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("600px");
+    root.setHeight("400px");
+
+    MockLayoutNode absChild;
+    initBlock(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.style["top"] = "10px";
+    absChild.style["bottom"] = "20px";
+    absChild.style["left"] = "30px";
+    absChild.style["right"] = "40px";
+    // width/height = auto, so stretch between offsets
+
+    root.addChild(&absChild);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // width = 600 - 30 - 40 = 530
+    check(approx(absChild.box.contentRect.width, 530.0f), "absolute stretch: width = 600-30-40 = 530");
+    // height = 400 - 10 - 20 = 370
+    check(approx(absChild.box.contentRect.height, 370.0f), "absolute stretch: height = 400-10-20 = 370");
+}
+
 // ========== Entry point ==========
 
 void testLayout() {
@@ -483,4 +619,11 @@ void testLayout() {
     testBlockMinMaxWidth();
     testBlockNested();
     testBlockEmResolution();
+
+    // Positioned layout
+    testPositionRelative();
+    testPositionRelativeBottom();
+    testPositionAbsolute();
+    testPositionAbsoluteBottomRight();
+    testPositionAbsoluteStretch();
 }

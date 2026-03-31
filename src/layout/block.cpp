@@ -27,6 +27,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
     if (fontSize <= 0.0f) fontSize = 16.0f;
 
+    const std::string& position = styleVal(style, "position");
+
     // Resolve margin, padding, border
     node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
     node->box.padding = resolveEdges(style, "padding", availableWidth, fontSize);
@@ -78,9 +80,13 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float childAvailable = contentWidth;
 
     // Layout children vertically (block formatting context)
+    // Absolutely/fixed positioned children are laid out but don't affect flow.
     float cursorY = 0.0f;
     float prevMarginBottom = 0.0f;
     bool firstChild = true;
+
+    // Collect absolutely positioned children to process after in-flow layout
+    std::vector<LayoutNode*> absChildren;
 
     for (auto* child : node->children()) {
         if (child->isTextNode()) continue; // text nodes handled by inline layout
@@ -89,6 +95,14 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         const std::string& childDisplay = styleVal(childStyle, "display");
         if (childDisplay == "none") {
             child->box = LayoutBox{};
+            continue;
+        }
+
+        const std::string& childPos = styleVal(childStyle, "position");
+
+        // Absolutely and fixed positioned children are out of flow
+        if (childPos == "absolute" || childPos == "fixed") {
+            absChildren.push_back(child);
             continue;
         }
 
@@ -112,6 +126,27 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // Position the child's content rect
         child->box.contentRect.x = child->box.margin.left + child->box.padding.left + child->box.border.left;
         child->box.contentRect.y = cursorY + child->box.padding.top + child->box.border.top;
+
+        // Apply position: relative offset after normal positioning
+        if (childPos == "relative") {
+            float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
+            if (childFontSize <= 0) childFontSize = fontSize;
+            const std::string& topVal = styleVal(childStyle, "top");
+            const std::string& leftVal = styleVal(childStyle, "left");
+            const std::string& bottomVal = styleVal(childStyle, "bottom");
+            const std::string& rightVal = styleVal(childStyle, "right");
+
+            if (topVal != "auto" && !topVal.empty()) {
+                child->box.contentRect.y += resolveLength(topVal, 0, childFontSize);
+            } else if (bottomVal != "auto" && !bottomVal.empty()) {
+                child->box.contentRect.y -= resolveLength(bottomVal, 0, childFontSize);
+            }
+            if (leftVal != "auto" && !leftVal.empty()) {
+                child->box.contentRect.x += resolveLength(leftVal, childAvailable, childFontSize);
+            } else if (rightVal != "auto" && !rightVal.empty()) {
+                child->box.contentRect.x -= resolveLength(rightVal, childAvailable, childFontSize);
+            }
+        }
 
         // Advance cursor past the child's full box height
         cursorY += child->box.border.top + child->box.padding.top +
@@ -148,6 +183,66 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float maxH = resolveDimension(styleVal(style, "max-height"), 0.0f, fontSize);
     if (minH >= 0.0f && node->box.contentRect.height < minH) node->box.contentRect.height = minH;
     if (maxH >= 0.0f && node->box.contentRect.height > maxH) node->box.contentRect.height = maxH;
+
+    // Now layout absolutely positioned children against this containing block
+    float cbWidth = node->box.contentRect.width;
+    float cbHeight = node->box.contentRect.height;
+
+    for (auto* child : absChildren) {
+        auto& childStyle = child->computedStyle();
+        float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
+        if (childFontSize <= 0) childFontSize = fontSize;
+
+        // Layout the child to determine its intrinsic size
+        layoutNode(child, cbWidth, metrics);
+
+        // Resolve offsets: top/right/bottom/left
+        float top = resolveDimension(styleVal(childStyle, "top"), cbHeight, childFontSize);
+        float right = resolveDimension(styleVal(childStyle, "right"), cbWidth, childFontSize);
+        float bottom = resolveDimension(styleVal(childStyle, "bottom"), cbHeight, childFontSize);
+        float left = resolveDimension(styleVal(childStyle, "left"), cbWidth, childFontSize);
+
+        // Resolve width for absolute: if left and right are both set and width is auto
+        float specW = resolveDimension(styleVal(childStyle, "width"), cbWidth, childFontSize);
+        if (specW < 0 && left >= 0 && right >= 0) {
+            float w = cbWidth - left - right -
+                      child->box.margin.left - child->box.margin.right -
+                      child->box.padding.left - child->box.padding.right -
+                      child->box.border.left - child->box.border.right;
+            if (w > 0) child->box.contentRect.width = w;
+        }
+
+        // Resolve height for absolute: if top and bottom are both set and height is auto
+        float specH = resolveDimension(styleVal(childStyle, "height"), cbHeight, childFontSize);
+        if (specH < 0 && top >= 0 && bottom >= 0) {
+            float h = cbHeight - top - bottom -
+                      child->box.margin.top - child->box.margin.bottom -
+                      child->box.padding.top - child->box.padding.bottom -
+                      child->box.border.top - child->box.border.bottom;
+            if (h > 0) child->box.contentRect.height = h;
+        }
+
+        // Position: prefer top/left, fall back to bottom/right
+        float xPos = child->box.margin.left + child->box.padding.left + child->box.border.left;
+        float yPos = child->box.margin.top + child->box.padding.top + child->box.border.top;
+
+        if (left >= 0) {
+            xPos = left + child->box.margin.left + child->box.padding.left + child->box.border.left;
+        } else if (right >= 0) {
+            xPos = cbWidth - right - child->box.margin.right -
+                   child->box.padding.right - child->box.border.right - child->box.contentRect.width;
+        }
+
+        if (top >= 0) {
+            yPos = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
+        } else if (bottom >= 0) {
+            yPos = cbHeight - bottom - child->box.margin.bottom -
+                   child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
+        }
+
+        child->box.contentRect.x = xPos;
+        child->box.contentRect.y = yPos;
+    }
 }
 
 } // namespace htmlayout::layout
