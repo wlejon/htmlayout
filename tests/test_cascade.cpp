@@ -2,6 +2,7 @@
 #include "test_helpers.h"
 #include "css/parser.h"
 #include "css/cascade.h"
+#include "css/ua_stylesheet.h"
 
 using namespace htmlayout::css;
 
@@ -314,6 +315,56 @@ static void testCustomProperties() {
     check(s3["color"] == "purple", "var(): nested var() in fallback");
 }
 
+static void testUserAgentStylesheet() {
+    printf("--- Cascade: user-agent default stylesheet ---\n");
+
+    auto& uaSheet = defaultUserAgentStylesheet();
+    check(!uaSheet.rules.empty(), "UA stylesheet has rules");
+
+    Cascade cascade;
+    cascade.addStylesheet(uaSheet);
+
+    // h1 should be block + bold + 32px
+    MockElement h1; h1.tag = "h1";
+    auto h1Style = cascade.resolve(h1);
+    check(h1Style["display"] == "block", "UA: h1 display = block");
+    check(h1Style["font-weight"] == "bold", "UA: h1 font-weight = bold");
+    check(h1Style["font-size"] == "32px", "UA: h1 font-size = 32px");
+
+    // p should be block with margins
+    MockElement p; p.tag = "p";
+    auto pStyle = cascade.resolve(p);
+    check(pStyle["display"] == "block", "UA: p display = block");
+    check(pStyle["margin-top"] == "16px", "UA: p margin-top = 16px");
+
+    // span should remain inline (no UA rule)
+    MockElement span; span.tag = "span";
+    auto spanStyle = cascade.resolve(span);
+    check(spanStyle["display"] == "inline", "UA: span display = inline (default)");
+
+    // strong should be bold
+    MockElement strong; strong.tag = "strong";
+    auto strongStyle = cascade.resolve(strong);
+    check(strongStyle["font-weight"] == "bold", "UA: strong font-weight = bold");
+
+    // a should be blue with underline
+    MockElement a; a.tag = "a";
+    auto aStyle = cascade.resolve(a);
+    check(aStyle["color"] == "blue", "UA: a color = blue");
+    check(aStyle["text-decoration"] == "underline", "UA: a text-decoration = underline");
+
+    // head should be display:none
+    MockElement head; head.tag = "head";
+    auto headStyle = cascade.resolve(head);
+    check(headStyle["display"] == "none", "UA: head display = none");
+
+    // Author styles override UA
+    cascade.addStylesheet(parse("h1 { font-size: 48px; }"));
+    auto h1Custom = cascade.resolve(h1);
+    check(h1Custom["font-size"] == "48px", "UA: author overrides UA font-size");
+    check(h1Custom["font-weight"] == "bold", "UA: UA bold preserved when not overridden");
+}
+
 static void testClear() {
     printf("--- Cascade: clear ---\n");
     Cascade cascade;
@@ -341,5 +392,6 @@ void testCascade() {
     testInheritInitialUnset();
     testMediaQueries();
     testCustomProperties();
+    testUserAgentStylesheet();
     testClear();
 }

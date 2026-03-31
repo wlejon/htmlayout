@@ -4,5 +4,6 @@ add_library(htmlayout_css STATIC
     selector.cpp
     cascade.cpp
     properties.cpp
+    ua_stylesheet.cpp
 )
 target_include_directories(htmlayout_css PUBLIC ${CMAKE_SOURCE_DIR}/src)
