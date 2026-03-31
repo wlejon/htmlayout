@@ -76,6 +76,11 @@ struct TextMetrics {
 // viewportWidth is the available width for the root element.
 void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics);
 
+// Apply overflow clipping to a laid-out tree.
+// Children of nodes with overflow:hidden/scroll/auto are clipped to the parent's
+// content+padding box. Call after layoutTree().
+void applyOverflowClipping(LayoutNode* root);
+
 // Hit test: find the deepest LayoutNode at a given point
 LayoutNode* hitTest(LayoutNode* root, float x, float y);
 

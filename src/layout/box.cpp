@@ -1,5 +1,6 @@
 #include "layout/box.h"
 #include "layout/formatting_context.h"
+#include <algorithm>
 
 namespace htmlayout::layout {
 
@@ -57,7 +58,75 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
     return node;
 }
 
+// Clip a child's content rect to a parent's padding box (content + padding).
+void clipToParentPaddingBox(LayoutBox& childBox, const LayoutBox& parentBox) {
+    // Parent's padding box boundaries
+    float px = parentBox.contentRect.x - parentBox.padding.left;
+    float py = parentBox.contentRect.y - parentBox.padding.top;
+    float pw = parentBox.contentRect.width + parentBox.padding.left + parentBox.padding.right;
+    float ph = parentBox.contentRect.height + parentBox.padding.top + parentBox.padding.bottom;
+
+    float cx = childBox.contentRect.x;
+    float cy = childBox.contentRect.y;
+    float cw = childBox.contentRect.width;
+    float ch = childBox.contentRect.height;
+
+    // Clip left
+    if (cx < px) {
+        float diff = px - cx;
+        cw -= diff;
+        cx = px;
+    }
+    // Clip top
+    if (cy < py) {
+        float diff = py - cy;
+        ch -= diff;
+        cy = py;
+    }
+    // Clip right
+    if (cx + cw > px + pw) {
+        cw = px + pw - cx;
+    }
+    // Clip bottom
+    if (cy + ch > py + ph) {
+        ch = py + ph - cy;
+    }
+
+    // Clamp to non-negative
+    if (cw < 0) cw = 0;
+    if (ch < 0) ch = 0;
+
+    childBox.contentRect.x = cx;
+    childBox.contentRect.y = cy;
+    childBox.contentRect.width = cw;
+    childBox.contentRect.height = ch;
+}
+
+void applyOverflowClippingRecursive(LayoutNode* node, bool parentClips, const LayoutBox* clipBox) {
+    if (!node) return;
+
+    auto& style = node->computedStyle();
+    if (styleVal(style, "display") == "none") return;
+
+    // If parent clips and this node extends outside, clip it
+    if (parentClips && clipBox) {
+        clipToParentPaddingBox(node->box, *clipBox);
+    }
+
+    // Check if this node clips its children
+    const std::string& overflow = styleVal(style, "overflow");
+    bool thisClips = (overflow == "hidden" || overflow == "scroll" || overflow == "auto");
+
+    for (auto* child : node->children()) {
+        applyOverflowClippingRecursive(child, thisClips, thisClips ? &node->box : nullptr);
+    }
+}
+
 } // anonymous namespace
+
+void applyOverflowClipping(LayoutNode* root) {
+    applyOverflowClippingRecursive(root, false, nullptr);
+}
 
 LayoutNode* hitTest(LayoutNode* root, float x, float y) {
     return hitTestRecursive(root, x, y);

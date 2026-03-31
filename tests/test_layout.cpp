@@ -566,6 +566,55 @@ static void testPositionAbsoluteBottomRight() {
     check(approx(absChild.box.contentRect.x, 480.0f), "absolute right: x = 600-20-100 = 480");
 }
 
+static void testOverflowClipping() {
+    printf("--- Layout: overflow clipping ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("200px");
+    root.setHeight("100px");
+    root.style["overflow"] = "hidden";
+
+    // Child extends beyond parent
+    MockLayoutNode child;
+    initBlock(child);
+    child.setWidth("300px");  // wider than parent
+    child.setHeight("150px"); // taller than parent
+
+    root.addChild(&child);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+    applyOverflowClipping(&root);
+
+    // Child should be clipped to parent's content area
+    check(approx(child.box.contentRect.width, 200.0f), "overflow clip: width clipped to parent 200px");
+    check(approx(child.box.contentRect.height, 100.0f), "overflow clip: height clipped to parent 100px");
+}
+
+static void testOverflowVisible() {
+    printf("--- Layout: overflow visible (no clipping) ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("200px");
+    root.setHeight("100px");
+    root.style["overflow"] = "visible";
+
+    MockLayoutNode child;
+    initBlock(child);
+    child.setWidth("300px");
+    child.setHeight("150px");
+
+    root.addChild(&child);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+    applyOverflowClipping(&root);
+
+    // overflow:visible -> no clipping
+    check(approx(child.box.contentRect.width, 300.0f), "overflow visible: width not clipped");
+    check(approx(child.box.contentRect.height, 150.0f), "overflow visible: height not clipped");
+}
+
 static void testPositionAbsoluteStretch() {
     printf("--- Layout: position absolute stretch ---\n");
     MockLayoutNode root;
@@ -619,6 +668,10 @@ void testLayout() {
     testBlockMinMaxWidth();
     testBlockNested();
     testBlockEmResolution();
+
+    // Overflow clipping
+    testOverflowClipping();
+    testOverflowVisible();
 
     // Positioned layout
     testPositionRelative();
