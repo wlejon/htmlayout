@@ -1,6 +1,7 @@
 #pragma once
 #include "css/parser.h"
 #include "css/selector.h"
+#include "css/properties.h"
 #include <string>
 #include <unordered_map>
 #include <vector>

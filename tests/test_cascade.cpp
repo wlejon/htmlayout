@@ -206,6 +206,63 @@ static void testInheritInitialUnset() {
     check(cs2["margin-left"] == "0", "unset keyword: non-inherited margin-left = 0 (initial)");
 }
 
+static void testCustomProperties() {
+    printf("--- Cascade: CSS custom properties (var()) ---\n");
+
+    // Basic var() usage
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        ":root { --main-color: red; --spacing: 10px; }\n"
+        "div { color: var(--main-color); margin-top: var(--spacing); }\n"
+    ));
+    // Simulate :root as the parent
+    MockElement root; root.tag = "html";
+    MockElement div; div.tag = "div";
+    root.addChild(&div);
+    // :root won't match "html" via :root pseudo (it matches parent()==null)
+    // So set custom props directly via a rule that matches
+    Cascade cascade2;
+    cascade2.addStylesheet(parse(
+        "html { --main-color: red; --spacing: 10px; }\n"
+        "div { color: var(--main-color); margin-top: var(--spacing); }\n"
+    ));
+    auto rootStyle = cascade2.resolve(root);
+    auto divStyle = cascade2.resolve(div, {}, &rootStyle);
+    check(divStyle["color"] == "red", "var(): basic variable resolution");
+    check(divStyle["margin-top"] == "10px", "var(): spacing variable resolution");
+
+    // var() with fallback
+    Cascade cascade3;
+    cascade3.addStylesheet(parse(
+        "div { color: var(--undefined, blue); }\n"
+    ));
+    MockElement d2; d2.tag = "div";
+    auto s2 = cascade3.resolve(d2);
+    check(s2["color"] == "blue", "var(): fallback when variable undefined");
+
+    // Custom properties inherit
+    Cascade cascade4;
+    cascade4.addStylesheet(parse(
+        "div { --theme: green; }\n"
+        "span { color: var(--theme); }\n"
+    ));
+    MockElement parent; parent.tag = "div";
+    MockElement child; child.tag = "span";
+    parent.addChild(&child);
+    auto ps = cascade4.resolve(parent);
+    auto cs = cascade4.resolve(child, {}, &ps);
+    check(cs["color"] == "green", "var(): custom properties inherit to children");
+
+    // Nested var() in fallback
+    Cascade cascade5;
+    cascade5.addStylesheet(parse(
+        "div { --fallback-color: purple; color: var(--missing, var(--fallback-color)); }\n"
+    ));
+    MockElement d3; d3.tag = "div";
+    auto s3 = cascade5.resolve(d3);
+    check(s3["color"] == "purple", "var(): nested var() in fallback");
+}
+
 static void testClear() {
     printf("--- Cascade: clear ---\n");
     Cascade cascade;
@@ -231,5 +288,6 @@ void testCascade() {
     testInheritanceChain();
     testImportantVsInline();
     testInheritInitialUnset();
+    testCustomProperties();
     testClear();
 }
