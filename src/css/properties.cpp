@@ -2,6 +2,8 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <unordered_map>
+#include <stdexcept>
 
 namespace htmlayout::css {
 
@@ -90,18 +92,48 @@ const std::vector<PropertyDef>& knownProperties() {
     return props;
 }
 
-bool isInherited(const std::string& property) {
-    for (auto& p : knownProperties()) {
-        if (p.name == property) return p.inherited;
+namespace {
+
+// Cached property lookup map, built once from knownProperties().
+struct PropertyCache {
+    std::unordered_map<std::string, const PropertyDef*> map;
+
+    PropertyCache() {
+        for (auto& p : knownProperties()) {
+            map[p.name] = &p;
+        }
     }
-    return false;
+
+    const PropertyDef* find(const std::string& name) const {
+        auto it = map.find(name);
+        return it != map.end() ? it->second : nullptr;
+    }
+};
+
+const PropertyCache& cache() {
+    static const PropertyCache instance;
+    return instance;
+}
+
+// Safe integer parsing that returns a default on failure.
+int safeStoi(const std::string& s, int defaultVal = 0) {
+    try {
+        return std::stoi(s);
+    } catch (...) {
+        return defaultVal;
+    }
+}
+
+} // anonymous namespace
+
+bool isInherited(const std::string& property) {
+    auto* def = cache().find(property);
+    return def ? def->inherited : false;
 }
 
 std::string initialValue(const std::string& property) {
-    for (auto& p : knownProperties()) {
-        if (p.name == property) return p.initialValue;
-    }
-    return {};
+    auto* def = cache().find(property);
+    return def ? def->initialValue : std::string{};
 }
 
 namespace {
@@ -144,39 +176,58 @@ std::vector<std::string> splitValue(const std::string& value) {
     return parts;
 }
 
-// Expand 1-4 value box shorthand (margin, padding, border-width, etc.)
-// 1 value: all four sides
-// 2 values: top/bottom, left/right
-// 3 values: top, left/right, bottom
-// 4 values: top, right, bottom, left
+// Resolve 1-4 values into top/right/bottom/left per CSS box model.
+struct BoxValues {
+    std::string top, right, bottom, left;
+};
+
+BoxValues resolveBoxValues(const std::vector<std::string>& parts) {
+    BoxValues bv;
+    switch (parts.size()) {
+        case 1:
+            bv.top = bv.right = bv.bottom = bv.left = parts[0];
+            break;
+        case 2:
+            bv.top = bv.bottom = parts[0];
+            bv.right = bv.left = parts[1];
+            break;
+        case 3:
+            bv.top = parts[0];
+            bv.right = bv.left = parts[1];
+            bv.bottom = parts[2];
+            break;
+        default:
+            bv.top = parts[0];
+            bv.right = parts[1];
+            bv.bottom = parts[2];
+            bv.left = parts.size() > 3 ? parts[3] : parts[2];
+            break;
+    }
+    return bv;
+}
+
+// Expand 1-4 value box shorthand using a prefix (e.g. "margin", "padding")
+// or a prefix+suffix pattern (e.g. "border-" + side + "-width").
 void expandBoxShorthand(const std::string& prefix,
                         const std::vector<std::string>& parts,
                         std::vector<ExpandedDecl>& out) {
-    std::string top, right, bottom, left;
-    switch (parts.size()) {
-        case 1:
-            top = right = bottom = left = parts[0];
-            break;
-        case 2:
-            top = bottom = parts[0];
-            right = left = parts[1];
-            break;
-        case 3:
-            top = parts[0];
-            right = left = parts[1];
-            bottom = parts[2];
-            break;
-        default: // 4+
-            top = parts[0];
-            right = parts[1];
-            bottom = parts[2];
-            left = parts.size() > 3 ? parts[3] : parts[2];
-            break;
-    }
-    out.push_back({prefix + "-top", top});
-    out.push_back({prefix + "-right", right});
-    out.push_back({prefix + "-bottom", bottom});
-    out.push_back({prefix + "-left", left});
+    auto bv = resolveBoxValues(parts);
+    out.push_back({prefix + "-top", bv.top});
+    out.push_back({prefix + "-right", bv.right});
+    out.push_back({prefix + "-bottom", bv.bottom});
+    out.push_back({prefix + "-left", bv.left});
+}
+
+// Expand 1-4 value shorthand for border sub-properties like border-width,
+// border-style, border-color where longhand names are "border-{side}-{suffix}".
+void expandBorderBoxShorthand(const std::string& suffix,
+                              const std::vector<std::string>& parts,
+                              std::vector<ExpandedDecl>& out) {
+    auto bv = resolveBoxValues(parts);
+    out.push_back({"border-top-" + suffix, bv.top});
+    out.push_back({"border-right-" + suffix, bv.right});
+    out.push_back({"border-bottom-" + suffix, bv.bottom});
+    out.push_back({"border-left-" + suffix, bv.left});
 }
 
 bool isBorderStyle(const std::string& v) {
@@ -187,7 +238,6 @@ bool isBorderStyle(const std::string& v) {
 
 bool isBorderWidth(const std::string& v) {
     if (v == "thin" || v == "medium" || v == "thick") return true;
-    // Check if it looks like a length (number + optional unit)
     if (v.empty()) return false;
     size_t i = 0;
     if (v[i] == '-' || v[i] == '+') i++;
@@ -197,13 +247,11 @@ bool isBorderWidth(const std::string& v) {
         i++;
     }
     if (!hasDigit) return false;
-    // Rest should be a unit or empty
     std::string unit = v.substr(i);
     return unit.empty() || unit == "px" || unit == "em" || unit == "rem" ||
            unit == "pt" || unit == "%" || unit == "vw" || unit == "vh";
 }
 
-// Classify a token as width, style, or color for border shorthand
 enum class BorderPart { Width, Style, Color };
 
 BorderPart classifyBorderToken(const std::string& v) {
@@ -212,50 +260,52 @@ BorderPart classifyBorderToken(const std::string& v) {
     return BorderPart::Color;
 }
 
-// Expand "border: width style color" into border-*-width/style/color for all sides
-void expandBorder(const std::vector<std::string>& parts,
-                  std::vector<ExpandedDecl>& out) {
-    std::string width = "medium", style = "none", color = "currentcolor";
+// Parse "width style color" tokens into their classified parts.
+struct BorderComponents {
+    std::string width = "medium";
+    std::string style = "none";
+    std::string color = "currentcolor";
+};
+
+BorderComponents parseBorderTokens(const std::vector<std::string>& parts) {
+    BorderComponents bc;
     for (auto& p : parts) {
         switch (classifyBorderToken(p)) {
-            case BorderPart::Width: width = p; break;
-            case BorderPart::Style: style = p; break;
-            case BorderPart::Color: color = p; break;
+            case BorderPart::Width: bc.width = p; break;
+            case BorderPart::Style: bc.style = p; break;
+            case BorderPart::Color: bc.color = p; break;
         }
     }
+    return bc;
+}
+
+void expandBorder(const std::vector<std::string>& parts,
+                  std::vector<ExpandedDecl>& out) {
+    auto bc = parseBorderTokens(parts);
     const char* sides[] = {"top", "right", "bottom", "left"};
     for (auto side : sides) {
-        out.push_back({std::string("border-") + side + "-width", width});
-        out.push_back({std::string("border-") + side + "-style", style});
-        out.push_back({std::string("border-") + side + "-color", color});
+        out.push_back({std::string("border-") + side + "-width", bc.width});
+        out.push_back({std::string("border-") + side + "-style", bc.style});
+        out.push_back({std::string("border-") + side + "-color", bc.color});
     }
 }
 
-// Expand border-top/right/bottom/left shorthand
 void expandBorderSide(const std::string& side,
                       const std::vector<std::string>& parts,
                       std::vector<ExpandedDecl>& out) {
-    std::string width = "medium", style = "none", color = "currentcolor";
-    for (auto& p : parts) {
-        switch (classifyBorderToken(p)) {
-            case BorderPart::Width: width = p; break;
-            case BorderPart::Style: style = p; break;
-            case BorderPart::Color: color = p; break;
-        }
-    }
-    out.push_back({"border-" + side + "-width", width});
-    out.push_back({"border-" + side + "-style", style});
-    out.push_back({"border-" + side + "-color", color});
+    auto bc = parseBorderTokens(parts);
+    out.push_back({"border-" + side + "-width", bc.width});
+    out.push_back({"border-" + side + "-style", bc.style});
+    out.push_back({"border-" + side + "-color", bc.color});
 }
 
 bool isFontWeight(const std::string& v) {
     if (v == "normal" || v == "bold" || v == "bolder" || v == "lighter") return true;
-    // Numeric weights: 100-900
     if (v.size() <= 3) {
         bool allDigit = true;
         for (char c : v) if (!std::isdigit(static_cast<unsigned char>(c))) allDigit = false;
         if (allDigit && !v.empty()) {
-            int n = std::stoi(v);
+            int n = safeStoi(v);
             return n >= 100 && n <= 900;
         }
     }
@@ -266,15 +316,6 @@ bool isFontStyle(const std::string& v) {
     return v == "italic" || v == "oblique";
 }
 
-bool isFontSize(const std::string& v) {
-    // Named sizes
-    if (v == "xx-small" || v == "x-small" || v == "small" || v == "medium" ||
-        v == "large" || v == "x-large" || v == "xx-large" || v == "smaller" ||
-        v == "larger") return true;
-    // Length/percentage
-    return isBorderWidth(v); // reuse: checks for number+unit
-}
-
 } // anonymous namespace
 
 std::vector<ExpandedDecl> expandShorthand(const std::string& property,
@@ -282,7 +323,6 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
     auto parts = splitValue(value);
     if (parts.empty()) return {{property, value}};
 
-    // margin, padding: 1-4 value box model shorthands
     if (property == "margin") {
         std::vector<ExpandedDecl> out;
         expandBoxShorthand("margin", parts, out);
@@ -294,62 +334,28 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         return out;
     }
 
-    // border-width, border-style, border-color: 1-4 value box shorthands
     if (property == "border-width") {
         std::vector<ExpandedDecl> out;
-        const char* sides[] = {"top", "right", "bottom", "left"};
-        std::string top, right, bottom, left;
-        switch (parts.size()) {
-            case 1: top = right = bottom = left = parts[0]; break;
-            case 2: top = bottom = parts[0]; right = left = parts[1]; break;
-            case 3: top = parts[0]; right = left = parts[1]; bottom = parts[2]; break;
-            default: top = parts[0]; right = parts[1]; bottom = parts[2]; left = parts[3]; break;
-        }
-        out.push_back({"border-top-width", top});
-        out.push_back({"border-right-width", right});
-        out.push_back({"border-bottom-width", bottom});
-        out.push_back({"border-left-width", left});
+        expandBorderBoxShorthand("width", parts, out);
         return out;
     }
     if (property == "border-style") {
         std::vector<ExpandedDecl> out;
-        std::string top, right, bottom, left;
-        switch (parts.size()) {
-            case 1: top = right = bottom = left = parts[0]; break;
-            case 2: top = bottom = parts[0]; right = left = parts[1]; break;
-            case 3: top = parts[0]; right = left = parts[1]; bottom = parts[2]; break;
-            default: top = parts[0]; right = parts[1]; bottom = parts[2]; left = parts[3]; break;
-        }
-        out.push_back({"border-top-style", top});
-        out.push_back({"border-right-style", right});
-        out.push_back({"border-bottom-style", bottom});
-        out.push_back({"border-left-style", left});
+        expandBorderBoxShorthand("style", parts, out);
         return out;
     }
     if (property == "border-color") {
         std::vector<ExpandedDecl> out;
-        std::string top, right, bottom, left;
-        switch (parts.size()) {
-            case 1: top = right = bottom = left = parts[0]; break;
-            case 2: top = bottom = parts[0]; right = left = parts[1]; break;
-            case 3: top = parts[0]; right = left = parts[1]; bottom = parts[2]; break;
-            default: top = parts[0]; right = parts[1]; bottom = parts[2]; left = parts[3]; break;
-        }
-        out.push_back({"border-top-color", top});
-        out.push_back({"border-right-color", right});
-        out.push_back({"border-bottom-color", bottom});
-        out.push_back({"border-left-color", left});
+        expandBorderBoxShorthand("color", parts, out);
         return out;
     }
 
-    // border: width style color
     if (property == "border") {
         std::vector<ExpandedDecl> out;
         expandBorder(parts, out);
         return out;
     }
 
-    // border-top, border-right, border-bottom, border-left
     if (property == "border-top" || property == "border-right" ||
         property == "border-bottom" || property == "border-left") {
         std::vector<ExpandedDecl> out;
@@ -358,7 +364,6 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         return out;
     }
 
-    // flex: grow shrink basis
     if (property == "flex") {
         std::vector<ExpandedDecl> out;
         if (value == "none") {
@@ -370,13 +375,11 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
             out.push_back({"flex-shrink", "1"});
             out.push_back({"flex-basis", "auto"});
         } else if (parts.size() == 1) {
-            // Single number = flex-grow (with basis=0)
             out.push_back({"flex-grow", parts[0]});
             out.push_back({"flex-shrink", "1"});
             out.push_back({"flex-basis", "0"});
         } else if (parts.size() == 2) {
             out.push_back({"flex-grow", parts[0]});
-            // Second value: if it looks like a number, it's flex-shrink; otherwise flex-basis
             if (isBorderWidth(parts[1]) && parts[1].find_first_of("abcdefghijklmnopqrstuvwxyz%") != std::string::npos) {
                 out.push_back({"flex-shrink", "1"});
                 out.push_back({"flex-basis", parts[1]});
@@ -392,7 +395,6 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         return out;
     }
 
-    // flex-flow: direction wrap
     if (property == "flex-flow") {
         std::vector<ExpandedDecl> out;
         std::string dir = "row", wrap = "nowrap";
@@ -407,44 +409,27 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         return out;
     }
 
-    // gap: row-gap column-gap (or single value for both)
     if (property == "gap") {
         std::vector<ExpandedDecl> out;
-        if (parts.size() == 1) {
-            out.push_back({"row-gap", parts[0]});
-            out.push_back({"column-gap", parts[0]});
-        } else {
-            out.push_back({"row-gap", parts[0]});
-            out.push_back({"column-gap", parts[1]});
-        }
+        out.push_back({"row-gap", parts[0]});
+        out.push_back({"column-gap", parts.size() > 1 ? parts[1] : parts[0]});
         return out;
     }
 
-    // background: color (simplified - just extract color)
     if (property == "background") {
-        std::vector<ExpandedDecl> out;
-        // Simplified: treat single value as background-color
-        out.push_back({"background-color", value});
-        out.push_back({"background-image", "none"});
-        return out;
+        return {{"background-color", value}, {"background-image", "none"}};
     }
 
-    // font: [style] [weight] size[/line-height] family
     if (property == "font") {
         std::vector<ExpandedDecl> out;
         std::string fontStyle = "normal", fontWeight = "normal",
                     fontSize = "16px", lineHeight = "normal", fontFamily;
 
         size_t i = 0;
-        // Optional font-style
-        if (i < parts.size() && isFontStyle(parts[i])) {
+        if (i < parts.size() && isFontStyle(parts[i]))
             fontStyle = parts[i++];
-        }
-        // Optional font-weight
-        if (i < parts.size() && isFontWeight(parts[i])) {
+        if (i < parts.size() && isFontWeight(parts[i]))
             fontWeight = parts[i++];
-        }
-        // Required font-size (possibly with /line-height)
         if (i < parts.size()) {
             auto& sizeStr = parts[i];
             auto slashPos = sizeStr.find('/');
@@ -456,7 +441,6 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
             }
             i++;
         }
-        // Rest is font-family (rejoin with spaces)
         for (; i < parts.size(); i++) {
             if (!fontFamily.empty()) fontFamily += " ";
             fontFamily += parts[i];
@@ -471,9 +455,7 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         return out;
     }
 
-    // list-style: type position
     if (property == "list-style") {
-        std::vector<ExpandedDecl> out;
         std::string type = "disc", position = "outside";
         for (auto& p : parts) {
             if (p == "inside" || p == "outside")
@@ -481,18 +463,13 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
             else
                 type = p;
         }
-        out.push_back({"list-style-type", type});
-        out.push_back({"list-style-position", position});
-        return out;
+        return {{"list-style-type", type}, {"list-style-position", position}};
     }
 
-    // overflow: x y (or single for both - we only have one overflow property)
     if (property == "overflow") {
-        // Keep as-is since we only have a single overflow property
         return {{property, parts[0]}};
     }
 
-    // Not a recognized shorthand - return as-is
     return {{property, value}};
 }
 

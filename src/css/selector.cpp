@@ -2,6 +2,7 @@
 #include "css/tokenizer.h"
 #include <algorithm>
 #include <cctype>
+#include <stdexcept>
 #include <sstream>
 
 namespace htmlayout::css {
@@ -9,6 +10,14 @@ namespace htmlayout::css {
 namespace {
 
 // ---- Helpers ----
+
+int safeStoi(const std::string& s, int defaultVal = 0) {
+    try {
+        return std::stoi(s);
+    } catch (...) {
+        return defaultVal;
+    }
+}
 
 std::string toLower(const std::string& s) {
     std::string r = s;
@@ -141,7 +150,7 @@ private:
         if (peek() == '+' || peek() == '-') s += advance();
         while (m_pos < m_text.size() && std::isdigit((unsigned char)peek())) s += advance();
         if (s.empty() || s == "+" || s == "-") return 0;
-        return std::stoi(s);
+        return safeStoi(s);
     }
 
     CompoundSelector parseCompound() {
@@ -283,7 +292,7 @@ private:
 
                 SelectorParser subParser(arg);
                 auto compound = subParser.parseCompound();
-                ss.notArg = std::move(compound.simples); // reuse notArg for host arg
+                ss.hostArg = std::move(compound.simples);
             } else {
                 // Unknown functional pseudo - skip to closing paren
                 int depth = 1;
@@ -315,7 +324,7 @@ private:
                 std::string aPart = lower.substr(0, nPos);
                 if (aPart.empty() || aPart == "+") ss.nthA = 1;
                 else if (aPart == "-") ss.nthA = -1;
-                else ss.nthA = std::stoi(aPart);
+                else ss.nthA = safeStoi(aPart);
 
                 std::string bPart = trim(lower.substr(nPos + 1));
                 if (bPart.empty()) ss.nthB = 0;
@@ -323,11 +332,11 @@ private:
                     // Remove spaces around +/-
                     std::string cleaned;
                     for (char ch : bPart) if (!isspace((unsigned char)ch)) cleaned += ch;
-                    if (!cleaned.empty()) ss.nthB = std::stoi(cleaned);
+                    if (!cleaned.empty()) ss.nthB = safeStoi(cleaned);
                 }
             } else {
                 ss.nthA = 0;
-                ss.nthB = std::stoi(lower.empty() ? "0" : lower);
+                ss.nthB = safeStoi(lower.empty() ? "0" : lower);
             }
         }
     }

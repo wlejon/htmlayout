@@ -65,8 +65,10 @@ struct SimpleSelector {
     // :nth-child(an+b) coefficients
     int nthA = 0;
     int nthB = 0;
-    // :not() argument (parsed sub-selector)
+    // :not() argument (parsed sub-selectors)
     std::vector<SimpleSelector> notArg;
+    // :host() argument (parsed sub-selectors)
+    std::vector<SimpleSelector> hostArg;
 };
 
 struct CompoundSelector {
