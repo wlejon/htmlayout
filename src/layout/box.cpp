@@ -11,6 +11,13 @@ void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
     root->box.contentRect.y = root->box.margin.top + root->box.padding.top + root->box.border.top;
 }
 
+void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
+    if (!root) return;
+    layoutNode(root, viewport.width, metrics);
+    root->box.contentRect.x = root->box.margin.left + root->box.padding.left + root->box.border.left;
+    root->box.contentRect.y = root->box.margin.top + root->box.padding.top + root->box.border.top;
+}
+
 namespace {
 
 const std::string& styleVal(const css::ComputedStyle& style, const std::string& prop) {
@@ -28,6 +35,41 @@ bool pointInBox(const LayoutBox& box, float x, float y) {
     return x >= bx && x < bx + bw && y >= by && y < by + bh;
 }
 
+// Get z-index as integer (auto treated as 0 for ordering purposes)
+int getZIndex(const css::ComputedStyle& style) {
+    const std::string& z = styleVal(style, "z-index");
+    if (z.empty() || z == "auto") return 0;
+    try { return std::stoi(z); } catch (...) { return 0; }
+}
+
+// Check if an element creates a stacking context
+bool createsStackingContext(const css::ComputedStyle& style) {
+    const std::string& pos = styleVal(style, "position");
+    const std::string& z = styleVal(style, "z-index");
+    // Positioned element with z-index other than auto
+    if ((pos == "absolute" || pos == "relative" || pos == "fixed" || pos == "sticky") &&
+        !z.empty() && z != "auto") {
+        return true;
+    }
+    // opacity < 1 creates a stacking context
+    const std::string& op = styleVal(style, "opacity");
+    if (!op.empty() && op != "1") {
+        try {
+            float opVal = std::stof(op);
+            if (opVal < 1.0f) return true;
+        } catch (...) {}
+    }
+    // transform other than none
+    const std::string& tr = styleVal(style, "transform");
+    if (!tr.empty() && tr != "none") return true;
+    // filter other than none
+    const std::string& ft = styleVal(style, "filter");
+    if (!ft.empty() && ft != "none") return true;
+    // isolation: isolate
+    if (styleVal(style, "isolation") == "isolate") return true;
+    return false;
+}
+
 LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
     if (!node) return nullptr;
 
@@ -36,6 +78,8 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
     // Skip display:none and pointer-events:none
     if (styleVal(style, "display") == "none") return nullptr;
     if (styleVal(style, "pointer-events") == "none") return nullptr;
+    // visibility:hidden still occupies space but is not hit-testable
+    if (styleVal(style, "visibility") == "hidden") return nullptr;
 
     // Check if point is within this node's border box
     if (!pointInBox(node->box, x, y)) return nullptr;
@@ -44,13 +88,29 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
     const std::string& overflow = styleVal(style, "overflow");
     if (overflow == "hidden" || overflow == "scroll" || overflow == "auto") {
         // Point is already confirmed inside; children outside are clipped.
-        // Children that extend outside are not hit-testable.
     }
 
-    // Check children in reverse order (later siblings are painted on top)
+    // Sort children by z-index for proper stacking context hit testing
     auto children = node->children();
-    for (auto it = children.rbegin(); it != children.rend(); ++it) {
-        LayoutNode* hit = hitTestRecursive(*it, x, y);
+
+    // Build z-index sorted list (higher z-index tested first = on top)
+    std::vector<std::pair<int, LayoutNode*>> zChildren;
+    zChildren.reserve(children.size());
+    for (auto* child : children) {
+        int z = 0;
+        if (child) {
+            z = getZIndex(child->computedStyle());
+        }
+        zChildren.push_back({z, child});
+    }
+
+    // Sort by z-index descending, preserving source order for equal z-index
+    // (later source order = painted on top = tested first)
+    std::stable_sort(zChildren.begin(), zChildren.end(),
+        [](const auto& a, const auto& b) { return a.first > b.first; });
+
+    for (auto& [z, child] : zChildren) {
+        LayoutNode* hit = hitTestRecursive(child, x, y);
         if (hit) return hit;
     }
 

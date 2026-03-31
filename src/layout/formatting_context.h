@@ -8,8 +8,12 @@ namespace htmlayout::layout {
 void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics);
 
 // Resolve CSS length values (px, em, rem, %, vw, vh, vmin, vmax, ch, pt, auto) to pixels.
-// viewportWidth/viewportHeight default to referenceSize when not separately available.
+// Supports calc() expressions.
 float resolveLength(const std::string& value, float referenceSize, float fontSize);
+
+// Viewport-aware length resolution: uses separate viewport width/height for vw/vh units.
+float resolveLength(const std::string& value, float referenceSize, float fontSize,
+                    float viewportWidth, float viewportHeight);
 
 // Parse edges (margin, padding, border-width) from computed style
 Edges resolveEdges(const css::ComputedStyle& style,

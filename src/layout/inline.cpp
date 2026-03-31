@@ -96,6 +96,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     const std::string& fontWeight = styleVal(style, "font-weight");
     const std::string& whiteSpace = styleVal(style, "white-space");
     const std::string& textAlign = styleVal(style, "text-align");
+    const std::string& lineHeightVal = styleVal(style, "line-height");
     const std::string& display = styleVal(style, "display");
 
     // Resolve margin, padding, border for the node itself
@@ -179,9 +180,12 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     for (auto* child : node->children()) {
         if (child->isTextNode()) {
             // Break text into runs
+            const std::string& owrap = styleVal(style, "overflow-wrap");
+            const std::string& wbreak = styleVal(style, "word-break");
             auto runs = breakTextIntoRuns(
                 child->textContent(), contentAvail,
-                fontFamily, fontSize, fontWeight, whiteSpace, metrics);
+                fontFamily, fontSize, fontWeight, whiteSpace, metrics,
+                owrap, wbreak);
 
             for (auto& run : runs) {
                 LineItem item;

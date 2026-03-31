@@ -72,9 +72,18 @@ struct TextMetrics {
                               const std::string& fontWeight) = 0;
 };
 
+// Viewport dimensions for layout
+struct Viewport {
+    float width = 0;
+    float height = 0;
+};
+
 // Perform layout on a tree, computing LayoutBox for every node.
 // viewportWidth is the available width for the root element.
 void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics);
+
+// Layout with explicit viewport dimensions for proper vw/vh resolution.
+void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics);
 
 // Apply overflow clipping to a laid-out tree.
 // Children of nodes with overflow:hidden/scroll/auto are clipped to the parent's

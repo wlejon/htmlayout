@@ -14,12 +14,16 @@ struct TextRun {
 
 // Break text into runs that fit within availableWidth.
 // Uses TextMetrics for measurement.
+// overflowWrap: "normal" (default) or "break-word" / "anywhere"
+// wordBreak: "normal" (default) or "break-all" / "keep-all"
 std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                                         float availableWidth,
                                         const std::string& fontFamily,
                                         float fontSize,
                                         const std::string& fontWeight,
                                         const std::string& whiteSpace,
-                                        TextMetrics& metrics);
+                                        TextMetrics& metrics,
+                                        const std::string& overflowWrap = "normal",
+                                        const std::string& wordBreak = "normal");
 
 } // namespace htmlayout::layout

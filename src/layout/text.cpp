@@ -10,11 +10,69 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                                         float fontSize,
                                         const std::string& fontWeight,
                                         const std::string& whiteSpace,
-                                        TextMetrics& metrics) {
+                                        TextMetrics& metrics,
+                                        const std::string& overflowWrap,
+                                        const std::string& wordBreak) {
     std::vector<TextRun> runs;
     if (text.empty() || availableWidth <= 0) return runs;
 
     float lineH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+
+    // white-space: pre-line — collapse spaces but preserve newlines, wrap at width
+    if (whiteSpace == "pre-line") {
+        // Split by newlines first
+        std::istringstream stream(text);
+        std::string rawLine;
+        while (std::getline(stream, rawLine)) {
+            // Collapse whitespace within each line
+            std::vector<std::string> words;
+            {
+                std::string word;
+                for (char c : rawLine) {
+                    if (c == ' ' || c == '\t') {
+                        if (!word.empty()) {
+                            words.push_back(word);
+                            word.clear();
+                        }
+                    } else {
+                        word += c;
+                    }
+                }
+                if (!word.empty()) words.push_back(word);
+            }
+
+            if (words.empty()) {
+                runs.push_back({"", 0, lineH});
+                continue;
+            }
+
+            // Greedy line packing within this source line
+            std::string currentLine;
+            float currentWidth = 0;
+            float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
+            for (size_t i = 0; i < words.size(); i++) {
+                float wordWidth = metrics.measureWidth(words[i], fontFamily, fontSize, fontWeight);
+                if (currentLine.empty()) {
+                    currentLine = words[i];
+                    currentWidth = wordWidth;
+                } else {
+                    float testWidth = currentWidth + spaceWidth + wordWidth;
+                    if (testWidth <= availableWidth) {
+                        currentLine += " " + words[i];
+                        currentWidth = testWidth;
+                    } else {
+                        runs.push_back({currentLine, currentWidth, lineH});
+                        currentLine = words[i];
+                        currentWidth = wordWidth;
+                    }
+                }
+            }
+            if (!currentLine.empty()) {
+                runs.push_back({currentLine, currentWidth, lineH});
+            }
+        }
+        return runs;
+    }
 
     // white-space: pre — preserve all whitespace, no wrapping
     if (whiteSpace == "pre" || whiteSpace == "pre-wrap") {
@@ -105,24 +163,67 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
     float currentWidth = 0;
     float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
 
+    bool canBreakWord = (overflowWrap == "break-word" || overflowWrap == "anywhere" ||
+                         wordBreak == "break-all");
+
     for (size_t i = 0; i < words.size(); i++) {
         float wordWidth = metrics.measureWidth(words[i], fontFamily, fontSize, fontWeight);
 
         if (currentLine.empty()) {
-            // First word on line — always accept even if it overflows
-            currentLine = words[i];
-            currentWidth = wordWidth;
+            // First word on line
+            if (canBreakWord && wordWidth > availableWidth) {
+                // Break the word character by character
+                std::string partial;
+                float partialW = 0;
+                for (size_t ci = 0; ci < words[i].size(); ci++) {
+                    std::string test = partial + words[i][ci];
+                    float testW = metrics.measureWidth(test, fontFamily, fontSize, fontWeight);
+                    if (testW > availableWidth && !partial.empty()) {
+                        runs.push_back({partial, partialW, lineH});
+                        partial = std::string(1, words[i][ci]);
+                        partialW = metrics.measureWidth(partial, fontFamily, fontSize, fontWeight);
+                    } else {
+                        partial = test;
+                        partialW = testW;
+                    }
+                }
+                currentLine = partial;
+                currentWidth = partialW;
+            } else {
+                currentLine = words[i];
+                currentWidth = wordWidth;
+            }
         } else {
             float testWidth = currentWidth + spaceWidth + wordWidth;
             if (testWidth <= availableWidth) {
-                // Fits on current line
                 currentLine += " " + words[i];
                 currentWidth = testWidth;
             } else {
                 // Wrap: emit current line, start new one
                 runs.push_back({currentLine, currentWidth, lineH});
-                currentLine = words[i];
-                currentWidth = wordWidth;
+
+                if (canBreakWord && wordWidth > availableWidth) {
+                    // Break the word character by character
+                    std::string partial;
+                    float partialW = 0;
+                    for (size_t ci = 0; ci < words[i].size(); ci++) {
+                        std::string test = partial + words[i][ci];
+                        float testW = metrics.measureWidth(test, fontFamily, fontSize, fontWeight);
+                        if (testW > availableWidth && !partial.empty()) {
+                            runs.push_back({partial, partialW, lineH});
+                            partial = std::string(1, words[i][ci]);
+                            partialW = metrics.measureWidth(partial, fontFamily, fontSize, fontWeight);
+                        } else {
+                            partial = test;
+                            partialW = testW;
+                        }
+                    }
+                    currentLine = partial;
+                    currentWidth = partialW;
+                } else {
+                    currentLine = words[i];
+                    currentWidth = wordWidth;
+                }
             }
         }
     }

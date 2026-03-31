@@ -94,6 +94,85 @@ const std::vector<PropertyDef>& knownProperties() {
 
         // Pointer events (for hit testing)
         {"pointer-events",    "auto",    true},
+
+        // Visual effects (not layout-affecting, but tracked for cascade)
+        {"box-shadow",        "none",       false},
+        {"border-radius",     "0",          false},
+        {"border-top-left-radius",     "0", false},
+        {"border-top-right-radius",    "0", false},
+        {"border-bottom-right-radius", "0", false},
+        {"border-bottom-left-radius",  "0", false},
+        {"outline",           "none",       false},
+        {"outline-width",     "medium",     false},
+        {"outline-style",     "none",       false},
+        {"outline-color",     "currentcolor", false},
+        {"outline-offset",    "0",          false},
+
+        // Transforms
+        {"transform",         "none",       false},
+        {"transform-origin",  "50% 50%",    false},
+
+        // Transitions & Animations (parsed but not executed)
+        {"transition",            "none",   false},
+        {"transition-property",   "all",    false},
+        {"transition-duration",   "0s",     false},
+        {"transition-timing-function", "ease", false},
+        {"transition-delay",      "0s",     false},
+        {"animation",             "none",   false},
+        {"animation-name",        "none",   false},
+        {"animation-duration",    "0s",     false},
+        {"animation-timing-function", "ease", false},
+        {"animation-delay",       "0s",     false},
+        {"animation-iteration-count", "1",  false},
+        {"animation-direction",   "normal", false},
+        {"animation-fill-mode",   "none",   false},
+        {"animation-play-state",  "running", false},
+
+        // Text overflow & wrapping
+        {"text-overflow",     "clip",       false},
+        {"overflow-wrap",     "normal",     true},
+        {"word-break",        "normal",     true},
+
+        // Multi-column layout
+        {"column-count",      "auto",       false},
+        {"column-width",      "auto",       false},
+        {"column-gap",        "normal",     false},
+        {"column-rule-width", "medium",     false},
+        {"column-rule-style", "none",       false},
+        {"column-rule-color", "currentcolor", false},
+        {"column-fill",       "balance",    false},
+        {"column-span",       "none",       false},
+
+        // Color & background extras
+        {"background-position", "0% 0%",    false},
+        {"background-repeat",   "repeat",   false},
+        {"background-size",     "auto",     false},
+        {"background-clip",     "border-box", false},
+        {"background-origin",   "padding-box", false},
+
+        // Direction and writing mode
+        {"direction",         "ltr",        true},
+        {"writing-mode",      "horizontal-tb", true},
+        {"unicode-bidi",      "normal",     false},
+
+        // Table layout
+        {"table-layout",      "auto",       false},
+        {"border-collapse",   "separate",   true},
+        {"border-spacing",    "0",          true},
+        {"caption-side",      "top",        true},
+        {"empty-cells",       "show",       true},
+
+        // Misc
+        {"clip-path",         "none",       false},
+        {"filter",            "none",       false},
+        {"mix-blend-mode",    "normal",     false},
+        {"isolation",         "auto",       false},
+        {"object-fit",        "fill",       false},
+        {"object-position",   "50% 50%",    false},
+        {"resize",            "none",       false},
+        {"user-select",       "auto",       false},
+        {"will-change",       "auto",       false},
+        {"contain",           "none",       false},
     };
     return props;
 }
@@ -474,6 +553,85 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
 
     if (property == "overflow") {
         return {{property, parts[0]}};
+    }
+
+    // border-radius shorthand: 1-4 values -> individual corners
+    if (property == "border-radius") {
+        std::vector<ExpandedDecl> out;
+        // Split on '/' for horizontal/vertical radii
+        auto slashPos = value.find('/');
+        if (slashPos == std::string::npos) {
+            auto bv = resolveBoxValues(parts);
+            out.push_back({"border-top-left-radius", bv.top});
+            out.push_back({"border-top-right-radius", bv.right});
+            out.push_back({"border-bottom-right-radius", bv.bottom});
+            out.push_back({"border-bottom-left-radius", bv.left});
+        } else {
+            // For now, just store the full value on each corner
+            out.push_back({"border-top-left-radius", value});
+            out.push_back({"border-top-right-radius", value});
+            out.push_back({"border-bottom-right-radius", value});
+            out.push_back({"border-bottom-left-radius", value});
+        }
+        return out;
+    }
+
+    // outline shorthand
+    if (property == "outline") {
+        std::vector<ExpandedDecl> out;
+        std::string width = "medium", style = "none", color = "currentcolor";
+        for (auto& p : parts) {
+            if (isBorderStyle(p)) style = p;
+            else if (isBorderWidth(p)) width = p;
+            else color = p;
+        }
+        out.push_back({"outline-width", width});
+        out.push_back({"outline-style", style});
+        out.push_back({"outline-color", color});
+        return out;
+    }
+
+    // transition shorthand — store full value, also set sub-properties from first transition
+    if (property == "transition") {
+        // Keep the full value and set component properties for the first transition
+        return {{property, value}};
+    }
+
+    // animation shorthand — store full value
+    if (property == "animation") {
+        return {{property, value}};
+    }
+
+    // columns shorthand: column-width column-count
+    if (property == "columns") {
+        std::vector<ExpandedDecl> out;
+        std::string width = "auto", count = "auto";
+        for (auto& p : parts) {
+            // Numeric-only values are column-count; values with units are column-width
+            bool isNumber = true;
+            for (char c : p) {
+                if (!std::isdigit(static_cast<unsigned char>(c)) && c != '.') {
+                    isNumber = false;
+                    break;
+                }
+            }
+            if (p == "auto") continue;
+            if (isNumber) count = p;
+            else width = p;
+        }
+        out.push_back({"column-width", width});
+        out.push_back({"column-count", count});
+        return out;
+    }
+
+    // column-rule shorthand
+    if (property == "column-rule") {
+        std::vector<ExpandedDecl> out;
+        auto bc = parseBorderTokens(parts);
+        out.push_back({"column-rule-width", bc.width});
+        out.push_back({"column-rule-style", bc.style});
+        out.push_back({"column-rule-color", bc.color});
+        return out;
     }
 
     return {{property, value}};

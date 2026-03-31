@@ -3,8 +3,9 @@ add_library(htmlayout_layout STATIC
     block.cpp
     inline.cpp
     flex.cpp
+    table.cpp
     text.cpp
     formatting_context.cpp
 )
-target_include_directories(htmlayout_layout PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(htmlayout_layout PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(htmlayout_layout PUBLIC htmlayout_css)

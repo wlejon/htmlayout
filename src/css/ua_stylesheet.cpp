@@ -128,9 +128,9 @@ blockquote {
     margin-right: 40px;
 }
 
-/* Tables — basic display (no full table layout) */
+/* Tables */
 table {
-    display: block;
+    display: table;
     border-top-style: solid;
     border-right-style: solid;
     border-bottom-style: solid;
@@ -143,6 +143,50 @@ table {
     border-right-color: gray;
     border-bottom-color: gray;
     border-left-color: gray;
+    border-collapse: separate;
+    border-spacing: 2px;
+}
+
+thead {
+    display: table-header-group;
+}
+
+tbody {
+    display: table-row-group;
+}
+
+tfoot {
+    display: table-footer-group;
+}
+
+tr {
+    display: table-row;
+}
+
+td, th {
+    display: table-cell;
+    padding-top: 1px;
+    padding-right: 1px;
+    padding-bottom: 1px;
+    padding-left: 1px;
+}
+
+th {
+    font-weight: bold;
+    text-align: center;
+}
+
+caption {
+    display: table-caption;
+    text-align: center;
+}
+
+colgroup {
+    display: table-column-group;
+}
+
+col {
+    display: table-column;
 }
 
 /* Links */
