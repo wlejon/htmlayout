@@ -1,6 +1,8 @@
 #include "layout/block.h"
 #include "layout/formatting_context.h"
+#include "layout/text.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 namespace htmlayout::layout {
@@ -89,17 +91,116 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     node->box.contentRect.width = contentWidth;
 
+    // Handle margin: auto for horizontal centering
+    const std::string& marginLeftVal = styleVal(style, "margin-left");
+    const std::string& marginRightVal = styleVal(style, "margin-right");
+    if (marginLeftVal == "auto" || marginRightVal == "auto") {
+        float totalUsed = contentWidth + paddingH + borderH;
+        float remaining = availableWidth - totalUsed;
+        if (remaining < 0) remaining = 0;
+        if (marginLeftVal == "auto" && marginRightVal == "auto") {
+            node->box.margin.left = remaining / 2.0f;
+            node->box.margin.right = remaining / 2.0f;
+        } else if (marginLeftVal == "auto") {
+            node->box.margin.left = remaining - node->box.margin.right;
+            if (node->box.margin.left < 0) node->box.margin.left = 0;
+        } else {
+            node->box.margin.right = remaining - node->box.margin.left;
+            if (node->box.margin.right < 0) node->box.margin.right = 0;
+        }
+    }
+
     // Available width for children
     float childAvailable = contentWidth;
 
-    // Layout children vertically (block formatting context)
-    // Absolutely/fixed positioned children are laid out but don't affect flow.
+    // Shared state for both BFC and IFC paths
+    std::vector<LayoutNode*> absChildren;
     float cursorY = 0.0f;
+
+    // Determine if this block contains only inline-level content
+    // (text nodes, inline, inline-block — no block children)
+    bool allInlineChildren = true;
+    bool hasVisibleContent = false;
+    for (auto* child : node->children()) {
+        if (child->isTextNode()) {
+            const std::string& text = child->textContent();
+            for (char c : text) {
+                if (!std::isspace(static_cast<unsigned char>(c))) {
+                    hasVisibleContent = true;
+                    break;
+                }
+            }
+        } else {
+            auto& cs = child->computedStyle();
+            const std::string& d = styleVal(cs, "display");
+            if (d == "none") continue;
+            const std::string& cp = styleVal(cs, "position");
+            if (cp == "absolute" || cp == "fixed") continue;
+            hasVisibleContent = true;
+            if (d != "inline" && d != "inline-block") {
+                allInlineChildren = false;
+            }
+        }
+    }
+
+    if (hasVisibleContent && allInlineChildren) {
+        // Inline formatting context: lay out text and inline elements in line boxes
+        const std::string& fontFamily = styleVal(style, "font-family");
+        const std::string& fontWeight = styleVal(style, "font-weight");
+        const std::string& whiteSpace = styleVal(style, "white-space");
+        float lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize);
+
+        struct IFCItem {
+            float width = 0, height = 0;
+            LayoutNode* node = nullptr;
+            bool isElement = false;
+        };
+        std::vector<IFCItem> items;
+
+        for (auto* child : node->children()) {
+            if (child->isTextNode()) {
+                auto runs = breakTextIntoRuns(child->textContent(), childAvailable,
+                    fontFamily, fontSize, fontWeight, whiteSpace, metrics);
+                for (auto& run : runs) {
+                    if (run.text.empty() && run.width == 0) continue;
+                    items.push_back({run.width, std::max(run.height, lineHeight), child, false});
+                }
+            } else {
+                auto& cs = child->computedStyle();
+                const std::string& d = styleVal(cs, "display");
+                if (d == "none") { child->box = LayoutBox{}; continue; }
+                const std::string& cp = styleVal(cs, "position");
+                if (cp == "absolute" || cp == "fixed") { absChildren.push_back(child); continue; }
+                layoutNode(child, childAvailable, metrics);
+                items.push_back({
+                    child->box.fullWidth() + child->box.margin.left + child->box.margin.right,
+                    child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom,
+                    child, true});
+            }
+        }
+
+        // Position items in line boxes
+        float cursorX = 0, lineMaxH = 0;
+        for (auto& item : items) {
+            if (cursorX > 0 && cursorX + item.width > childAvailable) {
+                cursorY += lineMaxH;
+                cursorX = 0;
+                lineMaxH = 0;
+            }
+            if (item.isElement && item.node) {
+                item.node->box.contentRect.x = cursorX + item.node->box.margin.left +
+                    item.node->box.padding.left + item.node->box.border.left;
+                item.node->box.contentRect.y = cursorY + item.node->box.margin.top +
+                    item.node->box.padding.top + item.node->box.border.top;
+            }
+            cursorX += item.width;
+            lineMaxH = std::max(lineMaxH, item.height);
+        }
+        if (cursorX > 0) cursorY += lineMaxH;
+    } else {
+    // Block formatting context: layout children vertically
     float prevMarginBottom = 0.0f;
     bool firstChild = true;
-
-    // Collect absolutely positioned children to process after in-flow layout
-    std::vector<LayoutNode*> absChildren;
 
     // Float tracking: left and right float edges
     struct FloatRect {
@@ -279,6 +380,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto& f : floats) {
         cursorY = std::max(cursorY, f.y + f.height);
     }
+    } // end BFC else block
 
     // Resolve height
     float specifiedHeight = resolveDimension(styleVal(style, "height"), 0.0f, fontSize);

@@ -3,6 +3,7 @@
 #include "layout/block.h"
 #include "layout/text.h"
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 namespace htmlayout::layout {
@@ -140,16 +141,85 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             contentAvail = node->box.contentRect.width;
         }
 
-        // Layout children as block inside inline-block
+        // Layout children inside inline-block
         float cursorY = 0;
+        float maxContentW = 0;
+
+        // Check if children are all inline-level
+        bool ibAllInline = true;
+        bool ibHasContent = false;
         for (auto* child : node->children()) {
-            if (child->isTextNode()) continue;
-            layoutNode(child, contentAvail, metrics);
-            child->box.contentRect.x = child->box.margin.left + child->box.padding.left + child->box.border.left;
-            child->box.contentRect.y = cursorY + child->box.padding.top + child->box.border.top;
-            cursorY += child->box.margin.top + child->box.border.top + child->box.padding.top +
-                       child->box.contentRect.height +
-                       child->box.padding.bottom + child->box.border.bottom + child->box.margin.bottom;
+            if (child->isTextNode()) {
+                const std::string& t = child->textContent();
+                for (char c : t) {
+                    if (!std::isspace(static_cast<unsigned char>(c))) { ibHasContent = true; break; }
+                }
+            } else {
+                auto& cs = child->computedStyle();
+                const std::string& d = styleVal(cs, "display");
+                if (d == "none") continue;
+                ibHasContent = true;
+                if (d != "inline" && d != "inline-block") ibAllInline = false;
+            }
+        }
+
+        if (ibHasContent && ibAllInline) {
+            // Inline content in inline-block: measure text and inline children
+            float ibLineHeight = resolveLineHeight(lineHeightVal, fontSize);
+            float cursorX = 0, lineMaxH = 0;
+            for (auto* child : node->children()) {
+                if (child->isTextNode()) {
+                    auto runs = breakTextIntoRuns(child->textContent(), contentAvail,
+                        fontFamily, fontSize, fontWeight, whiteSpace, metrics);
+                    for (auto& run : runs) {
+                        if (run.text.empty() && run.width == 0) continue;
+                        float h = std::max(run.height, ibLineHeight);
+                        if (cursorX > 0 && cursorX + run.width > contentAvail) {
+                            maxContentW = std::max(maxContentW, cursorX);
+                            cursorY += lineMaxH;
+                            cursorX = 0;
+                            lineMaxH = 0;
+                        }
+                        cursorX += run.width;
+                        lineMaxH = std::max(lineMaxH, h);
+                    }
+                } else {
+                    auto& cs = child->computedStyle();
+                    if (styleVal(cs, "display") == "none") { child->box = LayoutBox{}; continue; }
+                    layoutNode(child, contentAvail, metrics);
+                    float cw = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
+                    float ch = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
+                    if (cursorX > 0 && cursorX + cw > contentAvail) {
+                        maxContentW = std::max(maxContentW, cursorX);
+                        cursorY += lineMaxH;
+                        cursorX = 0;
+                        lineMaxH = 0;
+                    }
+                    child->box.contentRect.x = cursorX + child->box.margin.left +
+                        child->box.padding.left + child->box.border.left;
+                    child->box.contentRect.y = cursorY + child->box.margin.top +
+                        child->box.padding.top + child->box.border.top;
+                    cursorX += cw;
+                    lineMaxH = std::max(lineMaxH, ch);
+                }
+            }
+            if (cursorX > 0) {
+                maxContentW = std::max(maxContentW, cursorX);
+                cursorY += lineMaxH;
+            }
+        } else {
+            // Block children inside inline-block
+            for (auto* child : node->children()) {
+                if (child->isTextNode()) continue;
+                layoutNode(child, contentAvail, metrics);
+                child->box.contentRect.x = child->box.margin.left + child->box.padding.left + child->box.border.left;
+                child->box.contentRect.y = cursorY + child->box.padding.top + child->box.border.top;
+                float childFullW = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
+                maxContentW = std::max(maxContentW, childFullW);
+                cursorY += child->box.margin.top + child->box.border.top + child->box.padding.top +
+                           child->box.contentRect.height +
+                           child->box.padding.bottom + child->box.border.bottom + child->box.margin.bottom;
+            }
         }
 
         if (heightVal != "auto" && !heightVal.empty()) {
@@ -168,8 +238,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
 
         if (widthVal == "auto" || widthVal.empty()) {
             // Shrink-wrap to content for inline-block with auto width
-            // For now, use contentAvail
-            node->box.contentRect.width = contentAvail;
+            node->box.contentRect.width = (maxContentW > 0) ? maxContentW : contentAvail;
         }
 
         return;

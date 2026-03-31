@@ -133,7 +133,9 @@ std::pair<float, float> parseTranslate(const std::string& transform) {
     return {tx, ty};
 }
 
-LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
+// Hit test with offset accumulation: positions are relative to parent content area,
+// so we track the accumulated offset from the root.
+LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y, float offsetX, float offsetY) {
     if (!node) return nullptr;
 
     auto& style = node->computedStyle();
@@ -144,6 +146,10 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
     // visibility:hidden still occupies space but is not hit-testable
     if (styleVal(style, "visibility") == "hidden") return nullptr;
 
+    // Compute this node's absolute content position
+    float absX = node->box.contentRect.x + offsetX;
+    float absY = node->box.contentRect.y + offsetY;
+
     // Apply transform: adjust the test point by inverse translation
     float testX = x, testY = y;
     const std::string& transform = styleVal(style, "transform");
@@ -153,19 +159,17 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
         testY = y - ty;
     }
 
-    // Check if point is within this node's border box (using transform-adjusted coords)
-    if (!pointInBox(node->box, testX, testY)) return nullptr;
-
-    // Overflow clipping: if overflow is hidden/scroll/auto, clip to border box
-    const std::string& overflow = styleVal(style, "overflow");
-    if (overflow == "hidden" || overflow == "scroll" || overflow == "auto") {
-        // Point is already confirmed inside; children outside are clipped.
-    }
+    // Check if point is within this node's absolute border box
+    float bx = absX - node->box.padding.left - node->box.border.left;
+    float by = absY - node->box.padding.top - node->box.border.top;
+    float bw = node->box.fullWidth();
+    float bh = node->box.fullHeight();
+    if (testX < bx || testX >= bx + bw || testY < by || testY >= by + bh)
+        return nullptr;
 
     // Sort children by z-index for proper stacking context hit testing
     auto children = node->children();
 
-    // Build z-index sorted list (higher z-index tested first = on top)
     std::vector<std::pair<int, LayoutNode*>> zChildren;
     zChildren.reserve(children.size());
     for (auto* child : children) {
@@ -177,12 +181,12 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y) {
     }
 
     // Sort by z-index descending, preserving source order for equal z-index
-    // (later source order = painted on top = tested first)
     std::stable_sort(zChildren.begin(), zChildren.end(),
         [](const auto& a, const auto& b) { return a.first > b.first; });
 
+    // Children's positions are relative to this node's content area
     for (auto& [z, child] : zChildren) {
-        LayoutNode* hit = hitTestRecursive(child, testX, testY);
+        LayoutNode* hit = hitTestRecursive(child, testX, testY, absX, absY);
         if (hit) return hit;
     }
 
@@ -261,7 +265,7 @@ void applyOverflowClipping(LayoutNode* root) {
 }
 
 LayoutNode* hitTest(LayoutNode* root, float x, float y) {
-    return hitTestRecursive(root, x, y);
+    return hitTestRecursive(root, x, y, 0.0f, 0.0f);
 }
 
 void markDirty(LayoutNode* node) {
