@@ -71,9 +71,13 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         });
 
     // 4. Apply declarations in sorted order (last wins per property)
+    //    Expand shorthands into longhands before applying.
     ComputedStyle style;
     for (auto& m : matched) {
-        style[m.property] = m.value;
+        auto expanded = expandShorthand(m.property, m.value);
+        for (auto& e : expanded) {
+            style[e.property] = e.value;
+        }
     }
 
     // 5. For inherited properties not explicitly set, inherit from parent
