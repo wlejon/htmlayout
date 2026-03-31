@@ -275,6 +275,57 @@ static void testFirstOfType() {
     check(parseSelector("span:last-of-type").matches(span2), "span:last-of-type matches last span");
 }
 
+static void testIsWhereHas() {
+    printf("--- Selector: :is()/:where()/:has() ---\n");
+
+    // :is() - matches if any argument matches
+    MockElement div; div.tag = "div"; div.classes = "box";
+    MockElement span; span.tag = "span";
+    MockElement p; p.tag = "p";
+
+    auto isSel = parseSelector(":is(div, span)");
+    check(isSel.matches(div), ":is(div, span) matches div");
+    check(isSel.matches(span), ":is(div, span) matches span");
+    check(!isSel.matches(p), ":is(div, span) doesn't match p");
+
+    // :is() with class
+    auto isClass = parseSelector(":is(.box, .active)");
+    check(isClass.matches(div), ":is(.box, .active) matches .box");
+    check(!isClass.matches(span), ":is(.box, .active) doesn't match plain span");
+
+    // :where() - same matching as :is() but zero specificity
+    auto whereSel = parseSelector(":where(div, span)");
+    check(whereSel.matches(div), ":where(div, span) matches div");
+    check(!whereSel.matches(p), ":where(div, span) doesn't match p");
+
+    // :where() specificity is 0
+    check(calculateSpecificity(":where(.box, #id)") == 0, ":where() has zero specificity");
+    // :is() specificity = most specific argument
+    // :is(div, .box) -> max(0,0,1  vs  0,1,0) = 0,1,0
+    check(calculateSpecificity(":is(div, .box)") == (0 << 16 | 1 << 8 | 0),
+          ":is() specificity = most specific argument");
+
+    // :has() - matches if any descendant matches
+    MockElement parent; parent.tag = "div";
+    MockElement child; child.tag = "span"; child.classes = "highlight";
+    parent.addChild(&child);
+
+    auto hasSel = parseSelector(":has(.highlight)");
+    check(hasSel.matches(parent), ":has(.highlight) matches parent with .highlight child");
+    check(!hasSel.matches(span), ":has(.highlight) doesn't match element without children");
+
+    // :has() with nested descendants
+    MockElement grandparent; grandparent.tag = "section";
+    MockElement mid; mid.tag = "div";
+    MockElement deep; deep.tag = "em";
+    grandparent.addChild(&mid);
+    mid.addChild(&deep);
+
+    auto hasDeep = parseSelector(":has(em)");
+    check(hasDeep.matches(grandparent), ":has(em) matches with deep descendant");
+    check(hasDeep.matches(mid), ":has(em) matches direct parent too");
+}
+
 void testSelector() {
     testSimpleTag();
     testSimpleClass();
@@ -296,4 +347,5 @@ void testSelector() {
     testComplexChain();
     testOnlyChild();
     testFirstOfType();
+    testIsWhereHas();
 }

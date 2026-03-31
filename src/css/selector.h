@@ -55,6 +55,8 @@ enum class AttrMatchOp {
     Substring,      // [attr*=val]
 };
 
+struct CompoundSelector; // forward declaration for selectorListArg
+
 struct SimpleSelector {
     SimpleSelectorType type;
     std::string value;          // tag name, class, id, pseudo name
@@ -69,6 +71,8 @@ struct SimpleSelector {
     std::vector<SimpleSelector> notArg;
     // :host() argument (parsed sub-selectors)
     std::vector<SimpleSelector> hostArg;
+    // :is()/:where()/:has() arguments (selector list, stored as compound selectors)
+    std::vector<CompoundSelector> selectorListArg;
 };
 
 struct CompoundSelector {

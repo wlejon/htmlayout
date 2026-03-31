@@ -277,6 +277,41 @@ private:
                        ss.value == "nth-of-type" || ss.value == "nth-last-of-type") {
                 parseNth(ss);
                 if (peek() == ')') advance();
+            } else if (ss.value == "is" || ss.value == "where" || ss.value == "has") {
+                // :is()/:where()/:has() — parse comma-separated selector list
+                std::string arg;
+                int depth = 1;
+                size_t argStart = m_pos;
+                while (m_pos < m_text.size() && depth > 0) {
+                    if (peek() == '(') depth++;
+                    else if (peek() == ')') { depth--; if (depth == 0) break; }
+                    advance();
+                }
+                arg = m_text.substr(argStart, m_pos - argStart);
+                if (peek() == ')') advance();
+
+                // Split by comma and parse each as a compound selector
+                std::string current;
+                int pd = 0;
+                for (size_t j = 0; j < arg.size(); j++) {
+                    if (arg[j] == '(') pd++;
+                    else if (arg[j] == ')') pd--;
+                    else if (arg[j] == ',' && pd == 0) {
+                        std::string part = trim(current);
+                        if (!part.empty()) {
+                            SelectorParser subParser(part);
+                            ss.selectorListArg.push_back(subParser.parseCompound());
+                        }
+                        current.clear();
+                        continue;
+                    }
+                    current += arg[j];
+                }
+                std::string part = trim(current);
+                if (!part.empty()) {
+                    SelectorParser subParser(part);
+                    ss.selectorListArg.push_back(subParser.parseCompound());
+                }
             } else if (ss.value == "host") {
                 // :host(selector)
                 std::string arg;
@@ -367,6 +402,30 @@ uint32_t computeSpecificity(const SelectorChain& chain) {
                                 default: break;
                             }
                         }
+                    } else if (s.value == "is" || s.value == "has") {
+                        // :is()/:has() specificity = most specific argument
+                        int maxIds = 0, maxClasses = 0, maxTypes = 0;
+                        for (auto& compound : s.selectorListArg) {
+                            int ci = 0, cc = 0, ct = 0;
+                            for (auto& inner : compound.simples) {
+                                switch (inner.type) {
+                                    case SimpleSelectorType::Id: ci++; break;
+                                    case SimpleSelectorType::Class:
+                                    case SimpleSelectorType::Attribute:
+                                    case SimpleSelectorType::PseudoClass: cc++; break;
+                                    case SimpleSelectorType::Tag: ct++; break;
+                                    default: break;
+                                }
+                            }
+                            uint32_t spec = (ci << 16) | (cc << 8) | ct;
+                            uint32_t maxSpec = (maxIds << 16) | (maxClasses << 8) | maxTypes;
+                            if (spec > maxSpec) { maxIds = ci; maxClasses = cc; maxTypes = ct; }
+                        }
+                        ids += maxIds;
+                        classes += maxClasses;
+                        types += maxTypes;
+                    } else if (s.value == "where") {
+                        // :where() contributes zero specificity
                     } else {
                         classes++;
                     }
@@ -403,6 +462,9 @@ bool matchNth(int a, int b, int index) {
 }
 
 } // anonymous namespace
+
+// Forward declaration for use by matchSimple (:is/:where/:has)
+bool matchCompound(const CompoundSelector& compound, const ElementRef& elem);
 
 bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
     switch (ss.type) {
@@ -467,6 +529,27 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
                     if (matchSimple(inner, elem)) return false;
                 }
                 return true;
+            }
+            if (name == "is" || name == "where") {
+                // :is()/:where() match if ANY compound in the list matches
+                for (auto& compound : ss.selectorListArg) {
+                    if (matchCompound(compound, elem)) return true;
+                }
+                return false;
+            }
+            if (name == "has") {
+                // :has() matches if any descendant/child matches any compound
+                // For simplicity, check all descendants
+                auto checkDescendants = [&](auto& self, const ElementRef& parent) -> bool {
+                    for (auto* child : parent.children()) {
+                        for (auto& compound : ss.selectorListArg) {
+                            if (matchCompound(compound, *child)) return true;
+                        }
+                        if (self(self, *child)) return true;
+                    }
+                    return false;
+                };
+                return checkDescendants(checkDescendants, elem);
             }
             if (name == "nth-child") {
                 int index = elem.childIndex() + 1; // 1-based
