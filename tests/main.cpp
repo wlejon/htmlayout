@@ -824,10 +824,235 @@ static void testSelectorFirstOfType() {
     check(selLast.matches(span2), "span:last-of-type matches last span");
 }
 
+// ========== Cascade Tests ==========
+
+static void testCascadeBasicResolve() {
+    printf("--- Cascade: basic resolve ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse("div { color: red; font-size: 20px; }"));
+
+    MockElement div; div.tag = "div";
+    auto style = cascade.resolve(div);
+
+    check(style["color"] == "red", "cascade: color resolved to red");
+    check(style["font-size"] == "20px", "cascade: font-size resolved to 20px");
+    // Non-set property gets initial value
+    check(style["display"] == "inline", "cascade: display gets initial value 'inline'");
+}
+
+static void testCascadeSpecificityOrder() {
+    printf("--- Cascade: specificity ordering ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        "div { color: red; }\n"
+        ".box { color: blue; }\n"
+        "#main { color: green; }\n"
+    ));
+
+    // Element matches all three rules; #id wins
+    MockElement e; e.tag = "div"; e.classes = "box"; e.elemId = "main";
+    auto style = cascade.resolve(e);
+    check(style["color"] == "green", "cascade: #id specificity wins over .class and tag");
+}
+
+static void testCascadeSourceOrder() {
+    printf("--- Cascade: source order ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        ".a { color: red; }\n"
+        ".a { color: blue; }\n"
+    ));
+
+    MockElement e; e.tag = "div"; e.classes = "a";
+    auto style = cascade.resolve(e);
+    check(style["color"] == "blue", "cascade: later source order wins at equal specificity");
+}
+
+static void testCascadeImportant() {
+    printf("--- Cascade: !important ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        "#main { color: green; }\n"
+        ".box { color: red !important; }\n"
+    ));
+
+    MockElement e; e.tag = "div"; e.classes = "box"; e.elemId = "main";
+    auto style = cascade.resolve(e);
+    check(style["color"] == "red", "cascade: !important beats higher specificity");
+}
+
+static void testCascadeInlineStyle() {
+    printf("--- Cascade: inline style ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse("#main { color: green; font-size: 20px; }"));
+
+    MockElement e; e.tag = "div"; e.elemId = "main";
+    auto style = cascade.resolve(e, "color: blue; margin-top: 5px");
+    check(style["color"] == "blue", "cascade: inline style overrides #id rule");
+    check(style["font-size"] == "20px", "cascade: non-inline property still from stylesheet");
+    check(style["margin-top"] == "5px", "cascade: inline-only property applied");
+}
+
+static void testCascadeInheritance() {
+    printf("--- Cascade: inheritance ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        ".parent { color: red; font-size: 18px; margin-top: 10px; }"
+    ));
+
+    MockElement parent; parent.tag = "div"; parent.classes = "parent";
+    MockElement child; child.tag = "span";
+    parent.addChild(&child);
+
+    auto parentStyle = cascade.resolve(parent);
+    auto childStyle = cascade.resolve(child, {}, &parentStyle);
+
+    // color is inherited
+    check(childStyle["color"] == "red", "cascade: child inherits color from parent");
+    // font-size is inherited
+    check(childStyle["font-size"] == "18px", "cascade: child inherits font-size from parent");
+    // margin-top is NOT inherited - should get initial value
+    check(childStyle["margin-top"] == "0", "cascade: child gets initial margin-top, not inherited");
+}
+
+static void testCascadeInitialValues() {
+    printf("--- Cascade: initial values ---\n");
+    Cascade cascade;
+    // No stylesheets - everything should be initial values
+    MockElement e; e.tag = "div";
+    auto style = cascade.resolve(e);
+
+    check(style["display"] == "inline", "cascade: initial display = inline");
+    check(style["color"] == "black", "cascade: initial color = black");
+    check(style["position"] == "static", "cascade: initial position = static");
+    check(style["opacity"] == "1", "cascade: initial opacity = 1");
+    check(style["font-size"] == "16px", "cascade: initial font-size = 16px");
+}
+
+static void testCascadeMultipleStylesheets() {
+    printf("--- Cascade: multiple stylesheets ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse("div { color: red; font-size: 14px; }"));
+    cascade.addStylesheet(parse("div { color: blue; }"));
+
+    MockElement e; e.tag = "div";
+    auto style = cascade.resolve(e);
+    check(style["color"] == "blue", "cascade: later stylesheet wins for color");
+    check(style["font-size"] == "14px", "cascade: earlier stylesheet property preserved");
+}
+
+static void testCascadeShadowDOMScoping() {
+    printf("--- Cascade: shadow DOM scoping ---\n");
+    int shadowRoot = 42; // dummy scope pointer
+
+    Cascade cascade;
+    // Document-level styles
+    cascade.addStylesheet(parse("div { color: red; }"));
+    // Shadow-scoped styles
+    cascade.addStylesheet(parse("div { color: blue; }"), &shadowRoot);
+
+    // Element in document scope
+    MockElement docElem; docElem.tag = "div";
+    auto docStyle = cascade.resolve(docElem);
+    check(docStyle["color"] == "red", "cascade: doc-scoped element gets doc rules");
+
+    // Element in shadow scope
+    MockElement shadowElem; shadowElem.tag = "div"; shadowElem.scopePtr = &shadowRoot;
+    auto shadowStyle = cascade.resolve(shadowElem);
+    check(shadowStyle["color"] == "blue", "cascade: shadow-scoped element gets shadow rules");
+}
+
+static void testCascadeCommaSelectors() {
+    printf("--- Cascade: comma-separated selectors ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse("h1, h2, h3 { font-weight: bold; color: navy; }"));
+
+    MockElement h1; h1.tag = "h1";
+    MockElement h2; h2.tag = "h2";
+    MockElement h3; h3.tag = "h3";
+    MockElement p; p.tag = "p";
+
+    auto s1 = cascade.resolve(h1);
+    auto s2 = cascade.resolve(h2);
+    auto s3 = cascade.resolve(h3);
+    auto sp = cascade.resolve(p);
+
+    check(s1["font-weight"] == "bold", "cascade: h1 gets bold from h1,h2,h3 rule");
+    check(s2["color"] == "navy", "cascade: h2 gets navy from h1,h2,h3 rule");
+    check(s3["font-weight"] == "bold", "cascade: h3 gets bold from h1,h2,h3 rule");
+    check(sp["font-weight"] == "normal", "cascade: p doesn't match h1,h2,h3 rule");
+}
+
+static void testCascadeNoMatch() {
+    printf("--- Cascade: no matching rules ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(".special { color: red; }"));
+
+    MockElement e; e.tag = "div";
+    auto style = cascade.resolve(e);
+    check(style["color"] == "black", "cascade: unmatched element gets initial color");
+}
+
+static void testCascadeInheritanceChain() {
+    printf("--- Cascade: multi-level inheritance ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        ".root { color: red; font-family: monospace; }\n"
+        ".middle { font-size: 20px; }\n"
+    ));
+
+    MockElement root; root.tag = "div"; root.classes = "root";
+    MockElement middle; middle.tag = "div"; middle.classes = "middle";
+    MockElement leaf; leaf.tag = "span";
+    root.addChild(&middle);
+    middle.addChild(&leaf);
+
+    auto rootStyle = cascade.resolve(root);
+    auto midStyle = cascade.resolve(middle, {}, &rootStyle);
+    auto leafStyle = cascade.resolve(leaf, {}, &midStyle);
+
+    // color inherits through the chain
+    check(leafStyle["color"] == "red", "cascade: color inherits through 3 levels");
+    // font-family inherits through the chain
+    check(leafStyle["font-family"] == "monospace", "cascade: font-family inherits through 3 levels");
+    // font-size was set on middle, inherits to leaf
+    check(leafStyle["font-size"] == "20px", "cascade: font-size inherits from middle to leaf");
+}
+
+static void testCascadeImportantVsInline() {
+    printf("--- Cascade: !important vs inline ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(".forced { color: red !important; }"));
+
+    MockElement e; e.tag = "div"; e.classes = "forced";
+    // Inline style tries to override, but !important in stylesheet wins
+    // Note: per CSS spec, !important in author stylesheet beats normal inline,
+    // but !important inline beats !important author. We test the former.
+    auto style = cascade.resolve(e, "color: blue");
+    // In our implementation, inline has max specificity for normal declarations.
+    // !important declarations beat normal ones regardless of specificity.
+    // So !important author should beat normal inline.
+    check(style["color"] == "red", "cascade: !important author beats normal inline");
+}
+
+static void testCascadeClear() {
+    printf("--- Cascade: clear ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse("div { color: red; }"));
+
+    MockElement e; e.tag = "div";
+    auto s1 = cascade.resolve(e);
+    check(s1["color"] == "red", "cascade: before clear, color is red");
+
+    cascade.clear();
+    auto s2 = cascade.resolve(e);
+    check(s2["color"] == "black", "cascade: after clear, color is initial");
+}
+
 // ========== Main ==========
 
 int main() {
-    printf("=== htmlayout Phase 1+2 tests ===\n\n");
+    printf("=== htmlayout Phase 1+2+3 tests ===\n\n");
 
     // Foundation
     testFoundation();
@@ -883,6 +1108,23 @@ int main() {
     testSelectorComplexChain();
     testSelectorOnlyChild();
     testSelectorFirstOfType();
+    printf("\n");
+
+    // Phase 3: Cascade
+    testCascadeBasicResolve();
+    testCascadeSpecificityOrder();
+    testCascadeSourceOrder();
+    testCascadeImportant();
+    testCascadeInlineStyle();
+    testCascadeInheritance();
+    testCascadeInitialValues();
+    testCascadeMultipleStylesheets();
+    testCascadeShadowDOMScoping();
+    testCascadeCommaSelectors();
+    testCascadeNoMatch();
+    testCascadeInheritanceChain();
+    testCascadeImportantVsInline();
+    testCascadeClear();
     printf("\n");
 
     // Summary

@@ -21,10 +21,13 @@ public:
     void addStylesheet(const Stylesheet& sheet, void* scope = nullptr);
 
     // Resolve computed style for an element.
-    // Considers: user-agent defaults, author styles, inline styles, inheritance.
+    // Considers: author styles, inline styles, inheritance, initial values.
     // Only matches rules whose scope matches the element's scope.
+    // parentStyle: the computed style of the parent element (for inheritance).
+    //   Pass nullptr for root elements.
     ComputedStyle resolve(const ElementRef& elem,
-                          const std::string& inlineStyle = {}) const;
+                          const std::string& inlineStyle = {},
+                          const ComputedStyle* parentStyle = nullptr) const;
 
     // Clear all stylesheets
     void clear();
