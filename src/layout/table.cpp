@@ -251,9 +251,19 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             auto* cell = row.cells[c];
             float cw = (c < colWidths.size()) ? colWidths[c] : cellAvailWidth;
 
-            cell->box.contentRect.x = cursorX + cell->box.margin.left +
+            // Position cells RELATIVE to their parent row (not to the table).
+            // The draw traversal accumulates the row's offset, so cells at (x, 0)
+            // within the row end up at the correct absolute position.
+            float cellRelX = cursorX;
+            float cellRelY = 0.0f;
+            if (!row.rowNode) {
+                // Anonymous row: cells are direct children of table, use absolute Y
+                cellRelY = cursorY;
+            }
+
+            cell->box.contentRect.x = cellRelX + cell->box.margin.left +
                 cell->box.padding.left + cell->box.border.left;
-            cell->box.contentRect.y = cursorY + cell->box.margin.top +
+            cell->box.contentRect.y = cellRelY + cell->box.margin.top +
                 cell->box.padding.top + cell->box.border.top;
 
             // Stretch cell height to row height
