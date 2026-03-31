@@ -5,6 +5,7 @@
 #include "test_cascade.h"
 #include "test_shorthand.h"
 #include "test_layout.h"
+#include "test_inline.h"
 #include <cstdio>
 
 int g_passed = 0;
@@ -32,6 +33,9 @@ int main() {
     printf("\n");
 
     testLayout();
+    printf("\n");
+
+    testInlineLayout();
     printf("\n");
 
     printf("=== Results: %d passed, %d failed ===\n", g_passed, g_failed);

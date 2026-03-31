@@ -7,6 +7,7 @@ add_executable(htmlayout_test
     test_cascade.cpp
     test_shorthand.cpp
     test_layout.cpp
+    test_inline.cpp
 )
 target_include_directories(htmlayout_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(htmlayout_test PRIVATE htmlayout gumbo)
