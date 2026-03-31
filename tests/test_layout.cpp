@@ -586,6 +586,116 @@ static void testPositionAbsoluteBottomRight() {
     check(approx(absChild.box.contentRect.x, 480.0f), "absolute right: x = 600-20-100 = 480");
 }
 
+static void testFloatLeft() {
+    printf("--- Layout: float left ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("400px");
+
+    MockLayoutNode floater;
+    initBlock(floater);
+    floater.setWidth("100px");
+    floater.setHeight("80px");
+    floater.style["float"] = "left";
+
+    MockLayoutNode content;
+    initBlock(content);
+    content.setHeight("50px");
+
+    root.addChild(&floater);
+    root.addChild(&content);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // Float is at top-left
+    check(approx(floater.box.contentRect.x, 0.0f), "float left: x=0");
+    check(approx(floater.box.contentRect.y, 0.0f), "float left: y=0");
+    // Content flows beside the float
+    check(approx(content.box.contentRect.x, 100.0f), "float left: content shifted right");
+    check(approx(content.box.contentRect.width, 300.0f), "float left: content width reduced");
+}
+
+static void testFloatRight() {
+    printf("--- Layout: float right ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("400px");
+
+    MockLayoutNode floater;
+    initBlock(floater);
+    floater.setWidth("100px");
+    floater.setHeight("80px");
+    floater.style["float"] = "right";
+
+    MockLayoutNode content;
+    initBlock(content);
+    content.setHeight("50px");
+
+    root.addChild(&floater);
+    root.addChild(&content);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // Float is at top-right
+    check(approx(floater.box.contentRect.x, 300.0f), "float right: x=300");
+    check(approx(floater.box.contentRect.y, 0.0f), "float right: y=0");
+    // Content at left, width reduced
+    check(approx(content.box.contentRect.x, 0.0f), "float right: content at x=0");
+    check(approx(content.box.contentRect.width, 300.0f), "float right: content width reduced");
+}
+
+static void testClearBoth() {
+    printf("--- Layout: clear both ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("400px");
+
+    MockLayoutNode floater;
+    initBlock(floater);
+    floater.setWidth("100px");
+    floater.setHeight("80px");
+    floater.style["float"] = "left";
+
+    MockLayoutNode cleared;
+    initBlock(cleared);
+    cleared.setHeight("30px");
+    cleared.style["clear"] = "both";
+
+    root.addChild(&floater);
+    root.addChild(&cleared);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // Cleared element moves below the float
+    check(approx(cleared.box.contentRect.y, 80.0f), "clear both: moved below float at y=80");
+    // Root height includes both float and cleared element
+    check(approx(root.box.contentRect.height, 110.0f), "clear both: root height = 80 + 30 = 110");
+}
+
+static void testFloatContainment() {
+    printf("--- Layout: float containment ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("400px");
+
+    MockLayoutNode floater;
+    initBlock(floater);
+    floater.setWidth("100px");
+    floater.setHeight("200px");
+    floater.style["float"] = "left";
+
+    root.addChild(&floater);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // Container auto-height should contain the float
+    check(approx(root.box.contentRect.height, 200.0f), "float containment: root height includes float");
+}
+
 static void testOverflowClipping() {
     printf("--- Layout: overflow clipping ---\n");
     MockLayoutNode root;
@@ -689,6 +799,12 @@ void testLayout() {
     testBlockMinMaxWidth();
     testBlockNested();
     testBlockEmResolution();
+
+    // Floats & clear
+    testFloatLeft();
+    testFloatRight();
+    testClearBoth();
+    testFloatContainment();
 
     // Overflow clipping
     testOverflowClipping();

@@ -88,6 +88,30 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Collect absolutely positioned children to process after in-flow layout
     std::vector<LayoutNode*> absChildren;
 
+    // Float tracking: left and right float edges
+    struct FloatRect {
+        float x, y, width, height;
+        bool isLeft;
+    };
+    std::vector<FloatRect> floats;
+
+    // Get available width at a given Y position accounting for floats
+    auto getAvailableAtY = [&](float y, float h) -> std::pair<float, float> {
+        float leftEdge = 0;
+        float rightEdge = childAvailable;
+        float effectiveH = h > 0 ? h : 1.0f; // treat zero-height as point query
+        for (auto& f : floats) {
+            if (y + effectiveH > f.y && y < f.y + f.height) {
+                if (f.isLeft) {
+                    leftEdge = std::max(leftEdge, f.x + f.width);
+                } else {
+                    rightEdge = std::min(rightEdge, f.x);
+                }
+            }
+        }
+        return {leftEdge, rightEdge};
+    };
+
     for (auto* child : node->children()) {
         if (child->isTextNode()) continue; // text nodes handled by inline layout
 
@@ -106,8 +130,52 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             continue;
         }
 
-        // Recursively layout the child
-        layoutNode(child, childAvailable, metrics);
+        const std::string& childFloat = styleVal(childStyle, "float");
+        const std::string& childClear = styleVal(childStyle, "clear");
+
+        // Handle clear: move past floats on the specified side(s)
+        if (childClear == "left" || childClear == "both") {
+            for (auto& f : floats) {
+                if (f.isLeft) cursorY = std::max(cursorY, f.y + f.height);
+            }
+        }
+        if (childClear == "right" || childClear == "both") {
+            for (auto& f : floats) {
+                if (!f.isLeft) cursorY = std::max(cursorY, f.y + f.height);
+            }
+        }
+
+        // Handle float: left/right
+        if (childFloat == "left" || childFloat == "right") {
+            layoutNode(child, childAvailable, metrics);
+
+            float floatWidth = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
+            float floatHeight = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
+
+            auto [leftEdge, rightEdge] = getAvailableAtY(cursorY, floatHeight);
+
+            if (childFloat == "left") {
+                child->box.contentRect.x = leftEdge + child->box.margin.left +
+                    child->box.padding.left + child->box.border.left;
+                child->box.contentRect.y = cursorY + child->box.margin.top +
+                    child->box.padding.top + child->box.border.top;
+                floats.push_back({leftEdge, cursorY, floatWidth, floatHeight, true});
+            } else {
+                child->box.contentRect.x = rightEdge - floatWidth + child->box.margin.left +
+                    child->box.padding.left + child->box.border.left;
+                child->box.contentRect.y = cursorY + child->box.margin.top +
+                    child->box.padding.top + child->box.border.top;
+                floats.push_back({rightEdge - floatWidth, cursorY, floatWidth, floatHeight, false});
+            }
+            continue; // floats don't advance cursorY
+        }
+
+        // Recursively layout the child (with available width reduced by floats)
+        auto [leftEdge, rightEdge] = getAvailableAtY(cursorY, 0);
+        float inFlowAvail = rightEdge - leftEdge;
+        if (inFlowAvail < 0) inFlowAvail = 0;
+
+        layoutNode(child, inFlowAvail, metrics);
 
         float childMarginTop = child->box.margin.top;
         float childMarginBottom = child->box.margin.bottom;
@@ -123,8 +191,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         cursorY += collapsedMargin;
 
-        // Position the child's content rect
-        child->box.contentRect.x = child->box.margin.left + child->box.padding.left + child->box.border.left;
+        // Position the child's content rect (offset by float margins)
+        auto [le2, re2] = getAvailableAtY(cursorY, child->box.fullHeight());
+        child->box.contentRect.x = le2 + child->box.margin.left + child->box.padding.left + child->box.border.left;
         child->box.contentRect.y = cursorY + child->box.padding.top + child->box.border.top;
 
         // Apply position: relative offset after normal positioning
@@ -159,6 +228,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Add the last child's bottom margin
     if (!firstChild) {
         cursorY += prevMarginBottom;
+    }
+
+    // Container must also contain all floats
+    for (auto& f : floats) {
+        cursorY = std::max(cursorY, f.y + f.height);
     }
 
     // Resolve height
