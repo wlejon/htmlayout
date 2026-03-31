@@ -206,6 +206,57 @@ static void testInheritInitialUnset() {
     check(cs2["margin-left"] == "0", "unset keyword: non-inherited margin-left = 0 (initial)");
 }
 
+static void testMediaQueries() {
+    printf("--- Cascade: @media query support ---\n");
+
+    auto sheet = parse(
+        "div { color: red; }\n"
+        "@media (min-width: 768px) { div { color: blue; } }\n"
+        "@media (max-width: 400px) { div { font-size: 12px; } }\n"
+    );
+    check(sheet.mediaBlocks.size() == 2, "@media: parser found 2 media blocks");
+    check(sheet.rules.size() == 1, "@media: 1 unconditional rule");
+
+    // Wide viewport: min-width: 768px matches, max-width: 400px doesn't
+    MediaContext wide{1024, 768, "screen"};
+    Cascade cascadeWide;
+    cascadeWide.addStylesheet(sheet, nullptr, &wide);
+    MockElement d1; d1.tag = "div";
+    auto s1 = cascadeWide.resolve(d1);
+    check(s1["color"] == "blue", "@media: min-width:768px matches at 1024px");
+    check(s1["font-size"] == "16px", "@media: max-width:400px doesn't match at 1024px");
+
+    // Narrow viewport: max-width: 400px matches, min-width: 768px doesn't
+    MediaContext narrow{320, 480, "screen"};
+    Cascade cascadeNarrow;
+    cascadeNarrow.addStylesheet(sheet, nullptr, &narrow);
+    MockElement d2; d2.tag = "div";
+    auto s2 = cascadeNarrow.resolve(d2);
+    check(s2["color"] == "red", "@media: min-width:768px doesn't match at 320px");
+    check(s2["font-size"] == "12px", "@media: max-width:400px matches at 320px");
+
+    // Media type matching
+    check(evaluateMediaQuery("screen", {1024, 768, "screen"}) == true, "@media: screen matches screen");
+    check(evaluateMediaQuery("print", {1024, 768, "screen"}) == false, "@media: print doesn't match screen");
+    check(evaluateMediaQuery("all", {1024, 768, "screen"}) == true, "@media: all matches anything");
+
+    // Combined: screen and (min-width: 768px)
+    check(evaluateMediaQuery("screen and (min-width: 768px)", {1024, 768, "screen"}) == true,
+          "@media: screen and (min-width:768px) matches");
+    check(evaluateMediaQuery("screen and (min-width: 768px)", {320, 480, "screen"}) == false,
+          "@media: screen and (min-width:768px) doesn't match narrow");
+
+    // Orientation
+    check(evaluateMediaQuery("(orientation: landscape)", {1024, 768, "screen"}) == true,
+          "@media: landscape matches wide viewport");
+    check(evaluateMediaQuery("(orientation: portrait)", {320, 480, "screen"}) == true,
+          "@media: portrait matches tall viewport");
+
+    // not prefix
+    check(evaluateMediaQuery("not print", {1024, 768, "screen"}) == true,
+          "@media: not print matches screen");
+}
+
 static void testCustomProperties() {
     printf("--- Cascade: CSS custom properties (var()) ---\n");
 
@@ -288,6 +339,7 @@ void testCascade() {
     testInheritanceChain();
     testImportantVsInline();
     testInheritInitialUnset();
+    testMediaQueries();
     testCustomProperties();
     testClear();
 }

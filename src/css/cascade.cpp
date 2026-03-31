@@ -89,11 +89,30 @@ std::string resolveVarReferences(const std::string& value,
 
 } // anonymous namespace
 
-void Cascade::addStylesheet(const Stylesheet& sheet, void* scope) {
+void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
+                             const MediaContext* media) {
+    // Add unconditional rules
     for (auto& rule : sheet.rules) {
         auto selectors = parseSelectorList(rule.selector);
         for (auto& sel : selectors) {
             rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++});
+        }
+    }
+
+    // Add @media rules whose conditions match
+    for (auto& block : sheet.mediaBlocks) {
+        bool matches = true;
+        if (media) {
+            matches = evaluateMediaQuery(block.condition, *media);
+        }
+        // If no media context provided, include all @media rules (permissive)
+        if (matches) {
+            for (auto& rule : block.rules) {
+                auto selectors = parseSelectorList(rule.selector);
+                for (auto& sel : selectors) {
+                    rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++});
+                }
+            }
         }
     }
 }

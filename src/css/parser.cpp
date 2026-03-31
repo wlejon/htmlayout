@@ -1,5 +1,7 @@
 #include "css/parser.h"
 #include <algorithm>
+#include <charconv>
+#include <cctype>
 
 namespace htmlayout::css {
 
@@ -13,9 +15,15 @@ public:
         Stylesheet sheet;
         skipWhitespace();
         while (!atEnd()) {
-            // Skip at-rules (consume until next semicolon or matching braces)
             if (peek().type == TokenType::AtKeyword) {
-                consumeAtRule();
+                if (peek().value == "media") {
+                    auto mediaBlock = parseMediaRule();
+                    if (!mediaBlock.condition.empty() || !mediaBlock.rules.empty()) {
+                        sheet.mediaBlocks.push_back(std::move(mediaBlock));
+                    }
+                } else {
+                    consumeAtRule();
+                }
                 skipWhitespace();
                 continue;
             }
@@ -68,6 +76,39 @@ private:
 
     void skipWhitespace() {
         while (!atEnd() && peek().type == TokenType::Whitespace) advance();
+    }
+
+    MediaBlock parseMediaRule() {
+        MediaBlock block;
+        advance(); // skip @media keyword
+        skipWhitespace();
+
+        // Collect condition tokens until '{'
+        std::string condition;
+        while (!atEnd() && peek().type != TokenType::LeftBrace) {
+            condition += tokenToString(advance());
+        }
+        block.condition = trim(condition);
+
+        if (atEnd() || peek().type != TokenType::LeftBrace) return block;
+        advance(); // skip '{'
+
+        // Parse rules inside the media block
+        skipWhitespace();
+        while (!atEnd() && peek().type != TokenType::RightBrace) {
+            if (peek().type == TokenType::AtKeyword) {
+                consumeAtRule();
+                skipWhitespace();
+                continue;
+            }
+            auto rule = parseRule();
+            if (!rule.selector.empty()) {
+                block.rules.push_back(std::move(rule));
+            }
+            skipWhitespace();
+        }
+        if (!atEnd() && peek().type == TokenType::RightBrace) advance();
+        return block;
     }
 
     void consumeAtRule() {
@@ -257,6 +298,131 @@ std::vector<Declaration> parseInlineStyle(const std::string& style) {
     auto tokens = tokenize(style);
     Parser parser(tokens);
     return parser.parseDeclarationList();
+}
+
+namespace {
+
+// Parse a length value like "768px" to pixels
+float parseMediaLength(const std::string& s) {
+    float num = 0;
+    const char* begin = s.data();
+    const char* end = begin + s.size();
+    auto [ptr, ec] = std::from_chars(begin, end, num);
+    if (ec != std::errc()) return 0;
+    // unit is ignored for now (assume px)
+    return num;
+}
+
+// Evaluate a single media feature like "(min-width: 768px)"
+bool evaluateMediaFeature(const std::string& feature, const MediaContext& ctx) {
+    // Strip parens and trim
+    std::string f = feature;
+    if (!f.empty() && f.front() == '(') f.erase(0, 1);
+    if (!f.empty() && f.back() == ')') f.pop_back();
+
+    // Trim
+    size_t s = f.find_first_not_of(" \t\n\r\f");
+    size_t e = f.find_last_not_of(" \t\n\r\f");
+    if (s == std::string::npos) return false;
+    f = f.substr(s, e - s + 1);
+
+    auto colonPos = f.find(':');
+    if (colonPos == std::string::npos) {
+        // Boolean feature, e.g. (color)
+        return true;
+    }
+
+    std::string name = f.substr(0, colonPos);
+    std::string value = f.substr(colonPos + 1);
+    // Trim both
+    auto tn = [](std::string& str) {
+        size_t a = str.find_first_not_of(" \t"); size_t b = str.find_last_not_of(" \t");
+        str = (a == std::string::npos) ? "" : str.substr(a, b - a + 1);
+    };
+    tn(name); tn(value);
+
+    float val = parseMediaLength(value);
+
+    if (name == "min-width") return ctx.viewportWidth >= val;
+    if (name == "max-width") return ctx.viewportWidth <= val;
+    if (name == "min-height") return ctx.viewportHeight >= val;
+    if (name == "max-height") return ctx.viewportHeight <= val;
+    if (name == "width") return ctx.viewportWidth == val;
+    if (name == "height") return ctx.viewportHeight == val;
+    if (name == "orientation") {
+        if (value == "portrait") return ctx.viewportHeight >= ctx.viewportWidth;
+        if (value == "landscape") return ctx.viewportWidth > ctx.viewportHeight;
+    }
+
+    return false;
+}
+
+} // anonymous namespace
+
+bool evaluateMediaQuery(const std::string& condition, const MediaContext& ctx) {
+    if (condition.empty() || condition == "all") return true;
+
+    // Handle media type prefixes: "screen and (...)", "print", etc.
+    std::string cond = condition;
+
+    // Simple "not" prefix
+    bool negate = false;
+    if (cond.size() > 4 && cond.substr(0, 4) == "not ") {
+        negate = true;
+        cond = cond.substr(4);
+    }
+
+    // Check for media type
+    std::string mediaType;
+    auto andPos = cond.find(" and ");
+    if (andPos != std::string::npos && cond[0] != '(') {
+        mediaType = cond.substr(0, andPos);
+        cond = cond.substr(andPos + 5);
+    } else if (cond[0] != '(') {
+        mediaType = cond;
+        cond.clear();
+    }
+
+    // Trim media type
+    if (!mediaType.empty()) {
+        for (auto& c : mediaType) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        size_t s = mediaType.find_first_not_of(" \t");
+        size_t e = mediaType.find_last_not_of(" \t");
+        if (s != std::string::npos) mediaType = mediaType.substr(s, e - s + 1);
+
+        if (mediaType != "all" && mediaType != ctx.mediaType) {
+            return negate;
+        }
+    }
+
+    if (cond.empty()) return !negate;
+
+    // Evaluate features connected by "and"
+    // Split by " and " outside parens
+    bool result = true;
+    size_t i = 0;
+    while (i < cond.size()) {
+        // Find next feature (...)
+        auto paren = cond.find('(', i);
+        if (paren == std::string::npos) break;
+
+        int depth = 0;
+        size_t featureStart = paren;
+        size_t j = paren;
+        while (j < cond.size()) {
+            if (cond[j] == '(') depth++;
+            else if (cond[j] == ')') { depth--; if (depth == 0) break; }
+            j++;
+        }
+        std::string feature = cond.substr(featureStart, j - featureStart + 1);
+        if (!evaluateMediaFeature(feature, ctx)) {
+            result = false;
+            break;
+        }
+        i = j + 1;
+    }
+
+    return negate ? !result : result;
 }
 
 } // namespace htmlayout::css

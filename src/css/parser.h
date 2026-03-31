@@ -19,10 +19,27 @@ struct Rule {
     std::vector<Declaration> declarations;
 };
 
+// A @media block: condition + contained rules
+struct MediaBlock {
+    std::string condition;          // e.g. "(min-width: 768px)"
+    std::vector<Rule> rules;
+};
+
 // A parsed stylesheet
 struct Stylesheet {
     std::vector<Rule> rules;
+    std::vector<MediaBlock> mediaBlocks;
 };
+
+// Media query evaluation context — consumers set this to describe the viewport
+struct MediaContext {
+    float viewportWidth = 0;
+    float viewportHeight = 0;
+    std::string mediaType = "screen"; // "screen", "print", "all"
+};
+
+// Evaluate whether a @media condition string matches the given context
+bool evaluateMediaQuery(const std::string& condition, const MediaContext& ctx);
 
 // Parse a CSS string into a Stylesheet
 Stylesheet parse(const std::string& css);

@@ -19,7 +19,9 @@ public:
     // Add a stylesheet to a given scope.
     // scope = nullptr means document-level (global).
     // scope = shadow_root_ptr means shadow-scoped styles.
-    void addStylesheet(const Stylesheet& sheet, void* scope = nullptr);
+    // If a MediaContext is provided, @media blocks are conditionally included.
+    void addStylesheet(const Stylesheet& sheet, void* scope = nullptr,
+                       const MediaContext* media = nullptr);
 
     // Resolve computed style for an element.
     // Considers: author styles, inline styles, inheritance, initial values.
