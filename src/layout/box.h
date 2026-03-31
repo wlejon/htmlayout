@@ -24,6 +24,12 @@ struct LayoutBox {
     Edges padding;
     Edges border;
 
+    // Whether text content was truncated by overflow (for text-overflow: ellipsis)
+    bool textTruncated = false;
+
+    // Dirty flag for incremental relayout
+    bool dirty = true;
+
     // Full box dimensions including padding + border
     float fullWidth() const { return contentRect.width + padding.left + padding.right + border.left + border.right; }
     float fullHeight() const { return contentRect.height + padding.top + padding.bottom + border.top + border.bottom; }
@@ -92,5 +98,18 @@ void applyOverflowClipping(LayoutNode* root);
 
 // Hit test: find the deepest LayoutNode at a given point
 LayoutNode* hitTest(LayoutNode* root, float x, float y);
+
+// Mark a subtree as dirty for incremental relayout.
+// Marks the given node and all its ancestors as needing re-layout.
+void markDirty(LayoutNode* node);
+
+// Incremental layout: only re-layout dirty subtrees.
+// Falls back to full layout if root is dirty.
+void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& metrics);
+
+// Style invalidation: given a set of changed property names,
+// determine if a node needs re-layout or just re-paint.
+// Returns true if any layout-affecting property changed.
+bool needsRelayout(const std::vector<std::string>& changedProperties);
 
 } // namespace htmlayout::layout

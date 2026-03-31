@@ -283,10 +283,31 @@ private:
     }
 
     void skipToRecovery() {
-        while (!atEnd() && peek().type != TokenType::Semicolon && peek().type != TokenType::RightBrace) {
+        // Enhanced error recovery: skip to next semicolon or closing brace,
+        // respecting nested blocks so we don't consume too much.
+        int braceDepth = 0;
+        while (!atEnd()) {
+            auto type = peek().type;
+            if (type == TokenType::LeftBrace) {
+                braceDepth++;
+                advance();
+                continue;
+            }
+            if (type == TokenType::RightBrace) {
+                if (braceDepth > 0) {
+                    braceDepth--;
+                    advance();
+                    continue;
+                }
+                // Don't consume the closing brace of our containing block
+                return;
+            }
+            if (type == TokenType::Semicolon && braceDepth == 0) {
+                advance(); // consume the semicolon
+                return;
+            }
             advance();
         }
-        if (!atEnd() && peek().type == TokenType::Semicolon) advance();
     }
 
     static bool checkAndStripImportant(std::string& value) {

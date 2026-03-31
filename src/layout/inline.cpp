@@ -97,6 +97,8 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     const std::string& whiteSpace = styleVal(style, "white-space");
     const std::string& textAlign = styleVal(style, "text-align");
     const std::string& lineHeightVal = styleVal(style, "line-height");
+    const std::string& direction = styleVal(style, "direction");
+    bool isRtl = (direction == "rtl");
     const std::string& display = styleVal(style, "display");
 
     // Resolve margin, padding, border for the node itself
@@ -240,13 +242,23 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     // Build line boxes
     auto lineBoxes = buildLineBoxes(allItems, contentAvail);
 
+    // Resolve text-align with direction
+    // "start" -> "left" for LTR, "right" for RTL
+    // "end" -> "right" for LTR, "left" for RTL
+    std::string resolvedAlign = textAlign;
+    if (resolvedAlign == "start" || resolvedAlign.empty()) {
+        resolvedAlign = isRtl ? "right" : "left";
+    } else if (resolvedAlign == "end") {
+        resolvedAlign = isRtl ? "left" : "right";
+    }
+
     // Position items within line boxes
     float cursorY = 0;
     for (size_t lineIdx = 0; lineIdx < lineBoxes.size(); lineIdx++) {
         auto& line = lineBoxes[lineIdx];
         bool isLastLine = (lineIdx == lineBoxes.size() - 1);
-        float xOffset = alignLine(line, contentAvail, textAlign, isLastLine);
-        float gap = (textAlign == "justify") ? justifyGap(line, contentAvail, isLastLine) : 0;
+        float xOffset = alignLine(line, contentAvail, resolvedAlign, isLastLine);
+        float gap = (resolvedAlign == "justify") ? justifyGap(line, contentAvail, isLastLine) : 0;
         float cursorX = xOffset;
 
         for (size_t itemIdx = 0; itemIdx < line.items.size(); itemIdx++) {
@@ -286,6 +298,19 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     }
     node->box.contentRect.width = maxLineWidth;
     node->box.contentRect.height = cursorY;
+
+    // Text-overflow detection: mark if content was truncated
+    const std::string& textOverflow = styleVal(style, "text-overflow");
+    const std::string& overflow = styleVal(style, "overflow");
+    if (textOverflow == "ellipsis" && (overflow == "hidden" || overflow == "scroll" || overflow == "auto")) {
+        // Check if any line exceeds the available width
+        for (auto& line : lineBoxes) {
+            if (line.totalWidth > contentAvail) {
+                node->box.textTruncated = true;
+                break;
+            }
+        }
+    }
 }
 
 } // namespace htmlayout::layout

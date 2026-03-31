@@ -264,4 +264,110 @@ LayoutNode* hitTest(LayoutNode* root, float x, float y) {
     return hitTestRecursive(root, x, y);
 }
 
+void markDirty(LayoutNode* node) {
+    if (!node) return;
+    node->box.dirty = true;
+    // Walk up to root, marking ancestors dirty
+    LayoutNode* p = node->parent();
+    while (p) {
+        if (p->box.dirty) break; // already dirty up the chain
+        p->box.dirty = true;
+        p = p->parent();
+    }
+}
+
+namespace {
+
+void layoutNodeIncremental(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
+    if (!node) return;
+    if (!node->box.dirty) return; // skip clean subtrees
+
+    layoutNode(node, availableWidth, metrics);
+    node->box.dirty = false;
+
+    // Children are laid out by layoutNode, mark them clean
+    for (auto* child : node->children()) {
+        child->box.dirty = false;
+    }
+}
+
+} // anonymous namespace
+
+void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
+    if (!root) return;
+
+    if (root->box.dirty) {
+        // Root is dirty: full relayout
+        layoutTree(root, viewportWidth, metrics);
+        // Mark entire tree clean
+        std::vector<LayoutNode*> stack = {root};
+        while (!stack.empty()) {
+            auto* n = stack.back();
+            stack.pop_back();
+            n->box.dirty = false;
+            for (auto* c : n->children()) stack.push_back(c);
+        }
+    } else {
+        // Walk tree, re-layout only dirty subtrees
+        std::vector<std::pair<LayoutNode*, float>> stack;
+        stack.push_back({root, viewportWidth});
+        while (!stack.empty()) {
+            auto [node, avail] = stack.back();
+            stack.pop_back();
+            if (node->box.dirty) {
+                layoutNode(node, avail, metrics);
+                // Mark subtree clean
+                std::vector<LayoutNode*> sub = {node};
+                while (!sub.empty()) {
+                    auto* n = sub.back();
+                    sub.pop_back();
+                    n->box.dirty = false;
+                    for (auto* c : n->children()) sub.push_back(c);
+                }
+            } else {
+                for (auto* c : node->children()) {
+                    stack.push_back({c, node->box.contentRect.width});
+                }
+            }
+        }
+    }
+}
+
+// Layout-affecting properties: if any of these change, relayout is needed.
+// Properties not in this set only need repaint.
+static const std::vector<std::string>& layoutProperties() {
+    static const std::vector<std::string> props = {
+        "display", "position", "float", "clear",
+        "width", "height", "min-width", "min-height", "max-width", "max-height",
+        "margin-top", "margin-right", "margin-bottom", "margin-left",
+        "padding-top", "padding-right", "padding-bottom", "padding-left",
+        "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+        "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
+        "box-sizing", "overflow",
+        "flex-direction", "flex-wrap", "justify-content", "align-items", "align-content",
+        "align-self", "flex-grow", "flex-shrink", "flex-basis", "order",
+        "gap", "row-gap", "column-gap",
+        "grid-template-columns", "grid-template-rows", "grid-area",
+        "grid-row-start", "grid-row-end", "grid-column-start", "grid-column-end",
+        "font-size", "font-family", "font-weight", "line-height",
+        "white-space", "text-align", "vertical-align",
+        "top", "right", "bottom", "left",
+        "column-count", "column-width",
+        "table-layout", "border-collapse", "border-spacing",
+        "writing-mode", "direction",
+        "word-break", "overflow-wrap", "text-overflow",
+    };
+    return props;
+}
+
+bool needsRelayout(const std::vector<std::string>& changedProperties) {
+    auto& lp = layoutProperties();
+    for (auto& prop : changedProperties) {
+        for (auto& lProp : lp) {
+            if (prop == lProp) return true;
+        }
+    }
+    return false;
+}
+
 } // namespace htmlayout::layout
