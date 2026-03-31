@@ -315,6 +315,56 @@ static void testCustomProperties() {
     check(s3["color"] == "purple", "var(): nested var() in fallback");
 }
 
+static void testPseudoElements() {
+    printf("--- Cascade: pseudo-elements (::before/::after) ---\n");
+
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        "div::before { content: \">> \"; color: red; }\n"
+        "div::after { content: \" <<\"; color: blue; }\n"
+        ".special::before { content: \"* \"; font-weight: bold; }\n"
+    ));
+
+    MockElement div; div.tag = "div";
+    auto divStyle = cascade.resolve(div);
+
+    // Resolve ::before pseudo-element
+    auto beforeStyle = cascade.resolvePseudo(div, "before", divStyle);
+    check(!beforeStyle.empty(), "::before: style resolved (not empty)");
+    check(beforeStyle["content"] == "\">> \"", "::before: content = '>> '");
+    check(beforeStyle["color"] == "red", "::before: color = red");
+
+    // Resolve ::after pseudo-element
+    auto afterStyle = cascade.resolvePseudo(div, "after", divStyle);
+    check(afterStyle["content"] == "\" <<\"", "::after: content = ' <<'");
+    check(afterStyle["color"] == "blue", "::after: color = blue");
+
+    // .special::before
+    MockElement special; special.tag = "div"; special.classes = "special";
+    auto specialStyle = cascade.resolve(special);
+    auto specialBefore = cascade.resolvePseudo(special, "before", specialStyle);
+    // Should get .special::before rule, not div::before (specificity)
+    check(specialBefore["content"] == "\"* \"", "::before: .special rule wins");
+    check(specialBefore["font-weight"] == "bold", "::before: font-weight = bold");
+
+    // Element without ::before rules
+    MockElement span; span.tag = "span";
+    auto spanStyle = cascade.resolve(span);
+    auto spanBefore = cascade.resolvePseudo(span, "before", spanStyle);
+    check(spanBefore.empty(), "::before: empty for element without pseudo rules");
+
+    // Inheritance: pseudo-element inherits from originating element
+    Cascade cascade2;
+    cascade2.addStylesheet(parse(
+        "div { color: green; }\n"
+        "div::before { content: \"x\"; }\n"
+    ));
+    MockElement d2; d2.tag = "div";
+    auto d2Style = cascade2.resolve(d2);
+    auto d2Before = cascade2.resolvePseudo(d2, "before", d2Style);
+    check(d2Before["color"] == "green", "::before: inherits color from element");
+}
+
 static void testUserAgentStylesheet() {
     printf("--- Cascade: user-agent default stylesheet ---\n");
 
@@ -392,6 +442,7 @@ void testCascade() {
     testInheritInitialUnset();
     testMediaQueries();
     testCustomProperties();
+    testPseudoElements();
     testUserAgentStylesheet();
     testClear();
 }

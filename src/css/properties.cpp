@@ -88,6 +88,12 @@ const std::vector<PropertyDef>& knownProperties() {
         // List
         {"list-style-type",   "disc",   true},
         {"list-style-position","outside",true},
+
+        // Generated content
+        {"content",           "normal",  false},
+
+        // Pointer events (for hit testing)
+        {"pointer-events",    "auto",    true},
     };
     return props;
 }

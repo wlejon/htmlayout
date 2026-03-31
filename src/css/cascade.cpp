@@ -256,6 +256,122 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     return style;
 }
 
+ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
+                                      const std::string& pseudoName,
+                                      const ComputedStyle& elemStyle) const {
+    // Collect rules whose selector targets ::pseudoName on this element
+    struct MatchedDecl {
+        std::string property;
+        std::string value;
+        bool important;
+        uint32_t specificity;
+        size_t order;
+    };
+
+    std::vector<MatchedDecl> matched;
+
+    for (auto& rule : rules_) {
+        if (rule.scope != elem.scope()) continue;
+
+        // Check if the subject compound has a pseudo-element matching pseudoName
+        auto& chain = rule.selector.chain;
+        if (chain.entries.empty()) continue;
+
+        auto& subject = chain.entries[0].compound;
+        bool hasPseudo = false;
+        for (auto& s : subject.simples) {
+            if (s.type == SimpleSelectorType::PseudoElement && s.value == pseudoName) {
+                hasPseudo = true;
+                break;
+            }
+        }
+        if (!hasPseudo) continue;
+
+        // Now match the selector against the element, ignoring the pseudo-element part.
+        // Build a temporary compound without the pseudo-element.
+        CompoundSelector filtered;
+        for (auto& s : subject.simples) {
+            if (s.type != SimpleSelectorType::PseudoElement) {
+                filtered.simples.push_back(s);
+            }
+        }
+
+        // If the filtered compound is empty (just ::before), treat as universal
+        bool subjectMatches = true;
+        if (!filtered.simples.empty()) {
+            // Match the filtered compound against elem
+            for (auto& s : filtered.simples) {
+                if (!matchSimple(s, elem)) {
+                    subjectMatches = false;
+                    break;
+                }
+            }
+        }
+
+        // Also match ancestor/sibling parts of the chain
+        if (subjectMatches && chain.entries.size() > 1) {
+            // Build a chain without the pseudo-element for matching
+            SelectorChain testChain;
+            SelectorChain::Entry subjectEntry;
+            subjectEntry.compound = filtered;
+            subjectEntry.combinator = Combinator::None;
+            testChain.entries.push_back(subjectEntry);
+            for (size_t i = 1; i < chain.entries.size(); i++) {
+                testChain.entries.push_back(chain.entries[i]);
+            }
+            Selector testSel;
+            testSel.chain = testChain;
+            subjectMatches = testSel.matches(elem);
+        }
+
+        if (!subjectMatches) continue;
+
+        for (auto& decl : rule.declarations) {
+            matched.push_back({
+                decl.property, decl.value, decl.important,
+                rule.selector.specificity, rule.order
+            });
+        }
+    }
+
+    if (matched.empty()) return {};
+
+    // Sort by cascade precedence
+    std::stable_sort(matched.begin(), matched.end(),
+        [](const MatchedDecl& a, const MatchedDecl& b) {
+            if (a.important != b.important) return !a.important;
+            if (a.specificity != b.specificity) return a.specificity < b.specificity;
+            return a.order < b.order;
+        });
+
+    // Apply declarations
+    ComputedStyle style;
+    for (auto& m : matched) {
+        auto expanded = expandShorthand(m.property, m.value);
+        for (auto& e : expanded) {
+            style[e.property] = e.value;
+        }
+    }
+
+    // Inherit from the originating element's style for inherited properties
+    for (auto& prop : knownProperties()) {
+        if (style.find(prop.name) == style.end()) {
+            if (prop.inherited) {
+                auto it = elemStyle.find(prop.name);
+                if (it != elemStyle.end()) {
+                    style[prop.name] = it->second;
+                } else {
+                    style[prop.name] = prop.initialValue;
+                }
+            } else {
+                style[prop.name] = prop.initialValue;
+            }
+        }
+    }
+
+    return style;
+}
+
 void Cascade::clear() {
     rules_.clear();
     nextOrder_ = 0;

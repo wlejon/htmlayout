@@ -402,6 +402,8 @@ bool matchNth(int a, int b, int index) {
     return n >= 0 && (n % a == 0);
 }
 
+} // anonymous namespace
+
 bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
     switch (ss.type) {
         case SimpleSelectorType::Universal:
@@ -574,8 +576,6 @@ bool matchChain(const SelectorChain& chain, const ElementRef& elem) {
     }
     return true;
 }
-
-} // anonymous namespace
 
 // ---- Public API ----
 

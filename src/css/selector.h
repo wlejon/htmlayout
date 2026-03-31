@@ -113,4 +113,7 @@ std::vector<Selector> parseSelectorList(const std::string& text);
 // Calculate specificity for a selector
 uint32_t calculateSpecificity(const std::string& selector);
 
+// Match a single simple selector against an element (used by cascade for pseudo-elements)
+bool matchSimple(const SimpleSelector& ss, const ElementRef& elem);
+
 } // namespace htmlayout::css

@@ -32,6 +32,14 @@ public:
                           const std::string& inlineStyle = {},
                           const ComputedStyle* parentStyle = nullptr) const;
 
+    // Resolve computed style for a pseudo-element (::before or ::after).
+    // Returns an empty style if no rules target this pseudo-element.
+    // The "content" property determines what text to generate.
+    // elemStyle is the computed style of the originating element (for inheritance).
+    ComputedStyle resolvePseudo(const ElementRef& elem,
+                                const std::string& pseudoName,
+                                const ComputedStyle& elemStyle) const;
+
     // Clear all stylesheets
     void clear();
 
