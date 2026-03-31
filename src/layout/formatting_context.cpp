@@ -45,8 +45,17 @@ float resolveLength(const std::string& value, float referenceSize, float fontSiz
     if (unit == "em") return num * fontSize;
     if (unit == "rem") return num * 16.0f; // root em, assume 16px default
     if (unit == "%") return num * referenceSize / 100.0f;
-    if (unit == "vw") return num * referenceSize / 100.0f; // approximate
+    if (unit == "vw") return num * referenceSize / 100.0f; // approximate as referenceSize
+    if (unit == "vh") return num * referenceSize / 100.0f; // approximate as referenceSize
+    if (unit == "vmin") return num * referenceSize / 100.0f; // approximate
+    if (unit == "vmax") return num * referenceSize / 100.0f; // approximate
     if (unit == "pt") return num * 96.0f / 72.0f;
+    if (unit == "ch") return num * fontSize * 0.5f; // approximate: ch ≈ width of '0' ≈ 0.5em
+    if (unit == "ex") return num * fontSize * 0.5f; // approximate: ex ≈ x-height ≈ 0.5em
+    if (unit == "cm") return num * 96.0f / 2.54f;
+    if (unit == "mm") return num * 96.0f / 25.4f;
+    if (unit == "in") return num * 96.0f;
+    if (unit == "pc") return num * 96.0f / 6.0f; // pica = 1/6 inch
 
     return num; // unknown unit, treat as px
 }

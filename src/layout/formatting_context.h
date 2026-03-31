@@ -7,7 +7,8 @@ namespace htmlayout::layout {
 // its computed display property, then dispatches to the right one.
 void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics);
 
-// Resolve CSS length values (px, em, %, auto) to pixels
+// Resolve CSS length values (px, em, rem, %, vw, vh, vmin, vmax, ch, pt, auto) to pixels.
+// viewportWidth/viewportHeight default to referenceSize when not separately available.
 float resolveLength(const std::string& value, float referenceSize, float fontSize);
 
 // Parse edges (margin, padding, border-width) from computed style

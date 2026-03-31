@@ -138,6 +138,26 @@ static void testResolveLengthUnitless() {
     check(approx(resolveLength("42", 100, 16), 42.0f), "42 (unitless) = 42");
 }
 
+static void testResolveLengthAdditionalUnits() {
+    printf("--- Layout: resolveLength additional units ---\n");
+    // ch ≈ 0.5em
+    check(approx(resolveLength("2ch", 100, 16), 16.0f), "2ch at 16px = 16 (0.5em each)");
+    check(approx(resolveLength("4ch", 100, 20), 40.0f), "4ch at 20px = 40");
+    // ex ≈ 0.5em
+    check(approx(resolveLength("1ex", 100, 16), 8.0f), "1ex at 16px = 8");
+    // vh (approximated)
+    check(approx(resolveLength("100vh", 800, 16), 800.0f), "100vh = referenceSize");
+    check(approx(resolveLength("50vh", 600, 16), 300.0f), "50vh = 300");
+    // vmin/vmax (approximated as referenceSize)
+    check(approx(resolveLength("100vmin", 400, 16), 400.0f), "100vmin = referenceSize");
+    check(approx(resolveLength("100vmax", 400, 16), 400.0f), "100vmax = referenceSize");
+    // cm/mm/in/pc
+    check(approx(resolveLength("1in", 100, 16), 96.0f), "1in = 96px");
+    check(approx(resolveLength("1cm", 100, 16), 96.0f / 2.54f), "1cm = 37.8px");
+    check(approx(resolveLength("10mm", 100, 16), 96.0f / 2.54f), "10mm = 37.8px");
+    check(approx(resolveLength("1pc", 100, 16), 16.0f), "1pc = 16px");
+}
+
 // ========== Block Layout Tests ==========
 
 static void testBlockSingleChild() {
@@ -652,6 +672,7 @@ void testLayout() {
     testResolveLengthAuto();
     testResolveLengthNamed();
     testResolveLengthUnitless();
+    testResolveLengthAdditionalUnits();
 
     // Block layout
     testBlockSingleChild();
