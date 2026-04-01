@@ -206,9 +206,48 @@ input, button, select, textarea {
     display: inline-block;
 }
 
+input {
+    width: 173px;
+    height: 20px;
+    padding: 2px 4px;
+}
+
 input[type="checkbox"], input[type="radio"] {
+    width: 13px;
+    height: 13px;
+    padding: 0;
     vertical-align: middle;
     margin-right: 3px;
+}
+
+input[type="range"] {
+    width: 160px;
+    height: 20px;
+    padding: 0;
+}
+
+input[type="color"] {
+    width: 44px;
+    height: 24px;
+    padding: 0;
+}
+
+input[type="button"], input[type="submit"], input[type="reset"] {
+    width: 80px;
+    height: 20px;
+    padding: 1px 6px;
+}
+
+input[type="hidden"] {
+    display: none;
+}
+
+select {
+    padding: 4px 6px;
+}
+
+textarea {
+    padding: 4px;
 }
 
 button {
