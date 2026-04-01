@@ -227,7 +227,14 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     const std::string& fontFamily = styleVal(style, "font-family");
     const std::string& fontWeight = styleVal(style, "font-weight");
 
+    // Determine if this container lays out children horizontally (sum) vs vertically (max)
+    const std::string& display = styleVal(style, "display");
+    const std::string& flexDir = styleVal(style, "flex-direction");
+    bool isHorizontal = (display == "flex" || display == "inline-flex") &&
+                        (flexDir.empty() || flexDir == "row" || flexDir == "row-reverse");
+
     float maxChildMax = 0.0f;
+    float sumChildMax = 0.0f;
 
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
@@ -246,16 +253,56 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
             if (!collapsed.empty() && collapsed.back() == ' ') collapsed.pop_back();
             float w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
             maxChildMax = std::max(maxChildMax, w);
+            sumChildMax += w;
         } else {
             auto& cs = child->computedStyle();
             if (styleVal(cs, "display") == "none") continue;
-            float childMax = computeMaxContentWidth(child, metrics);
-            float ph = resolveLength(styleVal(cs, "padding-left"), 0, fontSize) +
-                       resolveLength(styleVal(cs, "padding-right"), 0, fontSize);
-            float bh = resolveLength(styleVal(cs, "border-left-width"), 0, fontSize) +
-                       resolveLength(styleVal(cs, "border-right-width"), 0, fontSize);
-            maxChildMax = std::max(maxChildMax, childMax + ph + bh);
+            float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+            if (childFontSize <= 0) childFontSize = fontSize;
+            float ph = resolveLength(styleVal(cs, "padding-left"), 0, childFontSize) +
+                       resolveLength(styleVal(cs, "padding-right"), 0, childFontSize);
+            float bh = resolveLength(styleVal(cs, "border-left-width"), 0, childFontSize) +
+                       resolveLength(styleVal(cs, "border-right-width"), 0, childFontSize);
+            float mh = resolveLength(styleVal(cs, "margin-left"), 0, childFontSize) +
+                       resolveLength(styleVal(cs, "margin-right"), 0, childFontSize);
+            // Use explicit width if set, otherwise recurse for intrinsic size
+            const std::string& wVal = styleVal(cs, "width");
+            float childMax;
+            if (!wVal.empty() && wVal != "auto") {
+                float w = resolveLength(wVal, 0, childFontSize);
+                if (styleVal(cs, "box-sizing") == "border-box")
+                    childMax = w + mh;
+                else
+                    childMax = w + ph + bh + mh;
+            } else {
+                childMax = computeMaxContentWidth(child, metrics) + ph + bh + mh;
+            }
+            // Apply min-width
+            const std::string& minWVal = styleVal(cs, "min-width");
+            if (!minWVal.empty() && minWVal != "auto") {
+                float minW = resolveLength(minWVal, 0, childFontSize);
+                if (childMax < minW + mh) childMax = minW + mh;
+            }
+            maxChildMax = std::max(maxChildMax, childMax);
+            sumChildMax += childMax;
         }
+    }
+    // Flex-row: children are side-by-side, so sum their widths.
+    // Block/flex-column: children stack, so use the widest.
+    if (isHorizontal) {
+        // Add gaps between children
+        float gap = resolveLength(styleVal(style, "column-gap"), 0, fontSize);
+        int childCount = 0;
+        for (auto* child : getLayoutChildren(node)) {
+            if (!child->isTextNode()) {
+                auto& cs = child->computedStyle();
+                if (styleVal(cs, "display") != "none") childCount++;
+            } else {
+                childCount++;
+            }
+        }
+        if (childCount > 1) sumChildMax += gap * (childCount - 1);
+        return sumChildMax;
     }
     return maxChildMax;
 }
