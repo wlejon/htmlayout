@@ -7,30 +7,42 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 ## Features
 
 **CSS Engine**
-- W3C-compliant tokenizer and parser
-- Selector matching: type, class, ID, attribute, pseudo-classes (`:nth-child`, `:not`, `:is`, `:hover`, `:focus`, `:defined`, etc.), pseudo-elements (`::before`, `::after`, `::slotted()`, `::part()`)
+- W3C-compliant tokenizer and parser (Syntax Module Level 3)
+- Selector matching: type, class, ID, attribute, pseudo-classes (`:nth-child`, `:not`, `:is`, `:where`, `:hover`, `:focus`, `:defined`, etc.), pseudo-elements (`::before`, `::after`)
 - Combinators: descendant, child (`>`), adjacent sibling (`+`), general sibling (`~`)
-- Full cascade with specificity, source order, `!important`, and inheritance
-- `@layer` cascade layers with spec-compliant priority ordering
+- Full cascade with specificity, source order, `!important`, and inheritance (Cascade Level 5)
+- `@layer` cascade layers with spec-compliant priority ordering (including `!important` reversal)
 - `@container` queries with named containers and size containment
-- Shorthand expansion (`margin`, `padding`, `border`, `flex`, `background`, `font`, `container`)
+- Shorthand expansion for ~150 properties (`margin`, `padding`, `border`, `flex`, `grid`, `font`, `container`, etc.)
 - Color parsing (named, hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`)
-- `@media` query evaluation
+- `@media` query evaluation (basic conditions: `min/max-width`, `min/max-height`, `orientation`)
+- CSS Variables (`var()`) with fallback and inheritance
 - Built-in user-agent stylesheet
 - Shadow DOM and web component support: `:host`, `:host()`, `:host-context()`, `::slotted()`, `::part()`, scoped stylesheets
 
 **Layout Engine**
-- Block formatting context with margin collapsing and floats
-- Inline formatting context with line wrapping and text alignment
+- Block formatting context with margin collapsing and floats (`left`, `right`, `clear`)
+- Inline formatting context with line wrapping and text alignment (`left`, `right`, `center`, `justify`)
 - Flexbox (`flex-direction`, `flex-wrap`, `justify-content`, `align-items`, grow/shrink, gap, order)
-- CSS Grid (templates, auto-placement, span, gap)
-- Table layout
-- Length units: `px`, `em`, `%`, `vw`, `vh`, `vmin`, `vmax`, `rem`, `ch`, `pt`, `cm`, `mm`, `in`, `pc`
-- `calc()` expressions
+- CSS Grid (templates, auto-placement, 1-based line placement, gap, `fr` units)
+- Table layout (simplified algorithm; handles `table-row`, `table-cell`, `table-caption`, `border-spacing`, `border-collapse`)
+- Basic Multi-column layout (`column-count`, `column-width`, `column-gap`)
+- Length units: `px`, `em`, `%`, `vw`, `vh`, `vmin`, `vmax`, `rem`, `ch`, `ex`, `pt`, `cm`, `mm`, `in`, `pc`
+- `calc()` expressions with basic math (`+`, `-`, `*`, `/`) and nested parentheses
 - Intrinsic sizing (`min-content`, `max-content`, `fit-content`)
 - Hit testing with z-order, overflow clipping, and `pointer-events`
 - Incremental (dirty-flag) relayout
-- `text-overflow`, `overflow-wrap`, `word-break`, `white-space` handling
+- `text-overflow: ellipsis`, `overflow-wrap`, `word-break`, `white-space` handling
+- `position: relative`, `absolute`, `fixed`, `sticky` (layout-time positioning)
+
+## Current Limitations
+
+- **Flexbox**: `align-content` is parsed but not currently used for distributing flex lines.
+- **Table Layout**: Simplified distribution; does not currently support `rowspan` or `colspan`.
+- **Grid Layout**: Named areas (`grid-template-areas`) are parsed but not used for placement.
+- **Multi-column**: Basic redistribution; lacks advanced break controls and `column-span: all`.
+- **Queries**: Range syntax (`width > 500px`) and logical `or` are not yet supported in `@media` and `@container`.
+- **Keywords**: `revert` is currently treated as `unset`.
 
 ## Requirements
 
