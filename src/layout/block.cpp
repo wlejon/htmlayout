@@ -113,10 +113,27 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Available width for children
     float childAvailable = contentWidth;
 
-    // Propagate viewport height to all children before layout
+    // Resolve definite height early so children can use percentage heights.
+    // For auto-height parents, children get availableHeight = 0 (per CSS spec,
+    // percentage heights only resolve against definite containing-block heights).
+    float paddingV = node->box.padding.top + node->box.padding.bottom;
+    float borderV = node->box.border.top + node->box.border.bottom;
+    float earlyHeight = resolveDimension(styleVal(style, "height"), node->availableHeight, fontSize);
+    float earlyChildAvailableHeight = 0.0f;
+    if (earlyHeight >= 0.0f) {
+        const std::string& boxSizing = styleVal(style, "box-sizing");
+        if (boxSizing == "border-box")
+            earlyChildAvailableHeight = earlyHeight - paddingV - borderV;
+        else
+            earlyChildAvailableHeight = earlyHeight;
+        if (earlyChildAvailableHeight < 0.0f) earlyChildAvailableHeight = 0.0f;
+    }
+
+    // Propagate viewport height and available height to all children before layout
     for (auto* child : node->children()) {
         if (!child->isTextNode()) {
             child->viewportHeight = node->viewportHeight;
+            child->availableHeight = earlyChildAvailableHeight;
         }
     }
 

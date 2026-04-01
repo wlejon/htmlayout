@@ -97,11 +97,24 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float gapMain = resolveLength(styleVal(style, isRow ? "column-gap" : "row-gap"), mainAvailable, fontSize);
     float gapCross = resolveLength(styleVal(style, isRow ? "row-gap" : "column-gap"), mainAvailable, fontSize);
 
+    // Resolve definite cross size for percentage height propagation to children
+    float crossSpecH = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+    float childAvailableHeight = 0.0f;
+    if (isRow && crossSpecH >= 0) {
+        if (styleVal(style, "box-sizing") == "border-box")
+            childAvailableHeight = crossSpecH - paddingV - borderV;
+        else
+            childAvailableHeight = crossSpecH;
+        if (childAvailableHeight < 0) childAvailableHeight = 0;
+    }
+
     // Collect flex items, filtering out absolutely/fixed positioned children
     std::vector<LayoutNode*> absChildren;
     std::vector<FlexItem> items;
     for (auto* child : node->children()) {
         if (child->isTextNode()) continue;
+        child->viewportHeight = node->viewportHeight;
+        child->availableHeight = childAvailableHeight;
         auto& cs = child->computedStyle();
         if (styleVal(cs, "display") == "none") {
             child->box = LayoutBox{};
