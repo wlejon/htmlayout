@@ -176,6 +176,35 @@ static void testLonghandOverridesShorthand() {
     check(style["margin-right"] == "10px", "cascade: other sides from shorthand preserved");
 }
 
+static void testInset() {
+    printf("--- Shorthand: inset ---\n");
+    // 1 value: all sides
+    auto r1 = expandShorthand("inset", "10px");
+    check(r1.size() == 4, "inset 1-value -> 4 longhands");
+    check(r1[0].property == "top" && r1[0].value == "10px", "inset 1v: top");
+    check(r1[1].property == "right" && r1[1].value == "10px", "inset 1v: right");
+    check(r1[2].property == "bottom" && r1[2].value == "10px", "inset 1v: bottom");
+    check(r1[3].property == "left" && r1[3].value == "10px", "inset 1v: left");
+
+    // 2 values: vertical horizontal
+    auto r2 = expandShorthand("inset", "10px 20px");
+    check(r2[0].property == "top" && r2[0].value == "10px", "inset 2v: top=10px");
+    check(r2[1].property == "right" && r2[1].value == "20px", "inset 2v: right=20px");
+    check(r2[2].property == "bottom" && r2[2].value == "10px", "inset 2v: bottom=10px");
+    check(r2[3].property == "left" && r2[3].value == "20px", "inset 2v: left=20px");
+
+    // 4 values: top right bottom left
+    auto r4 = expandShorthand("inset", "1px 2px 3px 4px");
+    check(r4[0].property == "top" && r4[0].value == "1px", "inset 4v: top=1px");
+    check(r4[1].property == "right" && r4[1].value == "2px", "inset 4v: right=2px");
+    check(r4[2].property == "bottom" && r4[2].value == "3px", "inset 4v: bottom=3px");
+    check(r4[3].property == "left" && r4[3].value == "4px", "inset 4v: left=4px");
+
+    // auto value
+    auto ra = expandShorthand("inset", "0 auto");
+    check(ra[0].value == "0" && ra[1].value == "auto", "inset: 0 auto");
+}
+
 void testShorthand() {
     testMargin();
     testPadding();
@@ -191,4 +220,5 @@ void testShorthand() {
     testInCascade();
     testOverrideLonghand();
     testLonghandOverridesShorthand();
+    testInset();
 }

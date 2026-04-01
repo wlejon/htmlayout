@@ -347,6 +347,58 @@ static void testInlineTextAlignJustify() {
     check(approx(ib4.box.contentRect.x, 0), "justify: last line not justified (x=0)");
 }
 
+static void testInlineAbsolutePositioning() {
+    printf("--- Inline: absolute positioning ---\n");
+    InlineMockNode root;
+    initBlock(root);
+    root.style["width"] = "400px";
+    root.style["height"] = "200px";
+
+    InlineMockNode absChild;
+    initBlock(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.style["width"] = "80px";
+    absChild.style["height"] = "40px";
+    absChild.style["top"] = "10px";
+    absChild.style["left"] = "20px";
+
+    root.addChild(&absChild);
+
+    FixedTextMetrics metrics;
+    layoutTree(&root, 500.0f, metrics);
+
+    check(approx(absChild.box.contentRect.x, 20.0f), "inline abs: x = left:20");
+    check(approx(absChild.box.contentRect.y, 10.0f), "inline abs: y = top:10");
+    check(approx(absChild.box.contentRect.width, 80.0f), "inline abs: width preserved");
+    check(approx(absChild.box.contentRect.height, 40.0f), "inline abs: height preserved");
+}
+
+static void testInlineAbsoluteBottomRight() {
+    printf("--- Inline: absolute bottom/right ---\n");
+    InlineMockNode root;
+    initBlock(root);
+    root.style["width"] = "400px";
+    root.style["height"] = "200px";
+
+    InlineMockNode absChild;
+    initBlock(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.style["width"] = "100px";
+    absChild.style["height"] = "50px";
+    absChild.style["bottom"] = "10px";
+    absChild.style["right"] = "20px";
+
+    root.addChild(&absChild);
+
+    FixedTextMetrics metrics;
+    layoutTree(&root, 500.0f, metrics);
+
+    // x = 400 - 20 - 100 = 280
+    check(approx(absChild.box.contentRect.x, 280.0f), "inline abs bottom/right: x = 280");
+    // y = 200 - 10 - 50 = 140
+    check(approx(absChild.box.contentRect.y, 140.0f), "inline abs bottom/right: y = 140");
+}
+
 // ========== Entry point ==========
 
 void testInlineLayout() {
@@ -367,4 +419,8 @@ void testInlineLayout() {
     testInlineMultipleInlineBlocks();
     testInlineDisplayNone();
     testInlineTextAlignJustify();
+
+    // Absolute positioning in inline containers
+    testInlineAbsolutePositioning();
+    testInlineAbsoluteBottomRight();
 }

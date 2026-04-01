@@ -316,6 +316,87 @@ static void testFlexAlignStretch() {
     check(approx(c3.box.contentRect.height, 60), "stretch: auto-height item stretches to line height");
 }
 
+static void testFlexAbsolutePositioning() {
+    printf("--- Flex: absolute positioning ---\n");
+    FlexMockNode root; initFlexContainer(root);
+    root.style["width"] = "600px";
+    root.style["height"] = "400px";
+
+    FlexMockNode inflow;
+    initFlexItem(inflow); inflow.style["width"] = "100px"; inflow.style["height"] = "50px";
+
+    FlexMockNode absChild;
+    initFlexItem(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.style["width"] = "80px";
+    absChild.style["height"] = "40px";
+    absChild.style["top"] = "10px";
+    absChild.style["left"] = "20px";
+
+    root.addChild(&inflow);
+    root.addChild(&absChild);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 800, m);
+
+    check(approx(absChild.box.contentRect.x, 20), "flex abs: x = left:20");
+    check(approx(absChild.box.contentRect.y, 10), "flex abs: y = top:10");
+    check(approx(absChild.box.contentRect.width, 80), "flex abs: width preserved");
+    check(approx(absChild.box.contentRect.height, 40), "flex abs: height preserved");
+    // In-flow item unaffected
+    check(approx(inflow.box.contentRect.x, 0), "flex abs: in-flow item at x=0");
+}
+
+static void testFlexAbsoluteBottomRight() {
+    printf("--- Flex: absolute bottom/right ---\n");
+    FlexMockNode root; initFlexContainer(root);
+    root.style["width"] = "500px";
+    root.style["height"] = "300px";
+
+    FlexMockNode absChild;
+    initFlexItem(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.style["width"] = "100px";
+    absChild.style["height"] = "50px";
+    absChild.style["bottom"] = "10px";
+    absChild.style["right"] = "20px";
+
+    root.addChild(&absChild);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 800, m);
+
+    // x = 500 - 20 - 100 = 380
+    check(approx(absChild.box.contentRect.x, 380), "flex abs bottom/right: x = 380");
+    // y = 300 - 10 - 50 = 240
+    check(approx(absChild.box.contentRect.y, 240), "flex abs bottom/right: y = 240");
+}
+
+static void testFlexAbsoluteStretch() {
+    printf("--- Flex: absolute stretch ---\n");
+    FlexMockNode root; initFlexContainer(root);
+    root.style["width"] = "600px";
+    root.style["height"] = "400px";
+
+    FlexMockNode absChild;
+    initFlexItem(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.style["top"] = "10px";
+    absChild.style["bottom"] = "20px";
+    absChild.style["left"] = "30px";
+    absChild.style["right"] = "40px";
+
+    root.addChild(&absChild);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 800, m);
+
+    // width = 600 - 30 - 40 = 530
+    check(approx(absChild.box.contentRect.width, 530), "flex abs stretch: width = 530");
+    // height = 400 - 10 - 20 = 370
+    check(approx(absChild.box.contentRect.height, 370), "flex abs stretch: height = 370");
+}
+
 // ========== Entry point ==========
 
 void testFlexLayout() {
@@ -333,4 +414,9 @@ void testFlexLayout() {
     testFlexOrder();
     testFlexDisplayNone();
     testFlexAlignStretch();
+
+    // Absolute positioning in flex
+    testFlexAbsolutePositioning();
+    testFlexAbsoluteBottomRight();
+    testFlexAbsoluteStretch();
 }

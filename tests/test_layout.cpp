@@ -772,6 +772,64 @@ static void testPositionAbsoluteStretch() {
     check(approx(absChild.box.contentRect.height, 370.0f), "absolute stretch: height = 400-10-20 = 370");
 }
 
+static void testPositionAbsoluteInTable() {
+    printf("--- Layout: absolute positioning in table ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setDisplay("table");
+    root.setWidth("500px");
+    root.setHeight("300px");
+    root.style["border-collapse"] = "separate";
+    root.style["border-spacing"] = "0";
+
+    MockLayoutNode absChild;
+    initBlock(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.setWidth("80px");
+    absChild.setHeight("40px");
+    absChild.style["top"] = "10px";
+    absChild.style["left"] = "20px";
+
+    root.addChild(&absChild);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    check(approx(absChild.box.contentRect.x, 20.0f), "table abs: x = left:20");
+    check(approx(absChild.box.contentRect.y, 10.0f), "table abs: y = top:10");
+    check(approx(absChild.box.contentRect.width, 80.0f), "table abs: width preserved");
+    check(approx(absChild.box.contentRect.height, 40.0f), "table abs: height preserved");
+}
+
+static void testPositionAbsoluteInTableBottomRight() {
+    printf("--- Layout: absolute in table bottom/right ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setDisplay("table");
+    root.setWidth("500px");
+    root.setHeight("300px");
+    root.style["border-collapse"] = "separate";
+    root.style["border-spacing"] = "0";
+
+    MockLayoutNode absChild;
+    initBlock(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.setWidth("100px");
+    absChild.setHeight("50px");
+    absChild.style["bottom"] = "10px";
+    absChild.style["right"] = "20px";
+
+    root.addChild(&absChild);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // x = 500 - 20 - 100 = 380
+    check(approx(absChild.box.contentRect.x, 380.0f), "table abs bottom/right: x = 380");
+    // y = 300 - 10 - 50 = 240
+    check(approx(absChild.box.contentRect.y, 240.0f), "table abs bottom/right: y = 240");
+}
+
 // ========== Entry point ==========
 
 void testLayout() {
@@ -816,4 +874,6 @@ void testLayout() {
     testPositionAbsolute();
     testPositionAbsoluteBottomRight();
     testPositionAbsoluteStretch();
+    testPositionAbsoluteInTable();
+    testPositionAbsoluteInTableBottomRight();
 }

@@ -48,8 +48,10 @@ int getZIndex(const css::ComputedStyle& style) {
 bool createsStackingContext(const css::ComputedStyle& style) {
     const std::string& pos = styleVal(style, "position");
     const std::string& z = styleVal(style, "z-index");
-    // Positioned element with z-index other than auto
-    if ((pos == "absolute" || pos == "relative" || pos == "fixed" || pos == "sticky") &&
+    // position:fixed and position:sticky always create a stacking context
+    if (pos == "fixed" || pos == "sticky") return true;
+    // Other positioned elements with z-index other than auto
+    if ((pos == "absolute" || pos == "relative") &&
         !z.empty() && z != "auto") {
         return true;
     }

@@ -397,6 +397,73 @@ static void testSupportsRule() {
     check(sheet.rules.size() >= 2, "@supports: rules included from supported condition");
 }
 
+// ========== Grid Absolute Positioning ==========
+
+static void testGridAbsolutePositioning() {
+    printf("--- Grid: absolute positioning ---\n");
+    GridNode grid;
+    grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-columns"] = "1fr 1fr";
+    grid.style_["width"] = "600px";
+    grid.style_["height"] = "400px";
+    grid.style_["row-gap"] = "0";
+    grid.style_["column-gap"] = "0";
+
+    GridNode inflow;
+    inflow.initBlock();
+    inflow.style_["height"] = "50px";
+
+    GridNode absChild;
+    absChild.initBlock();
+    absChild.style_["position"] = "absolute";
+    absChild.style_["width"] = "80px";
+    absChild.style_["height"] = "40px";
+    absChild.style_["top"] = "15px";
+    absChild.style_["left"] = "25px";
+
+    grid.addChild(&inflow);
+    grid.addChild(&absChild);
+
+    GridMetrics metrics;
+    layoutTree(&grid, 800.0f, metrics);
+
+    check(approx(absChild.box.contentRect.x, 25.0f), "grid abs: x = left:25");
+    check(approx(absChild.box.contentRect.y, 15.0f), "grid abs: y = top:15");
+    check(approx(absChild.box.contentRect.width, 80.0f), "grid abs: width preserved");
+    check(approx(absChild.box.contentRect.height, 40.0f), "grid abs: height preserved");
+}
+
+static void testGridAbsoluteStretch() {
+    printf("--- Grid: absolute stretch ---\n");
+    GridNode grid;
+    grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-columns"] = "1fr";
+    grid.style_["width"] = "500px";
+    grid.style_["height"] = "300px";
+    grid.style_["row-gap"] = "0";
+    grid.style_["column-gap"] = "0";
+
+    GridNode absChild;
+    absChild.initBlock();
+    absChild.style_["position"] = "absolute";
+    absChild.style_["top"] = "10px";
+    absChild.style_["bottom"] = "20px";
+    absChild.style_["left"] = "30px";
+    absChild.style_["right"] = "40px";
+
+    grid.addChild(&absChild);
+
+    GridMetrics metrics;
+    layoutTree(&grid, 800.0f, metrics);
+
+    // width = 500 - 30 - 40 = 430
+    check(approx(absChild.box.contentRect.width, 430.0f), "grid abs stretch: width = 430");
+    // height = 300 - 10 - 20 = 270
+    check(approx(absChild.box.contentRect.height, 270.0f), "grid abs stretch: height = 270");
+}
+
 // ========== Grid Properties in Registry ==========
 
 static void testGridProperties() {
@@ -427,4 +494,8 @@ void testGridLayout() {
     testPositionSticky();
     testSupportsRule();
     testGridProperties();
+
+    // Absolute positioning in grid
+    testGridAbsolutePositioning();
+    testGridAbsoluteStretch();
 }

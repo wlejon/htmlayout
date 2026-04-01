@@ -445,6 +445,10 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         expandBoxShorthand("padding", parts, out);
         return out;
     }
+    if (property == "inset") {
+        auto bv = resolveBoxValues(parts);
+        return {{"top", bv.top}, {"right", bv.right}, {"bottom", bv.bottom}, {"left", bv.left}};
+    }
 
     if (property == "border-width") {
         std::vector<ExpandedDecl> out;

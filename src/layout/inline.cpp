@@ -495,11 +495,11 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
 
             bool shrinkWrap = (specAbsW < 0 && !(left >= 0 && right >= 0));
             if (shrinkWrap) {
-                layoutNode(child, 100000.0f, metrics);
-                float intrW = std::min(child->box.contentRect.width, cbWidth);
-                child->box.contentRect.width = intrW;
-                layoutNode(child, intrW + child->box.padding.left + child->box.padding.right +
-                           child->box.border.left + child->box.border.right, metrics);
+                float maxCW = computeMaxContentWidth(child, metrics);
+                if (maxCW > cbWidth) maxCW = cbWidth;
+                layoutNode(child, maxCW + child->box.padding.left + child->box.padding.right +
+                           child->box.border.left + child->box.border.right +
+                           child->box.margin.left + child->box.margin.right, metrics);
             } else {
                 layoutNode(child, cbWidth, metrics);
             }
