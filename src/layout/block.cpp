@@ -495,19 +495,16 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         // For absolutely positioned elements with width:auto, shrink-wrap to content
         // unless both left and right are set (which stretches to fill).
-        float layoutAvail = cbWidth;
         bool shrinkWrap = (absSpecW < 0 && !(absLeft >= 0 && absRight >= 0));
         if (shrinkWrap) {
-            // Layout with a large available width to measure intrinsic content size
-            layoutNode(child, 100000.0f, metrics);
-            // Use the content width that the child actually used
-            float intrinsicW = child->box.contentRect.width;
+            // Compute max-content width (intrinsic preferred width)
+            float maxCW = computeMaxContentWidth(child, metrics);
             // Cap to container width
-            if (intrinsicW > cbWidth) intrinsicW = cbWidth;
-            child->box.contentRect.width = intrinsicW;
-            // Re-layout at the correct width for proper child positioning
-            layoutNode(child, intrinsicW + child->box.padding.left + child->box.padding.right +
-                       child->box.border.left + child->box.border.right, metrics);
+            if (maxCW > cbWidth) maxCW = cbWidth;
+            // Layout at the shrink-wrapped width
+            layoutNode(child, maxCW + child->box.padding.left + child->box.padding.right +
+                       child->box.border.left + child->box.border.right +
+                       child->box.margin.left + child->box.margin.right, metrics);
         } else {
             layoutNode(child, cbWidth, metrics);
         }
