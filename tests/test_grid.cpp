@@ -404,6 +404,7 @@ static void testGridAbsolutePositioning() {
     GridNode grid;
     grid.initBlock();
     grid.style_["display"] = "grid";
+    grid.style_["position"] = "relative";
     grid.style_["grid-template-columns"] = "1fr 1fr";
     grid.style_["width"] = "600px";
     grid.style_["height"] = "400px";
@@ -439,6 +440,7 @@ static void testGridAbsoluteStretch() {
     GridNode grid;
     grid.initBlock();
     grid.style_["display"] = "grid";
+    grid.style_["position"] = "relative";
     grid.style_["grid-template-columns"] = "1fr";
     grid.style_["width"] = "500px";
     grid.style_["height"] = "300px";

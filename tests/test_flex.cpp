@@ -319,6 +319,7 @@ static void testFlexAlignStretch() {
 static void testFlexAbsolutePositioning() {
     printf("--- Flex: absolute positioning ---\n");
     FlexMockNode root; initFlexContainer(root);
+    root.style["position"] = "relative";
     root.style["width"] = "600px";
     root.style["height"] = "400px";
 
@@ -350,6 +351,7 @@ static void testFlexAbsolutePositioning() {
 static void testFlexAbsoluteBottomRight() {
     printf("--- Flex: absolute bottom/right ---\n");
     FlexMockNode root; initFlexContainer(root);
+    root.style["position"] = "relative";
     root.style["width"] = "500px";
     root.style["height"] = "300px";
 
@@ -375,6 +377,7 @@ static void testFlexAbsoluteBottomRight() {
 static void testFlexAbsoluteStretch() {
     printf("--- Flex: absolute stretch ---\n");
     FlexMockNode root; initFlexContainer(root);
+    root.style["position"] = "relative";
     root.style["width"] = "600px";
     root.style["height"] = "400px";
 

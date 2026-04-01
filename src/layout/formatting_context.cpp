@@ -368,4 +368,227 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 }
 
+// ============================================================
+// Post-layout pass: position absolute/fixed elements
+// ============================================================
+
+namespace {
+
+// Resolve a dimension that returns -1 for auto/none/empty (sentinel)
+float resolveDimAbs(const std::string& value, float available, float fontSize) {
+    if (value.empty() || value == "auto" || value == "none") return -1.0f;
+    return resolveLength(value, available, fontSize);
+}
+
+// Check if a node establishes a containing block for absolute descendants.
+// Per CSS spec: position != static, or has transform/filter/perspective.
+bool isContainingBlock(LayoutNode* node) {
+    auto& style = node->computedStyle();
+    const std::string& pos = styleVal(style, "position");
+    if (pos == "relative" || pos == "absolute" || pos == "fixed" || pos == "sticky")
+        return true;
+    // transform, filter, and perspective also create containing blocks
+    const std::string& transform = styleVal(style, "transform");
+    if (!transform.empty() && transform != "none") return true;
+    const std::string& filter = styleVal(style, "filter");
+    if (!filter.empty() && filter != "none") return true;
+    return false;
+}
+
+// Find the containing block for an absolute element: nearest positioned ancestor.
+// Returns nullptr if none found (meaning use the initial containing block / viewport).
+LayoutNode* findContainingBlock(LayoutNode* node) {
+    for (LayoutNode* p = node->parent(); p != nullptr; p = p->parent()) {
+        if (isContainingBlock(p)) return p;
+    }
+    return nullptr; // initial containing block
+}
+
+// Compute accumulated offset from a node's parent up to (but not including) an ancestor.
+// This is the sum of contentRect.x/y of all intermediate nodes between
+// the node's DOM parent and the containing block.
+struct Offset { float x, y; };
+
+Offset computeOffsetToAncestor(LayoutNode* from, LayoutNode* to) {
+    Offset off{0, 0};
+    for (LayoutNode* p = from; p != nullptr && p != to; p = p->parent()) {
+        off.x += p->box.contentRect.x;
+        off.y += p->box.contentRect.y;
+    }
+    return off;
+}
+
+// Layout and position a single absolute/fixed child.
+void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
+                         float cbOriginOffsetX, float cbOriginOffsetY,
+                         float domParentOffsetX, float domParentOffsetY,
+                         float viewportHeight, TextMetrics& metrics) {
+    auto& childStyle = child->computedStyle();
+    float fontSize = resolveLength(styleVal(childStyle, "font-size"), 16.0f, 16.0f);
+    if (fontSize <= 0.0f) fontSize = 16.0f;
+
+    // Set available height for the child's own percentage resolution
+    child->availableHeight = cbHeight;
+
+    // Resolve offsets and explicit dimensions
+    float left = resolveDimAbs(styleVal(childStyle, "left"), cbWidth, fontSize);
+    float right = resolveDimAbs(styleVal(childStyle, "right"), cbWidth, fontSize);
+    float specW = resolveDimAbs(styleVal(childStyle, "width"), cbWidth, fontSize);
+    float top = resolveDimAbs(styleVal(childStyle, "top"), cbHeight, fontSize);
+    float bottom = resolveDimAbs(styleVal(childStyle, "bottom"), cbHeight, fontSize);
+    float specH = resolveDimAbs(styleVal(childStyle, "height"), cbHeight, fontSize);
+
+    // Determine available width for layout
+    // Shrink-wrap if width:auto and not both left+right set
+    bool shrinkWrap = (specW < 0 && !(left >= 0 && right >= 0));
+    if (shrinkWrap) {
+        float maxCW = computeMaxContentWidth(child, metrics);
+        if (maxCW > cbWidth) maxCW = cbWidth;
+        layoutNode(child, maxCW + child->box.padding.left + child->box.padding.right +
+                   child->box.border.left + child->box.border.right +
+                   child->box.margin.left + child->box.margin.right, metrics);
+    } else {
+        layoutNode(child, cbWidth, metrics);
+    }
+
+    // Stretch width if both left and right are set and width is auto
+    if (specW < 0 && left >= 0 && right >= 0) {
+        float w = cbWidth - left - right -
+                  child->box.margin.left - child->box.margin.right -
+                  child->box.padding.left - child->box.padding.right -
+                  child->box.border.left - child->box.border.right;
+        if (w > 0) child->box.contentRect.width = w;
+    }
+
+    // Stretch height if both top and bottom are set and height is auto
+    if (specH < 0 && top >= 0 && bottom >= 0) {
+        float h = cbHeight - top - bottom -
+                  child->box.margin.top - child->box.margin.bottom -
+                  child->box.padding.top - child->box.padding.bottom -
+                  child->box.border.top - child->box.border.bottom;
+        if (h > 0) child->box.contentRect.height = h;
+    }
+
+    // Compute position in containing-block-relative space
+    float xInCB = child->box.margin.left + child->box.padding.left + child->box.border.left;
+    float yInCB = child->box.margin.top + child->box.padding.top + child->box.border.top;
+
+    if (left >= 0) {
+        xInCB = left + child->box.margin.left + child->box.padding.left + child->box.border.left;
+    } else if (right >= 0) {
+        xInCB = cbWidth - right - child->box.margin.right -
+                child->box.padding.right - child->box.border.right - child->box.contentRect.width;
+    }
+
+    if (top >= 0) {
+        yInCB = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
+    } else if (bottom >= 0) {
+        yInCB = cbHeight - bottom - child->box.margin.bottom -
+                child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
+    }
+
+    // Transform from CB space to DOM-parent-relative space.
+    // cbOriginOffset: the CB's padding-box origin in absolute coordinates
+    // domParentOffset: the DOM parent's content-area origin in absolute coordinates
+    // contentRect must be relative to the DOM parent's content area
+    child->box.contentRect.x = xInCB + cbOriginOffsetX - domParentOffsetX;
+    child->box.contentRect.y = yInCB + cbOriginOffsetY - domParentOffsetY;
+}
+
+// Compute the absolute position of a node's content area origin
+// by walking from root and accumulating contentRect offsets.
+Offset computeAbsolutePosition(LayoutNode* node) {
+    // Build path from root to node
+    std::vector<LayoutNode*> path;
+    for (LayoutNode* p = node; p != nullptr; p = p->parent()) {
+        path.push_back(p);
+    }
+    // Walk from root (end of vector) toward node, accumulating offsets
+    Offset off{0, 0};
+    // The root's contentRect is in viewport space, so start from it
+    // Each node's contentRect.x/y is relative to its parent's content area
+    for (int i = static_cast<int>(path.size()) - 1; i >= 0; --i) {
+        off.x += path[i]->box.contentRect.x;
+        off.y += path[i]->box.contentRect.y;
+    }
+    return off;
+}
+
+// Recursive tree walk to find and position all absolute/fixed elements.
+// Processes in depth-first pre-order so ancestor absolutes are positioned
+// before their descendant absolutes.
+void layoutAbsoluteElementsRecursive(LayoutNode* node, const Viewport& viewport,
+                                      TextMetrics& metrics) {
+    for (auto* child : node->children()) {
+        if (!child || child->isTextNode()) continue;
+
+        auto& style = child->computedStyle();
+        const std::string& display = styleVal(style, "display");
+        if (display == "none") continue;
+
+        const std::string& pos = styleVal(style, "position");
+
+        if (pos == "fixed") {
+            // Fixed: containing block is the viewport
+            float cbWidth = viewport.width;
+            float cbHeight = viewport.height;
+
+            // CB origin is (0, 0) in absolute space
+            float cbOriginX = 0, cbOriginY = 0;
+
+            // DOM parent's absolute content position
+            Offset parentPos = computeAbsolutePosition(node);
+
+            child->viewportHeight = viewport.height;
+            layoutAbsoluteChild(child, cbWidth, cbHeight,
+                                cbOriginX, cbOriginY,
+                                parentPos.x, parentPos.y,
+                                viewport.height, metrics);
+        } else if (pos == "absolute") {
+            // Find the containing block
+            LayoutNode* cb = findContainingBlock(child);
+
+            float cbWidth, cbHeight;
+            float cbOriginX, cbOriginY;
+
+            if (cb) {
+                // Containing block is the padding box of the positioned ancestor
+                cbWidth = cb->box.contentRect.width + cb->box.padding.left + cb->box.padding.right;
+                cbHeight = cb->box.contentRect.height + cb->box.padding.top + cb->box.padding.bottom;
+
+                // CB's padding-box origin in absolute coordinates
+                Offset cbPos = computeAbsolutePosition(cb);
+                cbOriginX = cbPos.x - cb->box.padding.left;
+                cbOriginY = cbPos.y - cb->box.padding.top;
+            } else {
+                // No positioned ancestor: use viewport (initial containing block)
+                cbWidth = viewport.width;
+                cbHeight = viewport.height;
+                cbOriginX = 0;
+                cbOriginY = 0;
+            }
+
+            // DOM parent's absolute content position
+            Offset parentPos = computeAbsolutePosition(node);
+
+            child->viewportHeight = viewport.height;
+            layoutAbsoluteChild(child, cbWidth, cbHeight,
+                                cbOriginX, cbOriginY,
+                                parentPos.x, parentPos.y,
+                                viewport.height, metrics);
+        }
+
+        // Recurse into children (including into absolute elements, which can
+        // contain further absolute descendants)
+        layoutAbsoluteElementsRecursive(child, viewport, metrics);
+    }
+}
+
+} // anonymous namespace
+
+void layoutAbsoluteElements(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
+    if (!root) return;
+    layoutAbsoluteElementsRecursive(root, viewport, metrics);
+}
+
 } // namespace htmlayout::layout

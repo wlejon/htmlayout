@@ -95,7 +95,6 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     };
     std::vector<TableRow> rows;
     std::vector<LayoutNode*> captions;
-    std::vector<LayoutNode*> absChildren;
 
     auto collectRows = [&](LayoutNode* parent) {
         for (auto* child : getLayoutChildren(parent)) {
@@ -104,12 +103,9 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             const std::string& d = styleVal(cs, "display");
             if (d == "none") { child->box = LayoutBox{}; continue; }
 
-            // Collect absolutely/fixed positioned children out of flow
+            // Absolutely/fixed positioned children are out of flow
             const std::string& childPos = styleVal(cs, "position");
-            if (childPos == "absolute" || childPos == "fixed") {
-                absChildren.push_back(child);
-                continue;
-            }
+            if (childPos == "absolute" || childPos == "fixed") continue;
 
             if (isTableRow(d)) {
                 TableRow row;
@@ -188,9 +184,22 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         numCols = std::max(numCols, cols);
     }
 
-    if (numCols == 0 && absChildren.empty()) {
+    if (numCols == 0) {
         node->box.contentRect.width = tableContentWidth;
-        node->box.contentRect.height = 0;
+        // Respect explicit height even for empty tables
+        float specH = resolveLength(styleVal(style, "height"), 0, fontSize);
+        const std::string& heightVal = styleVal(style, "height");
+        if (heightVal != "auto" && !heightVal.empty()) {
+            if (styleVal(style, "box-sizing") == "border-box") {
+                float paddingV = node->box.padding.top + node->box.padding.bottom;
+                float borderV = node->box.border.top + node->box.border.bottom;
+                node->box.contentRect.height = std::max(0.0f, specH - paddingV - borderV);
+            } else {
+                node->box.contentRect.height = specH;
+            }
+        } else {
+            node->box.contentRect.height = 0;
+        }
         return;
     }
 
@@ -456,72 +465,6 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
-    // Position absolutely/fixed positioned children against this containing block
-    {
-        float cbWidth = node->box.contentRect.width;
-        float cbHeight = node->box.contentRect.height;
-
-        for (auto* child : absChildren) {
-            auto& childStyle = child->computedStyle();
-            float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
-            if (childFontSize <= 0) childFontSize = fontSize;
-
-            float absLeft = resolveDim(styleVal(childStyle, "left"), cbWidth, childFontSize);
-            float absRight = resolveDim(styleVal(childStyle, "right"), cbWidth, childFontSize);
-            float absSpecW = resolveDim(styleVal(childStyle, "width"), cbWidth, childFontSize);
-
-            bool shrinkWrap = (absSpecW < 0 && !(absLeft >= 0 && absRight >= 0));
-            if (shrinkWrap) {
-                float maxCW = computeMaxContentWidth(child, metrics);
-                if (maxCW > cbWidth) maxCW = cbWidth;
-                layoutNode(child, maxCW + child->box.padding.left + child->box.padding.right +
-                           child->box.border.left + child->box.border.right +
-                           child->box.margin.left + child->box.margin.right, metrics);
-            } else {
-                layoutNode(child, cbWidth, metrics);
-            }
-
-            float top = resolveDim(styleVal(childStyle, "top"), cbHeight, childFontSize);
-            float bottom = resolveDim(styleVal(childStyle, "bottom"), cbHeight, childFontSize);
-
-            if (absSpecW < 0 && absLeft >= 0 && absRight >= 0) {
-                float w = cbWidth - absLeft - absRight -
-                          child->box.margin.left - child->box.margin.right -
-                          child->box.padding.left - child->box.padding.right -
-                          child->box.border.left - child->box.border.right;
-                if (w > 0) child->box.contentRect.width = w;
-            }
-
-            float specAbsH = resolveDim(styleVal(childStyle, "height"), cbHeight, childFontSize);
-            if (specAbsH < 0 && top >= 0 && bottom >= 0) {
-                float h = cbHeight - top - bottom -
-                          child->box.margin.top - child->box.margin.bottom -
-                          child->box.padding.top - child->box.padding.bottom -
-                          child->box.border.top - child->box.border.bottom;
-                if (h > 0) child->box.contentRect.height = h;
-            }
-
-            float xPos = child->box.margin.left + child->box.padding.left + child->box.border.left;
-            float yPos = child->box.margin.top + child->box.padding.top + child->box.border.top;
-
-            if (absLeft >= 0) {
-                xPos = absLeft + child->box.margin.left + child->box.padding.left + child->box.border.left;
-            } else if (absRight >= 0) {
-                xPos = cbWidth - absRight - child->box.margin.right -
-                       child->box.padding.right - child->box.border.right - child->box.contentRect.width;
-            }
-
-            if (top >= 0) {
-                yPos = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
-            } else if (bottom >= 0) {
-                yPos = cbHeight - bottom - child->box.margin.bottom -
-                       child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
-            }
-
-            child->box.contentRect.x = xPos;
-            child->box.contentRect.y = yPos;
-        }
-    }
 }
 
 } // namespace htmlayout::layout

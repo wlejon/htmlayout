@@ -40,4 +40,8 @@ Edges resolveEdges(const css::ComputedStyle& style,
                    float referenceWidth,
                    float fontSize);
 
+// Post-layout pass: position all absolute/fixed elements against their
+// correct containing blocks. Called automatically by layoutTree().
+void layoutAbsoluteElements(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics);
+
 } // namespace htmlayout::layout

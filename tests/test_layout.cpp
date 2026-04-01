@@ -529,6 +529,7 @@ static void testPositionAbsolute() {
     printf("--- Layout: position absolute ---\n");
     MockLayoutNode root;
     initBlock(root);
+    root.style["position"] = "relative";
     root.setHeight("400px");
 
     MockLayoutNode inflow;
@@ -564,6 +565,7 @@ static void testPositionAbsoluteBottomRight() {
     printf("--- Layout: position absolute bottom/right ---\n");
     MockLayoutNode root;
     initBlock(root);
+    root.style["position"] = "relative";
     root.setWidth("600px");
     root.setHeight("400px");
 
@@ -749,6 +751,7 @@ static void testPositionAbsoluteStretch() {
     printf("--- Layout: position absolute stretch ---\n");
     MockLayoutNode root;
     initBlock(root);
+    root.style["position"] = "relative";
     root.setWidth("600px");
     root.setHeight("400px");
 
@@ -777,6 +780,7 @@ static void testPositionAbsoluteInTable() {
     MockLayoutNode root;
     initBlock(root);
     root.setDisplay("table");
+    root.style["position"] = "relative";
     root.setWidth("500px");
     root.setHeight("300px");
     root.style["border-collapse"] = "separate";
@@ -806,6 +810,7 @@ static void testPositionAbsoluteInTableBottomRight() {
     MockLayoutNode root;
     initBlock(root);
     root.setDisplay("table");
+    root.style["position"] = "relative";
     root.setWidth("500px");
     root.setHeight("300px");
     root.style["border-collapse"] = "separate";
@@ -828,6 +833,188 @@ static void testPositionAbsoluteInTableBottomRight() {
     check(approx(absChild.box.contentRect.x, 380.0f), "table abs bottom/right: x = 380");
     // y = 300 - 10 - 50 = 240
     check(approx(absChild.box.contentRect.y, 240.0f), "table abs bottom/right: y = 240");
+}
+
+// ========== Containing block walk tests ==========
+
+static void testAbsoluteContainingBlockWalk() {
+    printf("--- Layout: absolute containing block walk ---\n");
+    // Absolute child should skip static parent and position against positioned grandparent
+    MockLayoutNode grandparent;
+    initBlock(grandparent);
+    grandparent.style["position"] = "relative";
+    grandparent.setWidth("600px");
+    grandparent.setHeight("400px");
+
+    MockLayoutNode parent;
+    initBlock(parent);
+    // parent is position: static (default from initBlock)
+    parent.setWidth("300px");
+    parent.setHeight("200px");
+
+    MockLayoutNode absChild;
+    initBlock(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.setWidth("100px");
+    absChild.setHeight("50px");
+    absChild.style["bottom"] = "10px";
+    absChild.style["right"] = "20px";
+
+    grandparent.addChild(&parent);
+    parent.addChild(&absChild);
+
+    MockTextMetrics metrics;
+    layoutTree(&grandparent, 800.0f, metrics);
+
+    // Containing block is grandparent (600x400), not parent (300x200)
+    // CB position in abs space: grandparent is at its own contentRect position
+    // absChild should be at bottom:10 right:20 of 600x400 = (480, 340) in CB space
+    // But contentRect is DOM-parent-relative, so we need to account for the
+    // parent's position within the grandparent
+    float parentAbsX = parent.box.contentRect.x;
+    float parentAbsY = parent.box.contentRect.y;
+
+    // In CB space: x = 600 - 20 - 100 = 480, y = 400 - 10 - 50 = 340
+    // In DOM-parent-relative space: subtract parent's position in grandparent
+    float expectedX = 480.0f - parentAbsX;
+    float expectedY = 340.0f - parentAbsY;
+
+    check(approx(absChild.box.contentRect.x, expectedX),
+          "CB walk: absolute child positioned against grandparent, not parent (x)");
+    check(approx(absChild.box.contentRect.y, expectedY),
+          "CB walk: absolute child positioned against grandparent, not parent (y)");
+    check(approx(absChild.box.contentRect.width, 100.0f), "CB walk: width preserved");
+}
+
+static void testPositionFixed() {
+    printf("--- Layout: position fixed uses viewport ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.style["position"] = "relative";
+    root.setWidth("600px");
+    root.setHeight("400px");
+
+    MockLayoutNode fixedChild;
+    initBlock(fixedChild);
+    fixedChild.style["position"] = "fixed";
+    fixedChild.setWidth("200px");
+    fixedChild.setHeight("100px");
+    fixedChild.style["top"] = "0px";
+    fixedChild.style["left"] = "0px";
+
+    root.addChild(&fixedChild);
+
+    MockTextMetrics metrics;
+    Viewport vp{800.0f, 600.0f};
+    layoutTree(&root, vp, metrics);
+
+    // Fixed element ignores positioned parent, uses viewport
+    check(approx(fixedChild.box.contentRect.width, 200.0f), "fixed: width preserved");
+    check(approx(fixedChild.box.contentRect.height, 100.0f), "fixed: height preserved");
+    // top:0 left:0 relative to viewport, but stored as DOM-parent-relative
+    // root.contentRect = some position, fixedChild should be at (0,0) in viewport
+    // minus root's absolute position
+    float rootAbsX = root.box.contentRect.x;
+    float rootAbsY = root.box.contentRect.y;
+    check(approx(fixedChild.box.contentRect.x, -rootAbsX),
+          "fixed: x positioned at viewport left");
+    check(approx(fixedChild.box.contentRect.y, -rootAbsY),
+          "fixed: y positioned at viewport top");
+}
+
+static void testFixedStretchToViewport() {
+    printf("--- Layout: fixed element stretches to viewport ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("400px");
+    root.setHeight("300px");
+
+    MockLayoutNode fixedChild;
+    initBlock(fixedChild);
+    fixedChild.style["position"] = "fixed";
+    fixedChild.style["top"] = "0px";
+    fixedChild.style["bottom"] = "0px";
+    fixedChild.style["left"] = "0px";
+    fixedChild.style["right"] = "0px";
+
+    root.addChild(&fixedChild);
+
+    MockTextMetrics metrics;
+    Viewport vp{1024.0f, 768.0f};
+    layoutTree(&root, vp, metrics);
+
+    // Fixed with inset:0 should stretch to viewport, not parent
+    check(approx(fixedChild.box.contentRect.width, 1024.0f),
+          "fixed stretch: width = viewport width");
+    check(approx(fixedChild.box.contentRect.height, 768.0f),
+          "fixed stretch: height = viewport height");
+}
+
+static void testAbsoluteNoPositionedAncestor() {
+    printf("--- Layout: absolute with no positioned ancestor uses viewport ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    // root is position: static
+    root.setWidth("400px");
+    root.setHeight("300px");
+
+    MockLayoutNode absChild;
+    initBlock(absChild);
+    absChild.style["position"] = "absolute";
+    absChild.style["top"] = "0px";
+    absChild.style["bottom"] = "0px";
+    absChild.style["left"] = "0px";
+    absChild.style["right"] = "0px";
+
+    root.addChild(&absChild);
+
+    MockTextMetrics metrics;
+    Viewport vp{800.0f, 600.0f};
+    layoutTree(&root, vp, metrics);
+
+    // No positioned ancestor: uses viewport as initial containing block
+    check(approx(absChild.box.contentRect.width, 800.0f),
+          "no CB: absolute stretches to viewport width");
+    check(approx(absChild.box.contentRect.height, 600.0f),
+          "no CB: absolute stretches to viewport height");
+}
+
+static void testNestedAbsolute() {
+    printf("--- Layout: nested absolute elements ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.style["position"] = "relative";
+    root.setWidth("600px");
+    root.setHeight("400px");
+
+    MockLayoutNode outer;
+    initBlock(outer);
+    outer.style["position"] = "absolute";
+    outer.setWidth("300px");
+    outer.setHeight("200px");
+    outer.style["top"] = "50px";
+    outer.style["left"] = "50px";
+
+    MockLayoutNode inner;
+    initBlock(inner);
+    inner.style["position"] = "absolute";
+    inner.setWidth("100px");
+    inner.setHeight("80px");
+    inner.style["top"] = "10px";
+    inner.style["left"] = "10px";
+
+    root.addChild(&outer);
+    outer.addChild(&inner);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // Outer positioned at (50, 50) relative to root
+    check(approx(outer.box.contentRect.x, 50.0f), "nested abs: outer x = 50");
+    check(approx(outer.box.contentRect.y, 50.0f), "nested abs: outer y = 50");
+    // Inner positioned at (10, 10) relative to outer (its containing block)
+    check(approx(inner.box.contentRect.x, 10.0f), "nested abs: inner x = 10");
+    check(approx(inner.box.contentRect.y, 10.0f), "nested abs: inner y = 10");
 }
 
 // ========== Entry point ==========
@@ -876,4 +1063,11 @@ void testLayout() {
     testPositionAbsoluteStretch();
     testPositionAbsoluteInTable();
     testPositionAbsoluteInTableBottomRight();
+
+    // Containing block walk & position:fixed
+    testAbsoluteContainingBlockWalk();
+    testPositionFixed();
+    testFixedStretchToViewport();
+    testAbsoluteNoPositionedAncestor();
+    testNestedAbsolute();
 }

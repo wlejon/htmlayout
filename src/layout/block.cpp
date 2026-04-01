@@ -144,7 +144,6 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // Shared state for both BFC and IFC paths
-    std::vector<LayoutNode*> absChildren;
     float cursorY = 0.0f;
 
     // Determine if this block contains only inline-level content
@@ -203,7 +202,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 const std::string& d = styleVal(cs, "display");
                 if (d == "none") { child->box = LayoutBox{}; continue; }
                 const std::string& cp = styleVal(cs, "position");
-                if (cp == "absolute" || cp == "fixed") { absChildren.push_back(child); continue; }
+                if (cp == "absolute" || cp == "fixed") continue;
                 layoutNode(child, childAvailable, metrics);
                 items.push_back({
                     child->box.fullWidth() + child->box.margin.left + child->box.margin.right,
@@ -421,10 +420,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         const std::string& childPos = styleVal(childStyle, "position");
 
         // Absolutely and fixed positioned children are out of flow
-        if (childPos == "absolute" || childPos == "fixed") {
-            absChildren.push_back(child);
-            continue;
-        }
+        // (positioned by the post-layout absolute positioning pass)
+        if (childPos == "absolute" || childPos == "fixed") continue;
 
         // Collect inline/inline-block children for horizontal layout
         if (childDisplay == "inline" || childDisplay == "inline-block") {
@@ -616,90 +613,6 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 child->availableHeight = childAvailableHeight;
             }
         }
-    }
-
-    // Now layout absolutely positioned children against this containing block
-    float cbWidth = node->box.contentRect.width;
-    float cbHeight = node->box.contentRect.height;
-    // For absolute children, use the containing block height for percentage resolution.
-    // If the containing block has no definite height, fall back to viewport height.
-    float absCbHeight = (cbHeight > 0) ? cbHeight : node->viewportHeight;
-
-    for (auto* child : absChildren) {
-        auto& childStyle = child->computedStyle();
-        float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
-        if (childFontSize <= 0) childFontSize = fontSize;
-
-        // Set available height for the absolute child's own percentage resolution
-        child->availableHeight = absCbHeight;
-        child->viewportHeight = node->viewportHeight;
-
-        // Resolve offsets and explicit width to determine layout available width
-        float absLeft = resolveDimension(styleVal(childStyle, "left"), cbWidth, childFontSize);
-        float absRight = resolveDimension(styleVal(childStyle, "right"), cbWidth, childFontSize);
-        float absSpecW = resolveDimension(styleVal(childStyle, "width"), cbWidth, childFontSize);
-
-        // For absolutely positioned elements with width:auto, shrink-wrap to content
-        // unless both left and right are set (which stretches to fill).
-        bool shrinkWrap = (absSpecW < 0 && !(absLeft >= 0 && absRight >= 0));
-        if (shrinkWrap) {
-            // Compute max-content width (intrinsic preferred width)
-            float maxCW = computeMaxContentWidth(child, metrics);
-            // Cap to container width
-            if (maxCW > cbWidth) maxCW = cbWidth;
-            // Layout at the shrink-wrapped width
-            layoutNode(child, maxCW + child->box.padding.left + child->box.padding.right +
-                       child->box.border.left + child->box.border.right +
-                       child->box.margin.left + child->box.margin.right, metrics);
-        } else {
-            layoutNode(child, cbWidth, metrics);
-        }
-
-        // Resolve offsets against the containing block (use absCbHeight for percentages)
-        float top = resolveDimension(styleVal(childStyle, "top"), absCbHeight, childFontSize);
-        float right = absRight;
-        float bottom = resolveDimension(styleVal(childStyle, "bottom"), absCbHeight, childFontSize);
-        float left = absLeft;
-
-        // Resolve width for absolute: if left and right are both set and width is auto
-        if (absSpecW < 0 && left >= 0 && right >= 0) {
-            float w = cbWidth - left - right -
-                      child->box.margin.left - child->box.margin.right -
-                      child->box.padding.left - child->box.padding.right -
-                      child->box.border.left - child->box.border.right;
-            if (w > 0) child->box.contentRect.width = w;
-        }
-
-        // Resolve height for absolute: if top and bottom are both set and height is auto
-        float specH = resolveDimension(styleVal(childStyle, "height"), absCbHeight, childFontSize);
-        if (specH < 0 && top >= 0 && bottom >= 0) {
-            float h = absCbHeight - top - bottom -
-                      child->box.margin.top - child->box.margin.bottom -
-                      child->box.padding.top - child->box.padding.bottom -
-                      child->box.border.top - child->box.border.bottom;
-            if (h > 0) child->box.contentRect.height = h;
-        }
-
-        // Position: prefer top/left, fall back to bottom/right
-        float xPos = child->box.margin.left + child->box.padding.left + child->box.border.left;
-        float yPos = child->box.margin.top + child->box.padding.top + child->box.border.top;
-
-        if (left >= 0) {
-            xPos = left + child->box.margin.left + child->box.padding.left + child->box.border.left;
-        } else if (right >= 0) {
-            xPos = cbWidth - right - child->box.margin.right -
-                   child->box.padding.right - child->box.border.right - child->box.contentRect.width;
-        }
-
-        if (top >= 0) {
-            yPos = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
-        } else if (bottom >= 0) {
-            yPos = absCbHeight - bottom - child->box.margin.bottom -
-                   child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
-        }
-
-        child->box.contentRect.x = xPos;
-        child->box.contentRect.y = yPos;
     }
 
     // Multi-column layout: redistribute children into columns if column-count or column-width is set

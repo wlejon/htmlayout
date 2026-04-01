@@ -351,6 +351,7 @@ static void testInlineAbsolutePositioning() {
     printf("--- Inline: absolute positioning ---\n");
     InlineMockNode root;
     initBlock(root);
+    root.style["position"] = "relative";
     root.style["width"] = "400px";
     root.style["height"] = "200px";
 
@@ -377,6 +378,7 @@ static void testInlineAbsoluteBottomRight() {
     printf("--- Inline: absolute bottom/right ---\n");
     InlineMockNode root;
     initBlock(root);
+    root.style["position"] = "relative";
     root.style["width"] = "400px";
     root.style["height"] = "200px";
 

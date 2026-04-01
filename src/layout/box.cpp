@@ -7,10 +7,7 @@
 namespace htmlayout::layout {
 
 void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
-    if (!root) return;
-    layoutNode(root, viewportWidth, metrics);
-    root->box.contentRect.x = root->box.margin.left + root->box.padding.left + root->box.border.left;
-    root->box.contentRect.y = root->box.margin.top + root->box.padding.top + root->box.border.top;
+    layoutTree(root, Viewport{viewportWidth, 0.0f}, metrics);
 }
 
 void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
@@ -20,6 +17,9 @@ void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics
     layoutNode(root, viewport.width, metrics);
     root->box.contentRect.x = root->box.margin.left + root->box.padding.left + root->box.border.left;
     root->box.contentRect.y = root->box.margin.top + root->box.padding.top + root->box.border.top;
+
+    // Pass 2: position all absolute/fixed elements against their correct containing blocks
+    layoutAbsoluteElements(root, viewport, metrics);
 }
 
 namespace {

@@ -451,7 +451,6 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         int rowSpan, colSpan;
     };
     std::vector<GridItem> items;
-    std::vector<LayoutNode*> absChildren;
 
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) continue;
@@ -461,10 +460,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             continue;
         }
         const std::string& childPos = styleVal(cs, "position");
-        if (childPos == "absolute" || childPos == "fixed") {
-            absChildren.push_back(child);
-            continue;
-        }
+        if (childPos == "absolute" || childPos == "fixed") continue;
         GridItem item;
         item.node = child;
         item.placement = parseGridPlacement(cs, namedAreas);
@@ -765,70 +761,6 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
-    // Position absolutely/fixed positioned children against this container
-    float cbWidth = node->box.contentRect.width;
-    float cbHeight = node->box.contentRect.height;
-
-    for (auto* child : absChildren) {
-        auto& childStyle = child->computedStyle();
-        float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
-        if (childFontSize <= 0) childFontSize = fontSize;
-
-        float left = resolveDim(styleVal(childStyle, "left"), cbWidth, childFontSize);
-        float right = resolveDim(styleVal(childStyle, "right"), cbWidth, childFontSize);
-        float specAbsW = resolveDim(styleVal(childStyle, "width"), cbWidth, childFontSize);
-
-        bool shrinkWrap = (specAbsW < 0 && !(left >= 0 && right >= 0));
-        if (shrinkWrap) {
-            float maxCW = computeMaxContentWidth(child, metrics);
-            if (maxCW > cbWidth) maxCW = cbWidth;
-            layoutNode(child, maxCW + child->box.padding.left + child->box.padding.right +
-                       child->box.border.left + child->box.border.right +
-                       child->box.margin.left + child->box.margin.right, metrics);
-        } else {
-            layoutNode(child, cbWidth, metrics);
-        }
-
-        float top = resolveDim(styleVal(childStyle, "top"), cbHeight, childFontSize);
-        float bottom = resolveDim(styleVal(childStyle, "bottom"), cbHeight, childFontSize);
-
-        if (specAbsW < 0 && left >= 0 && right >= 0) {
-            float w = cbWidth - left - right -
-                      child->box.margin.left - child->box.margin.right -
-                      child->box.padding.left - child->box.padding.right -
-                      child->box.border.left - child->box.border.right;
-            if (w > 0) child->box.contentRect.width = w;
-        }
-
-        float specAbsH = resolveDim(styleVal(childStyle, "height"), cbHeight, childFontSize);
-        if (specAbsH < 0 && top >= 0 && bottom >= 0) {
-            float h = cbHeight - top - bottom -
-                      child->box.margin.top - child->box.margin.bottom -
-                      child->box.padding.top - child->box.padding.bottom -
-                      child->box.border.top - child->box.border.bottom;
-            if (h > 0) child->box.contentRect.height = h;
-        }
-
-        float xPos = child->box.margin.left + child->box.padding.left + child->box.border.left;
-        float yPos = child->box.margin.top + child->box.padding.top + child->box.border.top;
-
-        if (left >= 0) {
-            xPos = left + child->box.margin.left + child->box.padding.left + child->box.border.left;
-        } else if (right >= 0) {
-            xPos = cbWidth - right - child->box.margin.right -
-                   child->box.padding.right - child->box.border.right - child->box.contentRect.width;
-        }
-
-        if (top >= 0) {
-            yPos = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
-        } else if (bottom >= 0) {
-            yPos = cbHeight - bottom - child->box.margin.bottom -
-                   child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
-        }
-
-        child->box.contentRect.x = xPos;
-        child->box.contentRect.y = yPos;
-    }
 }
 
 } // namespace htmlayout::layout
