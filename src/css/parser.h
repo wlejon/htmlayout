@@ -39,8 +39,16 @@ struct ContainerBlock {
     std::vector<Rule> rules;
 };
 
+// An @import rule: url + optional media/layer qualifiers
+struct ImportRule {
+    std::string url;
+    std::string mediaCondition;  // e.g. "print", "(max-width: 600px)", or empty
+    std::string layer;           // e.g. "reset", or empty; "\" means anonymous layer
+};
+
 // A parsed stylesheet
 struct Stylesheet {
+    std::vector<ImportRule> imports;
     std::vector<Rule> rules;
     std::vector<MediaBlock> mediaBlocks;
     std::vector<LayerBlock> layerBlocks;

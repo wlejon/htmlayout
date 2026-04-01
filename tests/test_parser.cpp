@@ -184,6 +184,60 @@ static void testRoundTrip() {
     check(foundMaxWidth, "container max-width: 1200px");
 }
 
+static void testImportBasicString() {
+    printf("--- Parser: @import with string URL ---\n");
+    auto sheet = parse("@import \"reset.css\";");
+    check(sheet.imports.size() == 1, "1 import");
+    check(sheet.imports[0].url == "reset.css", "import URL is reset.css");
+    check(sheet.imports[0].mediaCondition.empty(), "no media condition");
+    check(sheet.imports[0].layer.empty(), "no layer");
+}
+
+static void testImportUrlFunction() {
+    printf("--- Parser: @import url() ---\n");
+    auto sheet = parse("@import url(\"theme.css\");");
+    check(sheet.imports.size() == 1, "1 import");
+    check(sheet.imports[0].url == "theme.css", "import URL is theme.css");
+}
+
+static void testImportWithMedia() {
+    printf("--- Parser: @import with media condition ---\n");
+    auto sheet = parse("@import \"print.css\" print;");
+    check(sheet.imports.size() == 1, "1 import");
+    check(sheet.imports[0].url == "print.css", "import URL");
+    check(sheet.imports[0].mediaCondition == "print", "media condition is print");
+}
+
+static void testImportWithLayer() {
+    printf("--- Parser: @import with layer ---\n");
+    auto sheet = parse("@import \"base.css\" layer(base);");
+    check(sheet.imports.size() == 1, "1 import");
+    check(sheet.imports[0].url == "base.css", "import URL");
+    check(sheet.imports[0].layer == "base", "layer name is base");
+}
+
+static void testImportWithLayerAndMedia() {
+    printf("--- Parser: @import with layer and media ---\n");
+    auto sheet = parse("@import \"responsive.css\" layer(utils) (max-width: 600px);");
+    check(sheet.imports.size() == 1, "1 import");
+    check(sheet.imports[0].url == "responsive.css", "import URL");
+    check(sheet.imports[0].layer == "utils", "layer name is utils");
+    check(sheet.imports[0].mediaCondition == "(max-width: 600px)", "media condition");
+}
+
+static void testMultipleImports() {
+    printf("--- Parser: multiple @import rules ---\n");
+    auto sheet = parse(
+        "@import \"reset.css\";\n"
+        "@import \"base.css\";\n"
+        "div { color: red; }\n"
+    );
+    check(sheet.imports.size() == 2, "2 imports");
+    check(sheet.imports[0].url == "reset.css", "first import URL");
+    check(sheet.imports[1].url == "base.css", "second import URL");
+    check(sheet.rules.size() == 1, "1 rule after imports");
+}
+
 void testParser() {
     testSingleRule();
     testMultipleRules();
@@ -197,4 +251,10 @@ void testParser() {
     testCommaSelector();
     testMultiValueProperty();
     testRoundTrip();
+    testImportBasicString();
+    testImportUrlFunction();
+    testImportWithMedia();
+    testImportWithLayer();
+    testImportWithLayerAndMedia();
+    testMultipleImports();
 }

@@ -462,6 +462,116 @@ static void testRevertKeyword() {
     check(style3["color"] == "black", "revert: color reverts to initial when no UA value");
 }
 
+static void testImportResolver() {
+    printf("--- Cascade: @import basic resolution ---\n");
+    Cascade cascade;
+    cascade.setImportResolver([](const std::string& url) -> std::string {
+        if (url == "base.css") return "div { color: blue; }";
+        return "";
+    });
+    cascade.addStylesheet(parse("@import \"base.css\";\nspan { color: red; }"));
+
+    MockElement div; div.tag = "div";
+    check(cascade.resolve(div)["color"] == "blue", "import: div gets color from imported sheet");
+
+    MockElement span; span.tag = "span";
+    check(cascade.resolve(span)["color"] == "red", "import: span gets color from main sheet");
+}
+
+static void testImportCaching() {
+    printf("--- Cascade: @import caching (each URL resolved once) ---\n");
+    int resolveCount = 0;
+    Cascade cascade;
+    cascade.setImportResolver([&](const std::string& url) -> std::string {
+        resolveCount++;
+        if (url == "base.css") return "div { color: blue; }";
+        return "";
+    });
+    // Import the same URL from two different stylesheets
+    cascade.addStylesheet(parse("@import \"base.css\";"));
+    cascade.addStylesheet(parse("@import \"base.css\";"));
+    check(resolveCount == 1, "import: resolver called only once for same URL");
+}
+
+static void testImportNestedImports() {
+    printf("--- Cascade: nested @import ---\n");
+    Cascade cascade;
+    cascade.setImportResolver([](const std::string& url) -> std::string {
+        if (url == "a.css") return "@import \"b.css\";\ndiv { color: green; }";
+        if (url == "b.css") return "div { font-size: 18px; }";
+        return "";
+    });
+    cascade.addStylesheet(parse("@import \"a.css\";"));
+
+    MockElement div; div.tag = "div";
+    auto style = cascade.resolve(div);
+    check(style["color"] == "green", "nested import: color from a.css");
+    check(style["font-size"] == "18px", "nested import: font-size from b.css");
+}
+
+static void testImportSourceOrder() {
+    printf("--- Cascade: @import source order (imported rules come first) ---\n");
+    Cascade cascade;
+    cascade.setImportResolver([](const std::string& url) -> std::string {
+        if (url == "base.css") return "div { color: blue; }";
+        return "";
+    });
+    // Main sheet overrides imported sheet at same specificity
+    cascade.addStylesheet(parse("@import \"base.css\";\ndiv { color: red; }"));
+
+    MockElement div; div.tag = "div";
+    check(cascade.resolve(div)["color"] == "red", "import source order: main sheet wins over import");
+}
+
+static void testImportWithMediaCondition() {
+    printf("--- Cascade: @import with media condition ---\n");
+    Cascade cascade;
+    cascade.setImportResolver([](const std::string& url) -> std::string {
+        if (url == "wide.css") return "div { width: 500px; }";
+        return "";
+    });
+    MediaContext narrow{400, 800, "screen"};
+    cascade.addStylesheet(parse("@import \"wide.css\" (min-width: 600px);"),
+                          nullptr, &narrow);
+
+    MockElement div; div.tag = "div";
+    auto style = cascade.resolve(div);
+    // Media condition not met (400 < 600), so import should be skipped
+    check(style.find("width") == style.end() || style["width"] != "500px",
+          "import: media condition filters import when not matched");
+
+    // Now with wide viewport
+    Cascade cascade2;
+    cascade2.setImportResolver([](const std::string& url) -> std::string {
+        if (url == "wide.css") return "div { width: 500px; }";
+        return "";
+    });
+    MediaContext wide{800, 600, "screen"};
+    cascade2.addStylesheet(parse("@import \"wide.css\" (min-width: 600px);"),
+                           nullptr, &wide);
+    auto style2 = cascade2.resolve(div);
+    check(style2["width"] == "500px", "import: media condition allows import when matched");
+}
+
+static void testImportWithLayer() {
+    printf("--- Cascade: @import with layer ---\n");
+    Cascade cascade;
+    cascade.setImportResolver([](const std::string& url) -> std::string {
+        if (url == "base.css") return "div { color: blue; }";
+        return "";
+    });
+    // Import into a layer; unlayered rules should win over layered ones
+    cascade.addStylesheet(parse(
+        "@layer base;\n"
+        "@import \"base.css\" layer(base);\n"
+        "div { color: red; }\n"
+    ));
+
+    MockElement div; div.tag = "div";
+    check(cascade.resolve(div)["color"] == "red",
+          "import layer: unlayered rule wins over layered import");
+}
+
 void testCascade() {
     testBasicResolve();
     testSpecificityOrder();
@@ -483,4 +593,10 @@ void testCascade() {
     testUserAgentStylesheet();
     testClear();
     testRevertKeyword();
+    testImportResolver();
+    testImportCaching();
+    testImportNestedImports();
+    testImportSourceOrder();
+    testImportWithMediaCondition();
+    testImportWithLayer();
 }

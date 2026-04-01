@@ -153,8 +153,43 @@ bool Cascade::evaluateContainerQuery(const ElementRef& elem,
     return false; // no container found
 }
 
+void Cascade::setImportResolver(ImportResolver resolver) {
+    importResolver_ = std::move(resolver);
+}
+
 void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
                              const MediaContext* media, Origin origin) {
+    // Process @import rules first (imported rules precede this sheet in source order)
+    if (importResolver_) {
+        for (auto& imp : sheet.imports) {
+            if (loadedImports_.count(imp.url)) continue;
+            loadedImports_.insert(imp.url);
+
+            // Check media condition on the import
+            if (!imp.mediaCondition.empty() && media) {
+                if (!evaluateMediaQuery(imp.mediaCondition, *media)) continue;
+            }
+
+            std::string css = importResolver_(imp.url);
+            if (css.empty()) continue;
+
+            Stylesheet imported = parse(css);
+
+            // If import specifies a layer, wrap all imported rules in that layer
+            if (!imp.layer.empty()) {
+                LayerBlock layerBlock;
+                layerBlock.name = imp.layer;
+                layerBlock.rules = std::move(imported.rules);
+                layerBlock.mediaBlocks = std::move(imported.mediaBlocks);
+                imported.rules.clear();
+                imported.mediaBlocks.clear();
+                imported.layerBlocks.push_back(std::move(layerBlock));
+            }
+
+            addStylesheet(imported, scope, media, origin);
+        }
+    }
+
     // Record pre-declared layer ordering
     for (auto& name : sheet.layerOrder) {
         getOrCreateLayerIndex(name);
@@ -637,6 +672,7 @@ void Cascade::clear() {
     rules_.clear();
     nextOrder_ = 0;
     layerNames_.clear();
+    loadedImports_.clear();
 }
 
 } // namespace htmlayout::css

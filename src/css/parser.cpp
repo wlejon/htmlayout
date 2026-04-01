@@ -37,8 +37,13 @@ public:
                     if (!containerBlock.rules.empty()) {
                         sheet.containerBlocks.push_back(std::move(containerBlock));
                     }
+                } else if (peek().value == "import") {
+                    auto importRule = parseImportRule();
+                    if (!importRule.url.empty()) {
+                        sheet.imports.push_back(std::move(importRule));
+                    }
                 } else {
-                    // @font-face, @keyframes, @charset, @import, etc. — skip gracefully
+                    // @font-face, @keyframes, @charset, etc. — skip gracefully
                     consumeAtRule();
                 }
                 skipWhitespace();
@@ -299,6 +304,95 @@ private:
         }
         if (!atEnd() && peek().type == TokenType::RightBrace) advance();
         return block;
+    }
+
+    ImportRule parseImportRule() {
+        ImportRule rule;
+        advance(); // skip @import
+        skipWhitespace();
+
+        // Extract URL: either a bare string token or url("...")
+        if (peek().type == TokenType::String) {
+            rule.url = peek().value;
+            advance();
+        } else if (peek().type == TokenType::Function && peek().value == "url") {
+            advance(); // skip url(
+            skipWhitespace();
+            if (peek().type == TokenType::String) {
+                rule.url = peek().value;
+                advance();
+            } else {
+                // Unquoted URL: collect tokens until ')'
+                std::string url;
+                while (!atEnd() && peek().type != TokenType::RightParen) {
+                    url += peek().value;
+                    advance();
+                }
+                rule.url = trim(url);
+            }
+            skipWhitespace();
+            if (!atEnd() && peek().type == TokenType::RightParen) advance();
+        } else {
+            // Malformed @import — skip to semicolon
+            while (!atEnd() && peek().type != TokenType::Semicolon) advance();
+            if (!atEnd()) advance();
+            return rule;
+        }
+
+        skipWhitespace();
+
+        // Parse optional layer and/or media qualifiers before ';'
+        // Possible forms: layer, layer(name), supports(...), media condition
+        if (!atEnd() && peek().type != TokenType::Semicolon) {
+            if (peek().type == TokenType::Ident && peek().value == "layer") {
+                advance(); // skip "layer"
+                skipWhitespace();
+                if (!atEnd() && peek().type == TokenType::Function && peek().value == "layer") {
+                    // Shouldn't happen after ident, but handle gracefully
+                    advance();
+                } else if (!atEnd() && peek().type == TokenType::LeftParen) {
+                    // layer(name) — but tokenizer would emit Function token for "layer("
+                    // This branch handles if layer and ( are separate tokens
+                    advance(); // skip (
+                    skipWhitespace();
+                    std::string layerName;
+                    while (!atEnd() && peek().type != TokenType::RightParen) {
+                        layerName += peek().value;
+                        advance();
+                    }
+                    if (!atEnd()) advance(); // skip )
+                    rule.layer = trim(layerName);
+                } else {
+                    rule.layer = "";  // anonymous layer import
+                }
+                skipWhitespace();
+            } else if (peek().type == TokenType::Function && peek().value == "layer") {
+                advance(); // skip layer(
+                skipWhitespace();
+                std::string layerName;
+                while (!atEnd() && peek().type != TokenType::RightParen) {
+                    layerName += peek().value;
+                    advance();
+                }
+                if (!atEnd()) advance(); // skip )
+                rule.layer = trim(layerName);
+                skipWhitespace();
+            }
+        }
+
+        // Remaining tokens before ';' are the media condition
+        if (!atEnd() && peek().type != TokenType::Semicolon) {
+            std::string media;
+            while (!atEnd() && peek().type != TokenType::Semicolon) {
+                media += tokenToString(advance());
+            }
+            rule.mediaCondition = trim(media);
+        }
+
+        // Consume the semicolon
+        if (!atEnd() && peek().type == TokenType::Semicolon) advance();
+
+        return rule;
     }
 
     void consumeAtRule() {

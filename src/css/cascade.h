@@ -2,8 +2,10 @@
 #include "css/parser.h"
 #include "css/selector.h"
 #include "css/properties.h"
+#include <functional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace htmlayout::css {
@@ -14,11 +16,20 @@ using ComputedStyle = std::unordered_map<std::string, std::string>;
 // Stylesheet origin for the cascade
 enum class Origin { UserAgent, Author };
 
+// Callback to resolve @import URLs. Returns the CSS text for the given URL.
+// The consumer is responsible for file I/O, URL resolution, etc.
+using ImportResolver = std::function<std::string(const std::string& url)>;
+
 // A cascade context resolves which CSS rules apply to which elements.
 // It supports scoping for shadow DOM: rules in a shadow scope only match
 // elements in that same scope.
 class Cascade {
 public:
+    // Set a callback to resolve @import URLs into CSS text.
+    // When set, addStylesheet() will automatically resolve and inline imports.
+    // Each URL is resolved at most once (cached by URL string).
+    void setImportResolver(ImportResolver resolver);
+
     // Add a stylesheet to a given scope.
     // scope = nullptr means document-level (global).
     // scope = shadow_root_ptr means shadow-scoped styles.
@@ -62,6 +73,10 @@ private:
     };
     std::vector<ScopedRule> rules_;
     size_t nextOrder_ = 0;
+
+    // @import resolution
+    ImportResolver importResolver_;
+    std::unordered_set<std::string> loadedImports_;
 
     // Layer ordering: maps layer name -> index. Lower index = lower priority.
     std::vector<std::string> layerNames_;
