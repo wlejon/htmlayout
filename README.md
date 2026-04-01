@@ -8,7 +8,7 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 
 **CSS Engine**
 - W3C-compliant tokenizer and parser (Syntax Module Level 3)
-- Selector matching: type, class, ID, attribute, pseudo-classes (`:nth-child`, `:not`, `:is`, `:where`, `:hover`, `:focus`, `:defined`, etc.), pseudo-elements (`::before`, `::after`)
+- Selector matching: type, class, ID, attribute, pseudo-classes (`:nth-child`, `:not`, `:is`, `:where`, `:has`, `:hover`, `:focus`, `:defined`, etc.), pseudo-elements (`::before`, `::after`)
 - Combinators: descendant, child (`>`), adjacent sibling (`+`), general sibling (`~`)
 - Full cascade with specificity, source order, `!important`, and inheritance (Cascade Level 5)
 - `@layer` cascade layers with spec-compliant priority ordering (including `!important` reversal)
@@ -33,6 +33,7 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - Hit testing with z-order, overflow clipping, and `pointer-events`
 - Incremental (dirty-flag) relayout
 - `text-overflow: ellipsis`, `overflow-wrap`, `word-break`, `white-space` handling
+- `display: contents` (children promoted into parent formatting context)
 - `position: relative`, `absolute`, `fixed`, `sticky` (layout-time positioning)
 
 ## Current Limitations
@@ -158,7 +159,7 @@ layoutTreeIncremental(rootNode, viewportWidth, metrics);
 ```
 src/css/       CSS tokenizer, parser, selector matcher, cascade, properties, color
 src/layout/    Block, inline, flex, grid, table layout, hit testing, text breaking
-tests/         Test suite (~5,700 lines across 15 test files)
+tests/         Test suite
 third_party/   Bundled gumbo HTML5 parser
 docs/          Architecture document
 ```
