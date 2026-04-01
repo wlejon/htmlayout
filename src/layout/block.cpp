@@ -127,6 +127,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         else
             earlyChildAvailableHeight = earlyHeight;
         if (earlyChildAvailableHeight < 0.0f) earlyChildAvailableHeight = 0.0f;
+    } else if (node->viewportHeight > 0 &&
+               (!node->parent() || !node->parent()->parent())) {
+        // Root element chain (html/body): the initial containing block has
+        // viewport dimensions, so propagate viewport height for percentage
+        // resolution even when height is auto.
+        earlyChildAvailableHeight = node->viewportHeight;
     }
 
     // Propagate viewport height and available height to all children before layout
@@ -586,6 +592,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Propagate available height to in-flow children for percentage height resolution.
     // Children can use percentage heights only when the parent has a definite height.
     float childAvailableHeight = (specifiedHeight >= 0.0f) ? node->box.contentRect.height : 0.0f;
+    // Root element chain: propagate viewport height even with auto height
+    if (childAvailableHeight == 0.0f && specifiedHeight < 0.0f && node->viewportHeight > 0 &&
+        (!node->parent() || !node->parent()->parent())) {
+        childAvailableHeight = node->box.contentRect.height;
+    }
     for (auto* child : getLayoutChildren(node)) {
         if (!child->isTextNode()) {
             auto& cs = child->computedStyle();

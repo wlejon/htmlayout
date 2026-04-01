@@ -171,26 +171,38 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y, float offsetX, 
     if (testX < bx || testX >= bx + bw || testY < by || testY >= by + bh)
         return nullptr;
 
-    // Sort children by z-index for proper stacking context hit testing
+    // Sort children by CSS stacking order for hit testing (topmost first).
+    // Per CSS: positioned elements paint above non-positioned; within the same
+    // category, higher z-index paints above lower; equal z-index uses source order
+    // (later paints on top). Hit testing reverses paint order so the topmost
+    // (last-painted) element is tested first.
     auto children = node->children();
 
-    std::vector<std::pair<int, LayoutNode*>> zChildren;
+    struct ZChild { int z; bool positioned; size_t srcIdx; LayoutNode* node; };
+    std::vector<ZChild> zChildren;
     zChildren.reserve(children.size());
-    for (auto* child : children) {
+    for (size_t i = 0; i < children.size(); ++i) {
+        auto* child = children[i];
         int z = 0;
+        bool pos = false;
         if (child) {
             z = getZIndex(child->computedStyle());
+            const std::string& p = styleVal(child->computedStyle(), "position");
+            pos = (p == "absolute" || p == "relative" || p == "fixed" || p == "sticky");
         }
-        zChildren.push_back({z, child});
+        zChildren.push_back({z, pos, i, child});
     }
 
-    // Sort by z-index descending, preserving source order for equal z-index
     std::stable_sort(zChildren.begin(), zChildren.end(),
-        [](const auto& a, const auto& b) { return a.first > b.first; });
+        [](const ZChild& a, const ZChild& b) {
+            if (a.z != b.z) return a.z > b.z;           // higher z-index first
+            if (a.positioned != b.positioned) return a.positioned; // positioned above non-positioned
+            return a.srcIdx > b.srcIdx;                  // later source order first
+        });
 
     // Children's positions are relative to this node's content area
-    for (auto& [z, child] : zChildren) {
-        LayoutNode* hit = hitTestRecursive(child, testX, testY, absX, absY);
+    for (auto& zc : zChildren) {
+        LayoutNode* hit = hitTestRecursive(zc.node, testX, testY, absX, absY);
         if (hit) return hit;
     }
 
