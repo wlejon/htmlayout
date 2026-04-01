@@ -91,7 +91,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     bool isReverse = (flexDir == "row-reverse" || flexDir == "column-reverse");
     bool isWrap = (flexWrap == "wrap" || flexWrap == "wrap-reverse");
 
-    float mainAvailable = isRow ? containerMain : resolveDim(styleVal(style, "height"), 0, fontSize);
+    float mainAvailable = isRow ? containerMain : resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
     if (mainAvailable < 0) mainAvailable = containerMain; // fallback for column with auto height
 
     float gapMain = resolveLength(styleVal(style, isRow ? "column-gap" : "row-gap"), mainAvailable, fontSize);
@@ -106,6 +106,9 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         else
             childAvailableHeight = crossSpecH;
         if (childAvailableHeight < 0) childAvailableHeight = 0;
+    } else if (!isRow && mainAvailable > 0) {
+        // For column flex, children's available height is the resolved main size
+        childAvailableHeight = mainAvailable;
     }
 
     // Collect flex items, filtering out absolutely/fixed positioned children
@@ -526,7 +529,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Set container dimensions
     node->box.contentRect.width = containerMain;
 
-    float specH = resolveDim(styleVal(style, "height"), 0, fontSize);
+    float specH = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
     if (specH >= 0) {
         if (styleVal(style, "box-sizing") == "border-box")
             node->box.contentRect.height = specH - paddingV - borderV;
