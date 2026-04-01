@@ -397,6 +397,129 @@ static void testFlexAbsoluteStretch() {
     check(approx(absChild.box.contentRect.height, 370), "flex abs stretch: height = 370");
 }
 
+// ========== align-content tests ==========
+
+static void testFlexAlignContentCenter() {
+    // Two wrapping lines in a 300px tall container, lines should be centered
+    FlexMockNode container; initFlexContainer(container);
+    container.style["flex-wrap"] = "wrap";
+    container.style["width"] = "200px";
+    container.style["height"] = "300px";
+    container.style["align-content"] = "center";
+
+    // Two items each 120px wide -> wraps into 2 lines
+    FlexMockNode a; initFlexItem(a); a.style["width"] = "120px"; a.style["height"] = "40px";
+    FlexMockNode b; initFlexItem(b); b.style["width"] = "120px"; b.style["height"] = "40px";
+    container.addChild(&a); container.addChild(&b);
+
+    FlexTextMetrics m;
+    layoutTree(&container, 400, m);
+
+    // Total cross = 40 + 40 = 80, free = 300 - 80 = 220, offset = 110
+    check(approx(a.box.contentRect.y, 110, 2), "align-content center: first line offset");
+    check(approx(b.box.contentRect.y, 150, 2), "align-content center: second line offset");
+}
+
+static void testFlexAlignContentSpaceBetween() {
+    FlexMockNode container; initFlexContainer(container);
+    container.style["flex-wrap"] = "wrap";
+    container.style["width"] = "200px";
+    container.style["height"] = "300px";
+    container.style["align-content"] = "space-between";
+
+    FlexMockNode a; initFlexItem(a); a.style["width"] = "120px"; a.style["height"] = "40px";
+    FlexMockNode b; initFlexItem(b); b.style["width"] = "120px"; b.style["height"] = "40px";
+    container.addChild(&a); container.addChild(&b);
+
+    FlexTextMetrics m;
+    layoutTree(&container, 400, m);
+
+    // First line at top, second at bottom (300 - 40 = 260)
+    check(approx(a.box.contentRect.y, 0, 2), "align-content space-between: first at top");
+    check(approx(b.box.contentRect.y, 260, 2), "align-content space-between: second at bottom");
+}
+
+static void testFlexAlignContentFlexEnd() {
+    FlexMockNode container; initFlexContainer(container);
+    container.style["flex-wrap"] = "wrap";
+    container.style["width"] = "200px";
+    container.style["height"] = "300px";
+    container.style["align-content"] = "flex-end";
+
+    FlexMockNode a; initFlexItem(a); a.style["width"] = "120px"; a.style["height"] = "40px";
+    FlexMockNode b; initFlexItem(b); b.style["width"] = "120px"; b.style["height"] = "40px";
+    container.addChild(&a); container.addChild(&b);
+
+    FlexTextMetrics m;
+    layoutTree(&container, 400, m);
+
+    // Free = 220, first line at 220, second at 260
+    check(approx(a.box.contentRect.y, 220, 2), "align-content flex-end: first line");
+    check(approx(b.box.contentRect.y, 260, 2), "align-content flex-end: second line");
+}
+
+static void testFlexAlignContentSpaceAround() {
+    FlexMockNode container; initFlexContainer(container);
+    container.style["flex-wrap"] = "wrap";
+    container.style["width"] = "200px";
+    container.style["height"] = "300px";
+    container.style["align-content"] = "space-around";
+
+    FlexMockNode a; initFlexItem(a); a.style["width"] = "120px"; a.style["height"] = "40px";
+    FlexMockNode b; initFlexItem(b); b.style["width"] = "120px"; b.style["height"] = "40px";
+    container.addChild(&a); container.addChild(&b);
+
+    FlexTextMetrics m;
+    layoutTree(&container, 400, m);
+
+    // Free = 220, per-line gap = 110, half-gap = 55
+    // First line at 55, second at 55 + 40 + 110 = 205
+    check(approx(a.box.contentRect.y, 55, 2), "align-content space-around: first line");
+    check(approx(b.box.contentRect.y, 205, 2), "align-content space-around: second line");
+}
+
+static void testFlexAlignContentSpaceEvenly() {
+    FlexMockNode container; initFlexContainer(container);
+    container.style["flex-wrap"] = "wrap";
+    container.style["width"] = "200px";
+    container.style["height"] = "300px";
+    container.style["align-content"] = "space-evenly";
+
+    FlexMockNode a; initFlexItem(a); a.style["width"] = "120px"; a.style["height"] = "40px";
+    FlexMockNode b; initFlexItem(b); b.style["width"] = "120px"; b.style["height"] = "40px";
+    container.addChild(&a); container.addChild(&b);
+
+    FlexTextMetrics m;
+    layoutTree(&container, 400, m);
+
+    // Free = 220, gaps = 220/3 ≈ 73.3
+    // First at 73.3, second at 73.3 + 40 + 73.3 = 186.6
+    check(approx(a.box.contentRect.y, 73, 2), "align-content space-evenly: first line");
+    check(approx(b.box.contentRect.y, 187, 2), "align-content space-evenly: second line");
+}
+
+static void testFlexAlignContentStretch() {
+    FlexMockNode container; initFlexContainer(container);
+    container.style["flex-wrap"] = "wrap";
+    container.style["width"] = "200px";
+    container.style["height"] = "300px";
+    container.style["align-content"] = "stretch";
+
+    FlexMockNode a; initFlexItem(a); a.style["width"] = "120px"; a.style["height"] = "auto";
+    FlexMockNode b; initFlexItem(b); b.style["width"] = "120px"; b.style["height"] = "auto";
+    container.addChild(&a); container.addChild(&b);
+
+    FlexTextMetrics m;
+    layoutTree(&container, 400, m);
+
+    // Each line gets 150px cross size (300/2), items should stretch to fill
+    check(approx(a.box.contentRect.y, 0, 2), "align-content stretch: first at top");
+    check(approx(b.box.contentRect.y, 150, 2), "align-content stretch: second at midpoint");
+    // Items with auto height should have been stretched
+    check(approx(a.box.contentRect.height, 150, 2), "align-content stretch: first item height");
+    check(approx(b.box.contentRect.height, 150, 2), "align-content stretch: second item height");
+}
+
 // ========== Entry point ==========
 
 void testFlexLayout() {
@@ -419,4 +542,12 @@ void testFlexLayout() {
     testFlexAbsolutePositioning();
     testFlexAbsoluteBottomRight();
     testFlexAbsoluteStretch();
+
+    // align-content
+    testFlexAlignContentCenter();
+    testFlexAlignContentSpaceBetween();
+    testFlexAlignContentFlexEnd();
+    testFlexAlignContentSpaceAround();
+    testFlexAlignContentSpaceEvenly();
+    testFlexAlignContentStretch();
 }

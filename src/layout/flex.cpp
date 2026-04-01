@@ -325,8 +325,58 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         line.crossSize = maxCross;
     }
 
+    // Distribute cross-axis space among lines (align-content)
+    float totalLineCross = 0;
+    for (auto& line : lines) totalLineCross += line.crossSize;
+    float totalLineGaps = (lines.size() > 1) ? gapCross * (lines.size() - 1) : 0;
+
+    // Determine definite cross size
+    float crossAvailable = -1;
+    if (isRow) {
+        float specH = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+        if (specH >= 0) {
+            if (styleVal(style, "box-sizing") == "border-box")
+                crossAvailable = specH - paddingV - borderV;
+            else
+                crossAvailable = specH;
+            if (crossAvailable < 0) crossAvailable = 0;
+        }
+    } else {
+        crossAvailable = containerMain; // for column flex, cross = width
+    }
+
+    float crossOffset = 0;
+    float crossGapAdjusted = gapCross;
+    if (crossAvailable >= 0 && lines.size() > 0) {
+        float freeCross = crossAvailable - totalLineCross - totalLineGaps;
+        if (freeCross < 0) freeCross = 0;
+
+        if (alignContent == "center") {
+            crossOffset = freeCross / 2.0f;
+        } else if (alignContent == "flex-end") {
+            crossOffset = freeCross;
+        } else if (alignContent == "space-between" && lines.size() > 1) {
+            crossGapAdjusted = gapCross + freeCross / (lines.size() - 1);
+        } else if (alignContent == "space-around" && !lines.empty()) {
+            float lineGap = freeCross / lines.size();
+            crossOffset = lineGap / 2.0f;
+            crossGapAdjusted = gapCross + lineGap;
+        } else if (alignContent == "space-evenly" && !lines.empty()) {
+            float lineGap = freeCross / (lines.size() + 1);
+            crossOffset = lineGap;
+            crossGapAdjusted = gapCross + lineGap;
+        } else if (alignContent == "stretch" || alignContent.empty()) {
+            // Stretch: distribute free space equally to each line's cross size
+            if (!lines.empty() && freeCross > 0) {
+                float extra = freeCross / lines.size();
+                for (auto& line : lines) line.crossSize += extra;
+            }
+        }
+        // else flex-start (default): crossOffset = 0
+    }
+
     // Position items
-    float crossCursor = 0;
+    float crossCursor = crossOffset;
     for (auto& line : lines) {
         // Compute justify-content offsets
         float totalMain = 0;
@@ -451,7 +501,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
-        crossCursor += line.crossSize + gapCross;
+        crossCursor += line.crossSize + crossGapAdjusted;
     }
 
     // Set container dimensions
@@ -465,7 +515,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             node->box.contentRect.height = specH;
         if (node->box.contentRect.height < 0) node->box.contentRect.height = 0;
     } else {
-        node->box.contentRect.height = crossCursor > 0 ? crossCursor - gapCross : 0;
+        node->box.contentRect.height = crossCursor > 0 ? crossCursor - crossGapAdjusted : 0;
     }
 
     // Position absolutely/fixed positioned children against this container

@@ -475,6 +475,75 @@ static void testGridProperties() {
     check(initialValue("justify-items") == "stretch", "justify-items initial = stretch");
 }
 
+// ========== grid-template-areas tests ==========
+
+static void testGridTemplateAreas() {
+    printf("--- Grid: template areas ---\n");
+    // Classic holy-grail layout:
+    //   "header header"
+    //   "sidebar content"
+    //   "footer footer"
+    GridNode grid; grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-columns"] = "100px 200px";
+    grid.style_["grid-template-rows"] = "50px 100px 40px";
+    grid.style_["grid-template-areas"] = "\"header header\" \"sidebar content\" \"footer footer\"";
+    grid.style_["width"] = "300px";
+    grid.style_["gap"] = "0"; grid.style_["row-gap"] = "0"; grid.style_["column-gap"] = "0";
+
+    GridNode header; header.initBlock(); header.style_["grid-area"] = "header";
+    GridNode sidebar; sidebar.initBlock(); sidebar.style_["grid-area"] = "sidebar";
+    GridNode content; content.initBlock(); content.style_["grid-area"] = "content";
+    GridNode footer; footer.initBlock(); footer.style_["grid-area"] = "footer";
+
+    grid.addChild(&header); grid.addChild(&sidebar);
+    grid.addChild(&content); grid.addChild(&footer);
+
+    GridMetrics m;
+    layoutTree(&grid, 400, m);
+
+    // Header spans both columns (width = 100 + 200 = 300)
+    check(approx(header.box.contentRect.width, 300, 2), "template-areas: header spans 2 cols");
+    check(approx(header.box.contentRect.y, 0, 2), "template-areas: header at top");
+
+    // Sidebar is in col 1, row 2
+    check(approx(sidebar.box.contentRect.width, 100, 2), "template-areas: sidebar width = 100");
+    check(approx(sidebar.box.contentRect.y, 50, 2), "template-areas: sidebar at row 2");
+
+    // Content is in col 2, row 2
+    check(approx(content.box.contentRect.width, 200, 2), "template-areas: content width = 200");
+    check(approx(content.box.contentRect.x, 100, 2), "template-areas: content at col 2");
+
+    // Footer spans both columns, row 3
+    check(approx(footer.box.contentRect.width, 300, 2), "template-areas: footer spans 2 cols");
+    check(approx(footer.box.contentRect.y, 150, 2), "template-areas: footer at row 3");
+}
+
+static void testGridTemplateAreasAutoTracks() {
+    printf("--- Grid: template areas with auto tracks ---\n");
+    // No explicit column/row templates - should infer from areas
+    GridNode grid; grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-areas"] = "\"a b\" \"a c\"";
+    grid.style_["width"] = "200px";
+    grid.style_["gap"] = "0"; grid.style_["row-gap"] = "0"; grid.style_["column-gap"] = "0";
+
+    GridNode a; a.initBlock(); a.style_["grid-area"] = "a"; a.style_["height"] = "60px";
+    GridNode b; b.initBlock(); b.style_["grid-area"] = "b"; b.style_["height"] = "30px";
+    GridNode c; c.initBlock(); c.style_["grid-area"] = "c"; c.style_["height"] = "30px";
+
+    grid.addChild(&a); grid.addChild(&b); grid.addChild(&c);
+
+    GridMetrics m;
+    layoutTree(&grid, 400, m);
+
+    // 'a' spans 2 rows in column 1
+    check(a.box.contentRect.height >= 55, "template-areas auto: 'a' spans 2 rows");
+    // 'b' and 'c' should be in column 2
+    check(b.box.contentRect.x > 10, "template-areas auto: 'b' in col 2");
+    check(approx(b.box.contentRect.x, c.box.contentRect.x, 2), "template-areas auto: b and c same col");
+}
+
 // ========== Entry point ==========
 
 void testGridLayout() {
@@ -498,4 +567,8 @@ void testGridLayout() {
     // Absolute positioning in grid
     testGridAbsolutePositioning();
     testGridAbsoluteStretch();
+
+    // grid-template-areas
+    testGridTemplateAreas();
+    testGridTemplateAreasAutoTracks();
 }

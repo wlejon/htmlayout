@@ -207,6 +207,60 @@ std::vector<float> resolveTrackSizes(const std::vector<TrackSize>& tracks,
     return sizes;
 }
 
+// Named grid area: 1-based line numbers
+struct GridArea {
+    int rowStart = 0, colStart = 0, rowEnd = 0, colEnd = 0;
+};
+
+// Parse grid-template-areas into a map of name → GridArea (1-based lines).
+// Format: "header header" "sidebar content" "footer footer"
+std::unordered_map<std::string, GridArea> parseGridTemplateAreas(const std::string& value) {
+    std::unordered_map<std::string, GridArea> areas;
+    if (value.empty() || value == "none") return areas;
+
+    // Extract quoted row strings
+    std::vector<std::vector<std::string>> grid;
+    size_t pos = 0;
+    while (pos < value.size()) {
+        auto q = value.find('"', pos);
+        if (q == std::string::npos) q = value.find('\'', pos);
+        if (q == std::string::npos) break;
+        char quote = value[q];
+        auto end = value.find(quote, q + 1);
+        if (end == std::string::npos) break;
+        std::string rowStr = value.substr(q + 1, end - q - 1);
+        // Tokenize row by whitespace
+        std::vector<std::string> rowTokens;
+        std::istringstream iss(rowStr);
+        std::string tok;
+        while (iss >> tok) rowTokens.push_back(tok);
+        grid.push_back(std::move(rowTokens));
+        pos = end + 1;
+    }
+
+    // Build areas from the grid (name → bounding rectangle)
+    for (size_t r = 0; r < grid.size(); r++) {
+        for (size_t c = 0; c < grid[r].size(); c++) {
+            const std::string& name = grid[r][c];
+            if (name == ".") continue;
+            auto it = areas.find(name);
+            if (it == areas.end()) {
+                // 1-based line numbers
+                areas[name] = {static_cast<int>(r + 1), static_cast<int>(c + 1),
+                               static_cast<int>(r + 2), static_cast<int>(c + 2)};
+            } else {
+                // Expand to encompass this cell
+                auto& a = it->second;
+                if (static_cast<int>(r + 1) < a.rowStart) a.rowStart = static_cast<int>(r + 1);
+                if (static_cast<int>(c + 1) < a.colStart) a.colStart = static_cast<int>(c + 1);
+                if (static_cast<int>(r + 2) > a.rowEnd) a.rowEnd = static_cast<int>(r + 2);
+                if (static_cast<int>(c + 2) > a.colEnd) a.colEnd = static_cast<int>(c + 2);
+            }
+        }
+    }
+    return areas;
+}
+
 // Parse grid-area value: "row-start / column-start / row-end / column-end"
 // or named area. Returns 1-based line numbers.
 struct GridPlacement {
@@ -222,12 +276,25 @@ int parseGridLine(const std::string& val) {
     try { return std::stoi(val); } catch (...) { return 0; }
 }
 
-GridPlacement parseGridPlacement(const css::ComputedStyle& style) {
+GridPlacement parseGridPlacement(const css::ComputedStyle& style,
+                                 const std::unordered_map<std::string, GridArea>& namedAreas) {
     GridPlacement gp;
 
     // Check grid-area first (shorthand)
     const std::string& area = styleVal(style, "grid-area");
     if (!area.empty() && area != "auto") {
+        // Check if it's a named area reference (single identifier, no slashes)
+        if (area.find('/') == std::string::npos) {
+            auto it = namedAreas.find(area);
+            if (it != namedAreas.end()) {
+                gp.rowStart = it->second.rowStart;
+                gp.colStart = it->second.colStart;
+                gp.rowEnd = it->second.rowEnd;
+                gp.colEnd = it->second.colEnd;
+                return gp;
+            }
+        }
+
         // Parse "row-start / col-start / row-end / col-end"
         std::vector<std::string> parts;
         std::string current;
@@ -346,6 +413,24 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     auto colTracks = parseTrackList(styleVal(style, "grid-template-columns"), containerWidth, fontSize);
     auto rowTracks = parseTrackList(styleVal(style, "grid-template-rows"), containerWidth, fontSize);
 
+    // Parse named grid areas
+    auto namedAreas = parseGridTemplateAreas(styleVal(style, "grid-template-areas"));
+
+    // Infer track counts from template areas if tracks not explicitly defined
+    if (!namedAreas.empty()) {
+        size_t areaMaxCol = 0, areaMaxRow = 0;
+        for (auto& [name, area] : namedAreas) {
+            areaMaxCol = std::max(areaMaxCol, static_cast<size_t>(area.colEnd - 1));
+            areaMaxRow = std::max(areaMaxRow, static_cast<size_t>(area.rowEnd - 1));
+        }
+        while (colTracks.size() < areaMaxCol) {
+            colTracks.push_back(TrackSize{TrackSize::Auto, 0, 0, -1, false});
+        }
+        while (rowTracks.size() < areaMaxRow) {
+            rowTracks.push_back(TrackSize{TrackSize::Auto, 0, 0, -1, false});
+        }
+    }
+
     // Collect grid items (skip text nodes, display:none, and absolute/fixed positioned)
     struct GridItem {
         LayoutNode* node;
@@ -370,7 +455,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
         GridItem item;
         item.node = child;
-        item.placement = parseGridPlacement(cs);
+        item.placement = parseGridPlacement(cs, namedAreas);
         item.row = -1; item.col = -1;
         item.rowSpan = 1; item.colSpan = 1;
         items.push_back(item);

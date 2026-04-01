@@ -425,6 +425,43 @@ static void testClear() {
     check(cascade.resolve(e)["color"] == "black", "cascade: after clear, color is initial");
 }
 
+static void testRevertKeyword() {
+    printf("--- Cascade: revert keyword ---\n");
+
+    // UA stylesheet sets h1 { display: block; font-weight: bold; font-size: 2em; }
+    // Author stylesheet overrides with h1 { display: revert; font-weight: revert; }
+    // revert should roll back to the UA value
+
+    Cascade cascade;
+    cascade.addStylesheet(defaultUserAgentStylesheet(), nullptr, nullptr, Origin::UserAgent);
+    cascade.addStylesheet(parse(
+        "h1 { display: flex; font-weight: normal; }\n"
+        "h1.reverted { display: revert; font-weight: revert; }\n"
+    ));
+
+    // Without revert: author style wins
+    MockElement h1; h1.tag = "h1";
+    auto style1 = cascade.resolve(h1);
+    check(style1["display"] == "flex", "revert: author display=flex without revert");
+    check(style1["font-weight"] == "normal", "revert: author font-weight=normal without revert");
+
+    // With revert: falls back to UA values
+    MockElement h1r; h1r.tag = "h1"; h1r.classes = "reverted";
+    auto style2 = cascade.resolve(h1r);
+    check(style2["display"] == "block", "revert: display reverts to UA block");
+    check(style2["font-weight"] == "bold", "revert: font-weight reverts to UA bold");
+
+    // revert on a property with no UA value → initial value
+    Cascade cascade2;
+    cascade2.addStylesheet(defaultUserAgentStylesheet(), nullptr, nullptr, Origin::UserAgent);
+    cascade2.addStylesheet(parse("span { color: red; }\nspan.rev { color: revert; }"));
+
+    MockElement span; span.tag = "span"; span.classes = "rev";
+    auto style3 = cascade2.resolve(span);
+    // UA doesn't set color on span, so revert → initial (black)
+    check(style3["color"] == "black", "revert: color reverts to initial when no UA value");
+}
+
 void testCascade() {
     testBasicResolve();
     testSpecificityOrder();
@@ -445,4 +482,5 @@ void testCascade() {
     testPseudoElements();
     testUserAgentStylesheet();
     testClear();
+    testRevertKeyword();
 }

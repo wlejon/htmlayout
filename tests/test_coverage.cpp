@@ -256,6 +256,50 @@ static void testMediaQueryEvaluation() {
     // Height exact match
     check(evaluateMediaQuery("(height: 768px)", {1024, 768, "screen"}) == true,
           "media: exact height:768px matches");
+
+    // Range syntax
+    check(evaluateMediaQuery("(width > 500px)", {1024, 768, "screen"}) == true,
+          "media: width > 500px matches 1024");
+    check(evaluateMediaQuery("(width > 2000px)", {1024, 768, "screen"}) == false,
+          "media: width > 2000px doesn't match 1024");
+    check(evaluateMediaQuery("(width >= 1024px)", {1024, 768, "screen"}) == true,
+          "media: width >= 1024px matches exactly");
+    check(evaluateMediaQuery("(width < 1025px)", {1024, 768, "screen"}) == true,
+          "media: width < 1025px matches 1024");
+    check(evaluateMediaQuery("(width <= 1024px)", {1024, 768, "screen"}) == true,
+          "media: width <= 1024px matches exactly");
+    check(evaluateMediaQuery("(width < 500px)", {1024, 768, "screen"}) == false,
+          "media: width < 500px doesn't match 1024");
+
+    // Reversed range: value op feature
+    check(evaluateMediaQuery("(500px < width)", {1024, 768, "screen"}) == true,
+          "media: 500px < width matches 1024");
+    check(evaluateMediaQuery("(2000px < width)", {1024, 768, "screen"}) == false,
+          "media: 2000px < width doesn't match 1024");
+
+    // Chained range: value <= feature <= value
+    check(evaluateMediaQuery("(500px <= width <= 1500px)", {1024, 768, "screen"}) == true,
+          "media: 500px <= width <= 1500px matches 1024");
+    check(evaluateMediaQuery("(500px <= width <= 800px)", {1024, 768, "screen"}) == false,
+          "media: 500px <= width <= 800px doesn't match 1024");
+
+    // Height range
+    check(evaluateMediaQuery("(height > 500px)", {1024, 768, "screen"}) == true,
+          "media: height > 500px matches 768");
+    check(evaluateMediaQuery("(height < 500px)", {1024, 768, "screen"}) == false,
+          "media: height < 500px doesn't match 768");
+
+    // Logical or
+    check(evaluateMediaQuery("(width > 2000px) or (height > 500px)", {1024, 768, "screen"}) == true,
+          "media: or - second condition true");
+    check(evaluateMediaQuery("(width > 2000px) or (height > 2000px)", {1024, 768, "screen"}) == false,
+          "media: or - both false");
+    check(evaluateMediaQuery("(width > 500px) or (height > 500px)", {1024, 768, "screen"}) == true,
+          "media: or - both true");
+
+    // Mix of and/or
+    check(evaluateMediaQuery("(min-width: 500px) and (max-width: 1500px)", {1024, 768, "screen"}) == true,
+          "media: and - both match");
 }
 
 // ======================================================================
@@ -1478,6 +1522,111 @@ static void testTableRowGroup() {
 }
 
 // ======================================================================
+// TABLE COLSPAN / ROWSPAN
+// ======================================================================
+
+static void testTableColspan() {
+    printf("--- Table: colspan ---\n");
+    // 2 rows: first has 1 cell spanning 2 cols, second has 2 cells
+    CovNode table; table.initTable();
+    table.style_["width"] = "300px";
+
+    CovNode row1; row1.initBlock(); row1.style_["display"] = "table-row";
+    CovNode spanning; spanning.initBlock();
+    spanning.style_["display"] = "table-cell"; spanning.style_["height"] = "30px";
+    spanning.style_["colspan"] = "2";
+    row1.addChild(&spanning);
+
+    CovNode row2; row2.initBlock(); row2.style_["display"] = "table-row";
+    CovNode c1; c1.initBlock(); c1.style_["display"] = "table-cell"; c1.style_["height"] = "30px";
+    CovNode c2; c2.initBlock(); c2.style_["display"] = "table-cell"; c2.style_["height"] = "30px";
+    row2.addChild(&c1); row2.addChild(&c2);
+
+    table.addChild(&row1); table.addChild(&row2);
+
+    CovMetrics m;
+    layoutTree(&table, 800, m);
+
+    // Spanning cell should be wider than either column cell
+    check(spanning.box.contentRect.width > c1.box.contentRect.width,
+          "table colspan: spanning cell wider than single cell");
+    // Spanning cell width should approximately equal both columns
+    float bothCols = c1.box.contentRect.width + c2.box.contentRect.width +
+                     c1.box.padding.left + c1.box.padding.right +
+                     c2.box.padding.left + c2.box.padding.right;
+    check(spanning.box.contentRect.width >= bothCols * 0.8f,
+          "table colspan: spanning cell covers both columns");
+}
+
+static void testTableRowspan() {
+    printf("--- Table: rowspan ---\n");
+    // Row1: cell spanning 2 rows + normal cell. Row2: 1 normal cell
+    CovNode table; table.initTable();
+    table.style_["width"] = "300px";
+
+    CovNode row1; row1.initBlock(); row1.style_["display"] = "table-row";
+    CovNode spanning; spanning.initBlock();
+    spanning.style_["display"] = "table-cell"; spanning.style_["height"] = "20px";
+    spanning.style_["rowspan"] = "2";
+    CovNode c1; c1.initBlock(); c1.style_["display"] = "table-cell"; c1.style_["height"] = "40px";
+    row1.addChild(&spanning); row1.addChild(&c1);
+
+    CovNode row2; row2.initBlock(); row2.style_["display"] = "table-row";
+    CovNode c2; c2.initBlock(); c2.style_["display"] = "table-cell"; c2.style_["height"] = "40px";
+    row2.addChild(&c2);
+
+    table.addChild(&row1); table.addChild(&row2);
+
+    CovMetrics m;
+    layoutTree(&table, 800, m);
+
+    // Spanning cell should be taller than single-row cells
+    check(spanning.box.contentRect.height >= 70,
+          "table rowspan: spanning cell covers both rows");
+    // c2 should be in the second column (same x as c1), not first
+    check(approx(c2.box.contentRect.x, c1.box.contentRect.x, 2),
+          "table rowspan: second-row cell in correct column");
+}
+
+static void testTableColspanAndRowspan() {
+    printf("--- Table: colspan + rowspan combined ---\n");
+    // 3x3 grid: top-left cell spans 2 cols x 2 rows
+    CovNode table; table.initTable();
+    table.style_["width"] = "300px";
+
+    CovNode row1; row1.initBlock(); row1.style_["display"] = "table-row";
+    CovNode big; big.initBlock();
+    big.style_["display"] = "table-cell"; big.style_["height"] = "20px";
+    big.style_["colspan"] = "2"; big.style_["rowspan"] = "2";
+    CovNode c13; c13.initBlock(); c13.style_["display"] = "table-cell"; c13.style_["height"] = "30px";
+    row1.addChild(&big); row1.addChild(&c13);
+
+    CovNode row2; row2.initBlock(); row2.style_["display"] = "table-row";
+    CovNode c23; c23.initBlock(); c23.style_["display"] = "table-cell"; c23.style_["height"] = "30px";
+    row2.addChild(&c23);
+
+    CovNode row3; row3.initBlock(); row3.style_["display"] = "table-row";
+    CovNode c31; c31.initBlock(); c31.style_["display"] = "table-cell"; c31.style_["height"] = "30px";
+    CovNode c32; c32.initBlock(); c32.style_["display"] = "table-cell"; c32.style_["height"] = "30px";
+    CovNode c33; c33.initBlock(); c33.style_["display"] = "table-cell"; c33.style_["height"] = "30px";
+    row3.addChild(&c31); row3.addChild(&c32); row3.addChild(&c33);
+
+    table.addChild(&row1); table.addChild(&row2); table.addChild(&row3);
+
+    CovMetrics m;
+    layoutTree(&table, 800, m);
+
+    // Big cell should span 2 columns and 2 rows
+    check(big.box.contentRect.width > c31.box.contentRect.width,
+          "table combined: big cell wider than single col");
+    check(big.box.contentRect.height >= 50,
+          "table combined: big cell covers 2 row heights");
+    // c23 should be in col 3 (same x as c13)
+    check(approx(c23.box.contentRect.x, c13.box.contentRect.x, 2),
+          "table combined: row2 cell skips spanned columns");
+}
+
+// ======================================================================
 // HIT TEST COVERAGE
 // ======================================================================
 
@@ -1930,6 +2079,9 @@ void testCoverage() {
     testTableBorderSpacing();
     testTableCaption();
     testTableRowGroup();
+    testTableColspan();
+    testTableRowspan();
+    testTableColspanAndRowspan();
 
     // Hit testing
     testHitTestVisibilityHidden();

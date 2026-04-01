@@ -135,43 +135,18 @@ bool Cascade::evaluateContainerQuery(const ElementRef& elem,
             if (s == std::string::npos) return true;
             cond = cond.substr(s, e - s + 1);
 
-            auto colonPos = cond.find(':');
-            if (colonPos == std::string::npos) return true;
-
-            std::string feature = cond.substr(0, colonPos);
-            std::string valueStr = cond.substr(colonPos + 1);
-            // Trim
-            {
-                size_t a = feature.find_first_not_of(" \t"); size_t b = feature.find_last_not_of(" \t");
-                feature = (a != std::string::npos) ? feature.substr(a, b - a + 1) : "";
-                a = valueStr.find_first_not_of(" \t"); b = valueStr.find_last_not_of(" \t");
-                valueStr = (a != std::string::npos) ? valueStr.substr(a, b - a + 1) : "";
-            }
-
-            // Parse numeric value
-            float val = 0;
-            try { val = std::stof(valueStr); } catch (...) {}
-
             float inlineSize = current->containerInlineSize();
             float blockSize = current->containerBlockSize();
 
-            if (feature == "min-width") return inlineSize >= val;
-            if (feature == "max-width") return inlineSize <= val;
-            if (feature == "width") return inlineSize == val;
-            if (feature == "min-height") {
-                if (cType != "size") return true; // block-size only with size containment
-                return blockSize >= val;
-            }
-            if (feature == "max-height") {
-                if (cType != "size") return true;
-                return blockSize <= val;
-            }
-            if (feature == "height") {
-                if (cType != "size") return true;
-                return blockSize == val;
-            }
+            // Build a MediaContext to reuse evaluateMediaFeature / range parsing
+            MediaContext mctx;
+            mctx.viewportWidth = inlineSize;
+            mctx.viewportHeight = (cType == "size") ? blockSize : 0;
 
-            return true; // unknown feature, permissive
+            // Evaluate potentially multiple conditions joined by and/or
+            // Split into parenthesized features
+            std::string fullCond = "(" + cond + ")";
+            return evaluateMediaQuery(fullCond, mctx);
         }
         current = current->parent();
     }
@@ -179,7 +154,7 @@ bool Cascade::evaluateContainerQuery(const ElementRef& elem,
 }
 
 void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
-                             const MediaContext* media) {
+                             const MediaContext* media, Origin origin) {
     // Record pre-declared layer ordering
     for (auto& name : sheet.layerOrder) {
         getOrCreateLayerIndex(name);
@@ -189,7 +164,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
     for (auto& rule : sheet.rules) {
         auto selectors = parseSelectorList(rule.selector);
         for (auto& sel : selectors) {
-            rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, {}, {}});
+            rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, origin, {}, {}});
         }
     }
 
@@ -204,7 +179,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
             for (auto& rule : block.rules) {
                 auto selectors = parseSelectorList(rule.selector);
                 for (auto& sel : selectors) {
-                    rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, {}, {}});
+                    rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, origin, {}, {}});
                 }
             }
         }
@@ -216,7 +191,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
         for (auto& rule : layerBlock.rules) {
             auto selectors = parseSelectorList(rule.selector);
             for (auto& sel : selectors) {
-                rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, layerIdx, {}, {}});
+                rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, layerIdx, origin, {}, {}});
             }
         }
         // @media inside @layer
@@ -229,7 +204,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
                 for (auto& rule : mediaBlock.rules) {
                     auto selectors = parseSelectorList(rule.selector);
                     for (auto& sel : selectors) {
-                        rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, layerIdx, {}, {}});
+                        rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, layerIdx, origin, {}, {}});
                     }
                 }
             }
@@ -241,7 +216,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
         for (auto& rule : containerBlock.rules) {
             auto selectors = parseSelectorList(rule.selector);
             for (auto& sel : selectors) {
-                rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1,
+                rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, origin,
                                   containerBlock.name, containerBlock.condition});
             }
         }
@@ -260,6 +235,7 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         size_t order;
         bool isInline;  // inline style has highest author specificity
         int layerOrder;  // -1 = unlayered, >=0 = layer index
+        Origin origin;
     };
 
     std::vector<MatchedDecl> matched;
@@ -385,7 +361,8 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         for (auto& decl : rule.declarations) {
             matched.push_back({
                 decl.property, decl.value, decl.important,
-                rule.selector.specificity, rule.order, false, rule.layerOrder
+                rule.selector.specificity, rule.order, false, rule.layerOrder,
+                rule.origin
             });
         }
     }
@@ -399,7 +376,8 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
                 0xFFFFFFFF, // inline style beats all selector specificities
                 SIZE_MAX,   // and all source orders
                 true,
-                -1          // inline styles are unlayered
+                -1,         // inline styles are unlayered
+                Origin::Author
             });
         }
     }
@@ -446,6 +424,17 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
+    // Build UA-only resolved values for revert keyword support
+    ComputedStyle uaStyle;
+    for (auto& m : matched) {
+        if (m.origin == Origin::UserAgent) {
+            auto expanded = expandShorthand(m.property, m.value);
+            for (auto& e : expanded) {
+                uaStyle[e.property] = e.value;
+            }
+        }
+    }
+
     // 5. Resolve inherit/initial/unset/revert keywords
     for (auto& [prop, val] : style) {
         if (val == "inherit") {
@@ -462,9 +451,19 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             }
         } else if (val == "initial") {
             val = initialValue(prop);
-        } else if (val == "unset" || val == "revert") {
+        } else if (val == "revert") {
+            // revert: roll back to UA stylesheet value for this property
+            auto it = uaStyle.find(prop);
+            if (it != uaStyle.end()) {
+                val = it->second;
+            } else if (isInherited(prop) && parentStyle) {
+                auto pit = parentStyle->find(prop);
+                val = (pit != parentStyle->end()) ? pit->second : initialValue(prop);
+            } else {
+                val = initialValue(prop);
+            }
+        } else if (val == "unset") {
             // unset: if inherited property -> inherit, else -> initial
-            // revert: ideally rolls back to UA, but we treat as unset for now
             if (isInherited(prop)) {
                 if (parentStyle) {
                     auto it = parentStyle->find(prop);

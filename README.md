@@ -15,7 +15,7 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - `@container` queries with named containers and size containment
 - Shorthand expansion for ~150 properties (`margin`, `padding`, `border`, `flex`, `grid`, `font`, `container`, etc.)
 - Color parsing (named, hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`)
-- `@media` query evaluation (basic conditions: `min/max-width`, `min/max-height`, `orientation`)
+- `@media` query evaluation (`min/max-width`, `min/max-height`, `orientation`, range syntax, logical `or`)
 - CSS Variables (`var()`) with fallback and inheritance
 - Built-in user-agent stylesheet
 - Shadow DOM and web component support: `:host`, `:host()`, `:host-context()`, `::slotted()`, `::part()`, scoped stylesheets
@@ -23,10 +23,10 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 **Layout Engine**
 - Block formatting context with margin collapsing and floats (`left`, `right`, `clear`)
 - Inline formatting context with line wrapping and text alignment (`left`, `right`, `center`, `justify`)
-- Flexbox (`flex-direction`, `flex-wrap`, `justify-content`, `align-items`, grow/shrink, gap, order)
-- CSS Grid (templates, auto-placement, 1-based line placement, gap, `fr` units)
-- Table layout (simplified algorithm; handles `table-row`, `table-cell`, `table-caption`, `border-spacing`, `border-collapse`)
-- Basic Multi-column layout (`column-count`, `column-width`, `column-gap`)
+- Flexbox (`flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-content`, grow/shrink, gap, order)
+- CSS Grid (templates, `grid-template-areas`, auto-placement, 1-based line placement, gap, `fr` units)
+- Table layout (`table-row`, `table-cell`, `table-caption`, `border-spacing`, `border-collapse`, `rowspan`, `colspan`)
+- Multi-column layout (`column-count`, `column-width`, `column-gap`, `column-span: all`, `break-before`/`break-after`)
 - Length units: `px`, `em`, `%`, `vw`, `vh`, `vmin`, `vmax`, `rem`, `ch`, `ex`, `pt`, `cm`, `mm`, `in`, `pc`
 - `calc()` expressions with basic math (`+`, `-`, `*`, `/`) and nested parentheses
 - Intrinsic sizing (`min-content`, `max-content`, `fit-content`)
@@ -35,15 +35,6 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - `text-overflow: ellipsis`, `overflow-wrap`, `word-break`, `white-space` handling
 - `display: contents` (children promoted into parent formatting context)
 - `position: relative`, `absolute`, `fixed`, `sticky` (layout-time positioning)
-
-## Current Limitations
-
-- **Flexbox**: `align-content` is parsed but not currently used for distributing flex lines.
-- **Table Layout**: Simplified distribution; does not currently support `rowspan` or `colspan`.
-- **Grid Layout**: Named areas (`grid-template-areas`) are parsed but not used for placement.
-- **Multi-column**: Basic redistribution; lacks advanced break controls and `column-span: all`.
-- **Queries**: Range syntax (`width > 500px`) and logical `or` are not yet supported in `@media` and `@container`.
-- **Keywords**: `revert` is currently treated as `unset`.
 
 ## Requirements
 
@@ -118,7 +109,7 @@ class MyTextMetrics : public htmlayout::layout::TextMetrics {
 using namespace htmlayout::css;
 
 Cascade cascade;
-cascade.addStylesheet(defaultUserAgentStylesheet());
+cascade.addStylesheet(defaultUserAgentStylesheet(), nullptr, nullptr, Origin::UserAgent);
 cascade.addStylesheet(parse(yourCSS));
 
 // For Shadow DOM scoped styles:

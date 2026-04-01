@@ -11,6 +11,9 @@ namespace htmlayout::css {
 // Computed style: the final resolved CSS properties for one element
 using ComputedStyle = std::unordered_map<std::string, std::string>;
 
+// Stylesheet origin for the cascade
+enum class Origin { UserAgent, Author };
+
 // A cascade context resolves which CSS rules apply to which elements.
 // It supports scoping for shadow DOM: rules in a shadow scope only match
 // elements in that same scope.
@@ -20,8 +23,10 @@ public:
     // scope = nullptr means document-level (global).
     // scope = shadow_root_ptr means shadow-scoped styles.
     // If a MediaContext is provided, @media blocks are conditionally included.
+    // origin distinguishes UA from author styles (used by the `revert` keyword).
     void addStylesheet(const Stylesheet& sheet, void* scope = nullptr,
-                       const MediaContext* media = nullptr);
+                       const MediaContext* media = nullptr,
+                       Origin origin = Origin::Author);
 
     // Resolve computed style for an element.
     // Considers: author styles, inline styles, inheritance, initial values.
@@ -50,6 +55,7 @@ private:
         void* scope = nullptr;  // which shadow root, or nullptr for global
         size_t order = 0;       // insertion order for stable sort
         int layerOrder = -1;    // -1 = unlayered (highest priority), >=0 = layer index
+        Origin origin = Origin::Author;
         // Container query: if non-empty, this rule only applies when the container condition is met
         std::string containerName;     // required container name (empty = any)
         std::string containerCondition; // e.g. "(min-width: 400px)"

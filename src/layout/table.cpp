@@ -163,11 +163,31 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     collectRows(node);
 
-    // Determine number of columns
+    // Build a grid-based cell placement that handles colspan and rowspan.
+    // colspan/rowspan are read from computed style (consumer sets them).
+    struct CellInfo {
+        LayoutNode* node = nullptr;
+        size_t gridRow = 0, gridCol = 0;
+        size_t colspan = 1, rowspan = 1;
+    };
+    std::vector<CellInfo> cellInfos;
+
+    // First pass: place cells into a 2D grid, respecting spans.
+    // grid[r][c] points to the CellInfo that occupies that slot (nullptr = empty).
+    size_t numRows = rows.size();
     size_t numCols = 0;
+
+    // Pre-scan to estimate column count including colspans
     for (auto& row : rows) {
-        numCols = std::max(numCols, row.cells.size());
+        size_t cols = 0;
+        for (auto* cell : row.cells) {
+            auto& cs = cell->computedStyle();
+            int cs_val = static_cast<int>(resolveLength(styleVal(cs, "colspan"), 0, fontSize));
+            cols += (cs_val > 1) ? cs_val : 1;
+        }
+        numCols = std::max(numCols, cols);
     }
+
     if (numCols == 0 && absChildren.empty()) {
         node->box.contentRect.width = tableContentWidth;
         node->box.contentRect.height = 0;
@@ -176,25 +196,81 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     if (numCols > 0) {
 
+    // Build grid — may grow if rowspans push cells into new columns
+    std::vector<std::vector<CellInfo*>> grid(numRows, std::vector<CellInfo*>(numCols, nullptr));
+
+    auto ensureGridCols = [&](size_t needed) {
+        if (needed > numCols) {
+            numCols = needed;
+            for (auto& gridRow : grid) gridRow.resize(numCols, nullptr);
+        }
+    };
+
+    auto ensureGridRows = [&](size_t needed) {
+        while (grid.size() < needed) {
+            grid.emplace_back(numCols, nullptr);
+        }
+        if (needed > numRows) numRows = needed;
+    };
+
+    for (size_t r = 0; r < rows.size(); r++) {
+        size_t gridCol = 0;
+        for (auto* cell : rows[r].cells) {
+            // Skip slots already occupied by spanning cells from previous rows
+            while (gridCol < numCols && grid[r][gridCol] != nullptr) gridCol++;
+            if (gridCol >= numCols) ensureGridCols(gridCol + 1);
+
+            auto& cs = cell->computedStyle();
+            int cspan = static_cast<int>(resolveLength(styleVal(cs, "colspan"), 0, fontSize));
+            int rspan = static_cast<int>(resolveLength(styleVal(cs, "rowspan"), 0, fontSize));
+            if (cspan < 1) cspan = 1;
+            if (rspan < 1) rspan = 1;
+
+            ensureGridCols(gridCol + cspan);
+            ensureGridRows(r + rspan);
+
+            cellInfos.push_back({cell, r, gridCol, static_cast<size_t>(cspan), static_cast<size_t>(rspan)});
+            CellInfo* ci = &cellInfos.back();
+
+            for (size_t dr = 0; dr < static_cast<size_t>(rspan); dr++) {
+                for (size_t dc = 0; dc < static_cast<size_t>(cspan); dc++) {
+                    grid[r + dr][gridCol + dc] = ci;
+                }
+            }
+            gridCol += cspan;
+        }
+    }
+
     // Phase 1: Determine column widths.
-    // Simple algorithm: lay out each cell to measure intrinsic width,
-    // then distribute available width proportionally.
+    // Only non-spanning cells (colspan=1) contribute directly.
     std::vector<float> colWidths(numCols, 0.0f);
     float totalSpacing = borderSpacing * (numCols + 1);
     float cellAvailWidth = (tableContentWidth - totalSpacing) / numCols;
     if (cellAvailWidth < 0) cellAvailWidth = 0;
 
-    // First pass: measure minimum widths
-    for (auto& row : rows) {
-        for (size_t c = 0; c < row.cells.size(); c++) {
-            auto* cell = row.cells[c];
-            layoutNode(cell, cellAvailWidth, metrics);
-            float cellFullW = cell->box.fullWidth() + cell->box.margin.left + cell->box.margin.right;
-            colWidths[c] = std::max(colWidths[c], cellFullW);
+    for (auto& ci : cellInfos) {
+        float w = cellAvailWidth * ci.colspan + borderSpacing * (ci.colspan - 1);
+        layoutNode(ci.node, w, metrics);
+        float cellFullW = ci.node->box.fullWidth() + ci.node->box.margin.left + ci.node->box.margin.right;
+        if (ci.colspan == 1) {
+            colWidths[ci.gridCol] = std::max(colWidths[ci.gridCol], cellFullW);
         }
     }
 
-    // Distribute remaining space: if total column widths < available, expand proportionally
+    // Distribute spanning cell widths: if a spanning cell needs more than the sum
+    // of its columns, expand columns equally
+    for (auto& ci : cellInfos) {
+        if (ci.colspan <= 1) continue;
+        float cellFullW = ci.node->box.fullWidth() + ci.node->box.margin.left + ci.node->box.margin.right;
+        float spannedWidth = borderSpacing * (ci.colspan - 1);
+        for (size_t c = 0; c < ci.colspan; c++) spannedWidth += colWidths[ci.gridCol + c];
+        if (cellFullW > spannedWidth) {
+            float extra = (cellFullW - spannedWidth) / ci.colspan;
+            for (size_t c = 0; c < ci.colspan; c++) colWidths[ci.gridCol + c] += extra;
+        }
+    }
+
+    // Distribute remaining space proportionally
     float totalColWidth = 0;
     for (float w : colWidths) totalColWidth += w;
     float distributable = tableContentWidth - totalSpacing - totalColWidth;
@@ -203,39 +279,48 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             colWidths[c] += distributable * (colWidths[c] / totalColWidth);
         }
     } else if (distributable > 0 && totalColWidth == 0) {
-        // Equal distribution
         float perCol = distributable / numCols;
         for (size_t c = 0; c < numCols; c++) colWidths[c] = perCol;
     }
 
     // Phase 2: Layout cells with final widths and determine row heights
-    std::vector<float> rowHeights(rows.size(), 0.0f);
+    std::vector<float> rowHeights(numRows, 0.0f);
 
-    for (size_t r = 0; r < rows.size(); r++) {
-        auto& row = rows[r];
-        for (size_t c = 0; c < row.cells.size(); c++) {
-            auto* cell = row.cells[c];
-            float cw = (c < colWidths.size()) ? colWidths[c] : cellAvailWidth;
-            // Re-layout cell with proper column width
-            layoutNode(cell, cw, metrics);
+    for (auto& ci : cellInfos) {
+        float cw = borderSpacing * (ci.colspan - 1);
+        for (size_t c = 0; c < ci.colspan; c++) cw += colWidths[ci.gridCol + c];
+        layoutNode(ci.node, cw, metrics);
 
-            // Respect cell's explicit width if set
-            auto& cs = cell->computedStyle();
-            const std::string& cellW = styleVal(cs, "width");
-            if (cellW == "auto" || cellW.empty()) {
-                cell->box.contentRect.width = cw -
-                    cell->box.padding.left - cell->box.padding.right -
-                    cell->box.border.left - cell->box.border.right -
-                    cell->box.margin.left - cell->box.margin.right;
-                if (cell->box.contentRect.width < 0) cell->box.contentRect.width = 0;
-            }
+        auto& cs = ci.node->computedStyle();
+        const std::string& cellW = styleVal(cs, "width");
+        if (cellW == "auto" || cellW.empty()) {
+            ci.node->box.contentRect.width = cw -
+                ci.node->box.padding.left - ci.node->box.padding.right -
+                ci.node->box.border.left - ci.node->box.border.right -
+                ci.node->box.margin.left - ci.node->box.margin.right;
+            if (ci.node->box.contentRect.width < 0) ci.node->box.contentRect.width = 0;
+        }
 
-            float cellFullH = cell->box.fullHeight() + cell->box.margin.top + cell->box.margin.bottom;
-            rowHeights[r] = std::max(rowHeights[r], cellFullH);
+        float cellFullH = ci.node->box.fullHeight() + ci.node->box.margin.top + ci.node->box.margin.bottom;
+        if (ci.rowspan == 1) {
+            rowHeights[ci.gridRow] = std::max(rowHeights[ci.gridRow], cellFullH);
+        }
+    }
+
+    // Distribute spanning row heights
+    for (auto& ci : cellInfos) {
+        if (ci.rowspan <= 1) continue;
+        float cellFullH = ci.node->box.fullHeight() + ci.node->box.margin.top + ci.node->box.margin.bottom;
+        float spannedHeight = borderSpacing * (ci.rowspan - 1);
+        for (size_t r = 0; r < ci.rowspan; r++) spannedHeight += rowHeights[ci.gridRow + r];
+        if (cellFullH > spannedHeight) {
+            float extra = (cellFullH - spannedHeight) / ci.rowspan;
+            for (size_t r = 0; r < ci.rowspan; r++) rowHeights[ci.gridRow + r] += extra;
         }
     }
 
     // Phase 3: Position cells
+    // Compute row Y positions
     float cursorY = 0;
 
     // Layout captions above the table
@@ -246,55 +331,66 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         cursorY += cap->box.fullHeight() + cap->box.margin.top + cap->box.margin.bottom;
     }
 
-    for (size_t r = 0; r < rows.size(); r++) {
-        auto& row = rows[r];
-        float cursorX = borderSpacing;
+    std::vector<float> rowYPositions(numRows);
+    for (size_t r = 0; r < numRows; r++) {
         cursorY += borderSpacing;
+        rowYPositions[r] = cursorY;
 
-        // Position the row node if it exists
-        if (row.rowNode) {
-            row.rowNode->box.margin = {};
-            row.rowNode->box.padding = {};
-            row.rowNode->box.border = {};
-            row.rowNode->box.contentRect.x = 0;
-            row.rowNode->box.contentRect.y = cursorY;
-            row.rowNode->box.contentRect.width = tableContentWidth;
-            row.rowNode->box.contentRect.height = rowHeights[r];
-        }
-
-        for (size_t c = 0; c < row.cells.size(); c++) {
-            auto* cell = row.cells[c];
-            float cw = (c < colWidths.size()) ? colWidths[c] : cellAvailWidth;
-
-            // Position cells RELATIVE to their parent row (not to the table).
-            // The draw traversal accumulates the row's offset, so cells at (x, 0)
-            // within the row end up at the correct absolute position.
-            float cellRelX = cursorX;
-            float cellRelY = 0.0f;
-            if (!row.rowNode) {
-                // Anonymous row: cells are direct children of table, use absolute Y
-                cellRelY = cursorY;
-            }
-
-            cell->box.contentRect.x = cellRelX + cell->box.margin.left +
-                cell->box.padding.left + cell->box.border.left;
-            cell->box.contentRect.y = cellRelY + cell->box.margin.top +
-                cell->box.padding.top + cell->box.border.top;
-
-            // Stretch cell height to row height
-            float targetH = rowHeights[r] - cell->box.margin.top - cell->box.margin.bottom -
-                cell->box.padding.top - cell->box.padding.bottom -
-                cell->box.border.top - cell->box.border.bottom;
-            if (targetH > cell->box.contentRect.height) {
-                cell->box.contentRect.height = targetH;
-            }
-
-            cursorX += cw + borderSpacing;
+        // Position the row node if it exists (only for original rows)
+        if (r < rows.size() && rows[r].rowNode) {
+            rows[r].rowNode->box.margin = {};
+            rows[r].rowNode->box.padding = {};
+            rows[r].rowNode->box.border = {};
+            rows[r].rowNode->box.contentRect.x = 0;
+            rows[r].rowNode->box.contentRect.y = cursorY;
+            rows[r].rowNode->box.contentRect.width = tableContentWidth;
+            rows[r].rowNode->box.contentRect.height = rowHeights[r];
         }
 
         cursorY += rowHeights[r];
     }
     cursorY += borderSpacing; // bottom spacing
+
+    // Compute column X positions
+    std::vector<float> colXPositions(numCols);
+    {
+        float cx = borderSpacing;
+        for (size_t c = 0; c < numCols; c++) {
+            colXPositions[c] = cx;
+            cx += colWidths[c] + borderSpacing;
+        }
+    }
+
+    // Position each cell
+    for (auto& ci : cellInfos) {
+        auto* cell = ci.node;
+        float cellX = colXPositions[ci.gridCol];
+
+        // Total spanned height for stretching
+        float totalH = borderSpacing * (ci.rowspan - 1);
+        for (size_t r = 0; r < ci.rowspan; r++) totalH += rowHeights[ci.gridRow + r];
+
+        // Position cells RELATIVE to their parent row (not to the table).
+        float cellRelX = cellX;
+        float cellRelY = 0.0f;
+        bool hasRowNode = (ci.gridRow < rows.size() && rows[ci.gridRow].rowNode != nullptr);
+        if (!hasRowNode) {
+            cellRelY = rowYPositions[ci.gridRow];
+        }
+
+        cell->box.contentRect.x = cellRelX + cell->box.margin.left +
+            cell->box.padding.left + cell->box.border.left;
+        cell->box.contentRect.y = cellRelY + cell->box.margin.top +
+            cell->box.padding.top + cell->box.border.top;
+
+        // Stretch cell height to total spanned row height
+        float targetH = totalH - cell->box.margin.top - cell->box.margin.bottom -
+            cell->box.padding.top - cell->box.padding.bottom -
+            cell->box.border.top - cell->box.border.bottom;
+        if (targetH > cell->box.contentRect.height) {
+            cell->box.contentRect.height = targetH;
+        }
+    }
 
     // Set table dimensions
     node->box.contentRect.width = tableContentWidth;

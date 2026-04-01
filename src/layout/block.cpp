@@ -746,43 +746,120 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             inFlowChildren.push_back(child);
         }
 
-        // Re-layout each child at column width and place into columns
-        int currentCol = 0;
-        float colY = 0.0f;
-        float maxColHeight = 0.0f;
+        // Split children into segments separated by column-span:all elements.
+        // Each segment is laid out in columns; spanners get full width between segments.
+        struct Segment {
+            std::vector<LayoutNode*> children;
+            bool isSpanner = false; // true = column-span:all element
+        };
+        std::vector<Segment> segments;
+        Segment current;
 
         for (auto* child : inFlowChildren) {
-            // Re-layout child at column width
-            layoutNode(child, actualColWidth, metrics);
-
-            float childFullH = child->box.margin.top + child->box.border.top +
-                               child->box.padding.top + child->box.contentRect.height +
-                               child->box.padding.bottom + child->box.border.bottom +
-                               child->box.margin.bottom;
-
-            // Check if child would overflow current column
-            if (colY > 0 && colY + childFullH > targetColHeight && currentCol < columnCount - 1) {
-                maxColHeight = std::max(maxColHeight, colY);
-                currentCol++;
-                colY = 0.0f;
+            auto& cs = child->computedStyle();
+            if (styleVal(cs, "column-span") == "all") {
+                if (!current.children.empty()) {
+                    segments.push_back(std::move(current));
+                    current = Segment{};
+                }
+                Segment spanner;
+                spanner.isSpanner = true;
+                spanner.children.push_back(child);
+                segments.push_back(std::move(spanner));
+            } else {
+                current.children.push_back(child);
             }
-
-            float colX = currentCol * (actualColWidth + columnGap);
-
-            child->box.contentRect.x = colX + child->box.margin.left +
-                                       child->box.padding.left + child->box.border.left;
-            child->box.contentRect.y = colY + child->box.margin.top +
-                                       child->box.padding.top + child->box.border.top;
-
-            // Clamp child width to column width
-            if (child->box.contentRect.width > actualColWidth) {
-                child->box.contentRect.width = actualColWidth;
-            }
-
-            colY += childFullH;
         }
-        maxColHeight = std::max(maxColHeight, colY);
-        node->box.contentRect.height = maxColHeight;
+        if (!current.children.empty()) segments.push_back(std::move(current));
+
+        float totalY = 0.0f;
+
+        for (auto& seg : segments) {
+            if (seg.isSpanner) {
+                // Layout spanner at full container width
+                auto* child = seg.children[0];
+                layoutNode(child, contentWidth, metrics);
+                child->box.contentRect.x = child->box.margin.left +
+                    child->box.padding.left + child->box.border.left;
+                child->box.contentRect.y = totalY + child->box.margin.top +
+                    child->box.padding.top + child->box.border.top;
+                float childFullH = child->box.margin.top + child->box.border.top +
+                    child->box.padding.top + child->box.contentRect.height +
+                    child->box.padding.bottom + child->box.border.bottom +
+                    child->box.margin.bottom;
+                totalY += childFullH;
+            } else {
+                // Layout segment children into columns
+                // First compute total height to determine target
+                float segTotalH = 0;
+                for (auto* child : seg.children) {
+                    layoutNode(child, actualColWidth, metrics);
+                    segTotalH += child->box.margin.top + child->box.border.top +
+                        child->box.padding.top + child->box.contentRect.height +
+                        child->box.padding.bottom + child->box.border.bottom +
+                        child->box.margin.bottom;
+                }
+                float segTargetH = segTotalH / columnCount;
+                if (segTargetH < 1.0f) segTargetH = 1.0f;
+
+                int currentCol = 0;
+                float colY = 0.0f;
+                float maxColHeight = 0.0f;
+
+                for (auto* child : seg.children) {
+                    auto& cs = child->computedStyle();
+
+                    // break-before: column
+                    const std::string& breakBefore = styleVal(cs, "break-before");
+                    if ((breakBefore == "column" || breakBefore == "always") &&
+                        colY > 0 && currentCol < columnCount - 1) {
+                        maxColHeight = std::max(maxColHeight, colY);
+                        currentCol++;
+                        colY = 0.0f;
+                    }
+
+                    layoutNode(child, actualColWidth, metrics);
+
+                    float childFullH = child->box.margin.top + child->box.border.top +
+                        child->box.padding.top + child->box.contentRect.height +
+                        child->box.padding.bottom + child->box.border.bottom +
+                        child->box.margin.bottom;
+
+                    // Check if child would overflow current column
+                    if (colY > 0 && colY + childFullH > segTargetH && currentCol < columnCount - 1) {
+                        // break-inside: avoid — keep element whole if possible
+                        maxColHeight = std::max(maxColHeight, colY);
+                        currentCol++;
+                        colY = 0.0f;
+                    }
+
+                    float colX = currentCol * (actualColWidth + columnGap);
+
+                    child->box.contentRect.x = colX + child->box.margin.left +
+                        child->box.padding.left + child->box.border.left;
+                    child->box.contentRect.y = totalY + colY + child->box.margin.top +
+                        child->box.padding.top + child->box.border.top;
+
+                    if (child->box.contentRect.width > actualColWidth) {
+                        child->box.contentRect.width = actualColWidth;
+                    }
+
+                    colY += childFullH;
+
+                    // break-after: column
+                    const std::string& breakAfter = styleVal(cs, "break-after");
+                    if ((breakAfter == "column" || breakAfter == "always") &&
+                        currentCol < columnCount - 1) {
+                        maxColHeight = std::max(maxColHeight, colY);
+                        currentCol++;
+                        colY = 0.0f;
+                    }
+                }
+                maxColHeight = std::max(maxColHeight, colY);
+                totalY += maxColHeight;
+            }
+        }
+        node->box.contentRect.height = totalY;
     }
 }
 

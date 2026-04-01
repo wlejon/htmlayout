@@ -524,18 +524,122 @@ float parseMediaLength(const std::string& s) {
     return num;
 }
 
-// Evaluate a single media feature like "(min-width: 768px)"
+// Trim whitespace helper
+void trimInPlace(std::string& str) {
+    size_t a = str.find_first_not_of(" \t\n\r\f");
+    size_t b = str.find_last_not_of(" \t\n\r\f");
+    str = (a == std::string::npos) ? "" : str.substr(a, b - a + 1);
+}
+
+// Compare helper: apply a comparison operator
+bool applyComparison(float lhs, const std::string& op, float rhs) {
+    if (op == ">") return lhs > rhs;
+    if (op == ">=") return lhs >= rhs;
+    if (op == "<") return lhs < rhs;
+    if (op == "<=") return lhs <= rhs;
+    if (op == "=") return lhs == rhs;
+    return false;
+}
+
+// Resolve a media feature name to its value from the context
+float resolveMediaFeatureValue(const std::string& name, const MediaContext& ctx) {
+    if (name == "width") return ctx.viewportWidth;
+    if (name == "height") return ctx.viewportHeight;
+    return -1;
+}
+
+// Try to parse range syntax: "width > 500px", "width >= 500px",
+// "500px < width", "500px <= width <= 800px"
+// Returns true if parsed as range, false if not range syntax.
+bool tryEvaluateRange(const std::string& f, const MediaContext& ctx, bool& result) {
+    // Look for comparison operators: >=, <=, >, <, =
+    // Possible forms:
+    //   feature > value
+    //   feature >= value
+    //   value < feature
+    //   value <= feature <= value2
+
+    // Find comparison operators
+    struct CompPart { std::string token; bool isOp; };
+    std::vector<CompPart> parts;
+    size_t i = 0;
+    std::string current;
+    while (i < f.size()) {
+        if ((f[i] == '>' || f[i] == '<' || f[i] == '=') && i > 0) {
+            if (!current.empty()) {
+                std::string t = current; trimInPlace(t);
+                if (!t.empty()) parts.push_back({t, false});
+                current.clear();
+            }
+            std::string op(1, f[i]);
+            if (i + 1 < f.size() && f[i + 1] == '=') { op += '='; i++; }
+            parts.push_back({op, true});
+        } else {
+            current += f[i];
+        }
+        i++;
+    }
+    if (!current.empty()) {
+        std::string t = current; trimInPlace(t);
+        if (!t.empty()) parts.push_back({t, false});
+    }
+
+    // Need at least: value op value (3 parts) with at least one operator
+    if (parts.size() < 3) return false;
+
+    // Check if this looks like range syntax (has comparison operators)
+    bool hasOp = false;
+    for (auto& p : parts) if (p.isOp) { hasOp = true; break; }
+    if (!hasOp) return false;
+
+    // Simple range: feature op value  or  value op feature
+    if (parts.size() == 3 && parts[1].isOp) {
+        float featureVal = resolveMediaFeatureValue(parts[0].token, ctx);
+        if (featureVal >= 0) {
+            // feature op value
+            float rhs = parseMediaLength(parts[2].token);
+            result = applyComparison(featureVal, parts[1].token, rhs);
+            return true;
+        }
+        featureVal = resolveMediaFeatureValue(parts[2].token, ctx);
+        if (featureVal >= 0) {
+            // value op feature
+            float lhs = parseMediaLength(parts[0].token);
+            result = applyComparison(lhs, parts[1].token, featureVal);
+            return true;
+        }
+    }
+
+    // Chained range: value op feature op value2 (5 parts)
+    if (parts.size() == 5 && parts[1].isOp && parts[3].isOp) {
+        float featureVal = resolveMediaFeatureValue(parts[2].token, ctx);
+        if (featureVal >= 0) {
+            float lhs = parseMediaLength(parts[0].token);
+            float rhs = parseMediaLength(parts[4].token);
+            result = applyComparison(lhs, parts[1].token, featureVal) &&
+                     applyComparison(featureVal, parts[3].token, rhs);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// Evaluate a single media feature like "(min-width: 768px)" or "(width > 500px)"
 bool evaluateMediaFeature(const std::string& feature, const MediaContext& ctx) {
     // Strip parens and trim
     std::string f = feature;
     if (!f.empty() && f.front() == '(') f.erase(0, 1);
     if (!f.empty() && f.back() == ')') f.pop_back();
+    trimInPlace(f);
 
-    // Trim
-    size_t s = f.find_first_not_of(" \t\n\r\f");
-    size_t e = f.find_last_not_of(" \t\n\r\f");
-    if (s == std::string::npos) return false;
-    f = f.substr(s, e - s + 1);
+    if (f.empty()) return false;
+
+    // Try range syntax first
+    bool rangeResult = false;
+    if (tryEvaluateRange(f, ctx, rangeResult)) {
+        return rangeResult;
+    }
 
     auto colonPos = f.find(':');
     if (colonPos == std::string::npos) {
@@ -545,12 +649,7 @@ bool evaluateMediaFeature(const std::string& feature, const MediaContext& ctx) {
 
     std::string name = f.substr(0, colonPos);
     std::string value = f.substr(colonPos + 1);
-    // Trim both
-    auto tn = [](std::string& str) {
-        size_t a = str.find_first_not_of(" \t"); size_t b = str.find_last_not_of(" \t");
-        str = (a == std::string::npos) ? "" : str.substr(a, b - a + 1);
-    };
-    tn(name); tn(value);
+    trimInPlace(name); trimInPlace(value);
 
     float val = parseMediaLength(value);
 
@@ -608,29 +707,46 @@ bool evaluateMediaQuery(const std::string& condition, const MediaContext& ctx) {
 
     if (cond.empty()) return !negate;
 
-    // Evaluate features connected by "and"
-    // Split by " and " outside parens
-    bool result = true;
+    // Extract parenthesized features and connecting keywords (and/or)
+    std::vector<std::string> features;
+    std::vector<std::string> connectors; // "and" or "or" between features
+
     size_t i = 0;
     while (i < cond.size()) {
-        // Find next feature (...)
         auto paren = cond.find('(', i);
         if (paren == std::string::npos) break;
 
+        // Check for connector keyword between previous feature and this one
+        if (!features.empty()) {
+            std::string between = cond.substr(i, paren - i);
+            trimInPlace(between);
+            if (between == "or") connectors.push_back("or");
+            else connectors.push_back("and"); // default is "and"
+        }
+
         int depth = 0;
-        size_t featureStart = paren;
         size_t j = paren;
         while (j < cond.size()) {
             if (cond[j] == '(') depth++;
             else if (cond[j] == ')') { depth--; if (depth == 0) break; }
             j++;
         }
-        std::string feature = cond.substr(featureStart, j - featureStart + 1);
-        if (!evaluateMediaFeature(feature, ctx)) {
-            result = false;
-            break;
-        }
+        features.push_back(cond.substr(paren, j - paren + 1));
         i = j + 1;
+    }
+
+    // Evaluate with and/or logic
+    bool result = true;
+    if (!features.empty()) {
+        result = evaluateMediaFeature(features[0], ctx);
+        for (size_t fi = 1; fi < features.size(); fi++) {
+            bool val = evaluateMediaFeature(features[fi], ctx);
+            if (fi - 1 < connectors.size() && connectors[fi - 1] == "or") {
+                result = result || val;
+            } else {
+                result = result && val;
+            }
+        }
     }
 
     return negate ? !result : result;

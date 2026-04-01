@@ -359,6 +359,92 @@ static void testTransformHitTestTranslateXY() {
           "translateX hit test: misses at original position");
 }
 
+// ========== Multi-column: column-span and break controls ==========
+
+static void testMulticolColumnSpanAll() {
+    printf("--- Multi-column: column-span: all ---\n");
+
+    RemMockNode root;
+    root.initBlock();
+    root.style_["width"] = "400px";
+    root.style_["column-count"] = "2";
+    root.style_["column-gap"] = "0";
+
+    // Children: c1 (col content), spanner (full width), c2 (col content)
+    RemMockNode c1; c1.initBlock(); c1.style_["height"] = "50px";
+    RemMockNode spanner; spanner.initBlock(); spanner.style_["height"] = "30px";
+    spanner.style_["column-span"] = "all";
+    RemMockNode c2; c2.initBlock(); c2.style_["height"] = "50px";
+    RemMockNode c3; c3.initBlock(); c3.style_["height"] = "50px";
+
+    root.addChild(&c1);
+    root.addChild(&spanner);
+    root.addChild(&c2);
+    root.addChild(&c3);
+
+    RemTextMetrics m;
+    layoutTree(&root, 800, m);
+
+    // Spanner should be full width
+    check(spanner.box.contentRect.width >= 390, "column-span: spanner full width");
+    // Spanner should be below c1
+    check(spanner.box.contentRect.y >= 40, "column-span: spanner below first segment");
+    // c2/c3 should be below spanner
+    check(c2.box.contentRect.y > spanner.box.contentRect.y, "column-span: content resumes after spanner");
+}
+
+static void testMulticolBreakBefore() {
+    printf("--- Multi-column: break-before: column ---\n");
+
+    RemMockNode root;
+    root.initBlock();
+    root.style_["width"] = "400px";
+    root.style_["column-count"] = "2";
+    root.style_["column-gap"] = "0";
+
+    RemMockNode c1; c1.initBlock(); c1.style_["height"] = "30px";
+    RemMockNode c2; c2.initBlock(); c2.style_["height"] = "30px";
+    c2.style_["break-before"] = "column";
+    RemMockNode c3; c3.initBlock(); c3.style_["height"] = "30px";
+
+    root.addChild(&c1);
+    root.addChild(&c2);
+    root.addChild(&c3);
+
+    RemTextMetrics m;
+    layoutTree(&root, 800, m);
+
+    // c2 should be forced into column 2
+    check(c2.box.contentRect.x >= 190, "break-before: c2 in second column");
+    // c1 should be in column 1
+    check(c1.box.contentRect.x < 200, "break-before: c1 in first column");
+}
+
+static void testMulticolBreakAfter() {
+    printf("--- Multi-column: break-after: column ---\n");
+
+    RemMockNode root;
+    root.initBlock();
+    root.style_["width"] = "400px";
+    root.style_["column-count"] = "2";
+    root.style_["column-gap"] = "0";
+
+    RemMockNode c1; c1.initBlock(); c1.style_["height"] = "30px";
+    c1.style_["break-after"] = "column";
+    RemMockNode c2; c2.initBlock(); c2.style_["height"] = "30px";
+    RemMockNode c3; c3.initBlock(); c3.style_["height"] = "30px";
+
+    root.addChild(&c1);
+    root.addChild(&c2);
+    root.addChild(&c3);
+
+    RemTextMetrics m;
+    layoutTree(&root, 800, m);
+
+    // c1 has break-after, so c2 should be in column 2
+    check(c2.box.contentRect.x >= 190, "break-after: c2 in second column");
+}
+
 // ========== Entry Point ==========
 
 void testRemaining() {
@@ -374,6 +460,9 @@ void testRemaining() {
     testMulticolBasic();
     testMulticolWithGap();
     testMulticolColumnWidth();
+    testMulticolColumnSpanAll();
+    testMulticolBreakBefore();
+    testMulticolBreakAfter();
 
     // Pseudo-element selectors
     testPseudoElementSelectors();
