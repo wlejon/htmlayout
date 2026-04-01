@@ -80,6 +80,12 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (containerMain < 0) containerMain = 0;
     }
 
+    // Apply min/max-width constraints
+    float minW = resolveDim(styleVal(style, "min-width"), availableWidth, fontSize);
+    float maxW = resolveDim(styleVal(style, "max-width"), availableWidth, fontSize);
+    if (minW >= 0 && containerMain < minW) containerMain = minW;
+    if (maxW >= 0 && containerMain > maxW) containerMain = maxW;
+
     // Flex properties
     const std::string& flexDir = styleVal(style, "flex-direction");
     const std::string& flexWrap = styleVal(style, "flex-wrap");
