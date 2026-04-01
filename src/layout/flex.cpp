@@ -156,15 +156,32 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (item.flexBasis >= 0) {
             item.hypotheticalMain = item.flexBasis;
         } else {
-            // Auto basis: lay out to determine intrinsic size
-            layoutNode(item.node, isRow ? mainAvailable : containerMain, metrics);
-            item.hypotheticalMain = isRow ? item.node->box.contentRect.width : item.node->box.contentRect.height;
-            // Add padding/border to get outer size
+            // Auto basis: use intrinsic (max-content) size so wrapping works.
+            // Without this, items laid out with mainAvailable expand to fill
+            // the container and wrapping never triggers.
             if (isRow) {
-                item.hypotheticalMain += item.node->box.padding.left + item.node->box.padding.right +
-                                         item.node->box.border.left + item.node->box.border.right;
+                float intrinsic = computeMaxContentWidth(item.node, metrics);
+                // Add padding/border/margin edges
+                auto& cs = item.node->computedStyle();
+                float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                if (childFontSize <= 0) childFontSize = fontSize;
+                float ph = resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
+                           resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
+                float bh = 0;
+                const char* sides[] = {"left", "right"};
+                for (auto* s : sides) {
+                    if (styleVal(cs, std::string("border-") + s + "-style") != "none")
+                        bh += resolveLength(styleVal(cs, std::string("border-") + s + "-width"), mainAvailable, childFontSize);
+                }
+                item.hypotheticalMain = intrinsic + ph + bh;
+                if (item.hypotheticalMain > mainAvailable)
+                    item.hypotheticalMain = mainAvailable;
+                // Now lay out at this width to compute cross size
+                layoutNode(item.node, item.hypotheticalMain, metrics);
             } else {
-                item.hypotheticalMain += item.node->box.padding.top + item.node->box.padding.bottom +
+                layoutNode(item.node, containerMain, metrics);
+                item.hypotheticalMain = item.node->box.contentRect.height +
+                                         item.node->box.padding.top + item.node->box.padding.bottom +
                                          item.node->box.border.top + item.node->box.border.bottom;
             }
         }
