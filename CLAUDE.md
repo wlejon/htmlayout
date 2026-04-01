@@ -46,15 +46,3 @@ docs/          — Architecture document
 - **No global state** — everything is instance-based
 - **No rendering** — layout outputs positioned boxes, consumer draws them
 
-## Implementation Status
-
-The project has stub implementations for all modules. Follow `docs/architecture.md` "Implementation Priority" section (Phases 1-8) to build out the real implementations. Each phase should have tests before moving to the next.
-
-Phase 1: CSS Tokenizer + Parser
-Phase 2: Selector Parser + Matcher
-Phase 3: Cascade
-Phase 4: Shorthand Expansion
-Phase 5: Length Resolution + Block Layout
-Phase 6: Inline Layout
-Phase 7: Flex Layout
-Phase 8: Hit Testing
