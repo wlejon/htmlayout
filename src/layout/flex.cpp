@@ -427,14 +427,25 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
         if (childFontSize <= 0) childFontSize = fontSize;
 
-        layoutNode(child, cbWidth, metrics);
+        float left = resolveDim(styleVal(childStyle, "left"), cbWidth, childFontSize);
+        float right = resolveDim(styleVal(childStyle, "right"), cbWidth, childFontSize);
+        float specAbsW = resolveDim(styleVal(childStyle, "width"), cbWidth, childFontSize);
+
+        // Shrink-wrap width for absolute elements unless both left+right are set
+        bool shrinkWrap = (specAbsW < 0 && !(left >= 0 && right >= 0));
+        if (shrinkWrap) {
+            layoutNode(child, 100000.0f, metrics);
+            float intrW = std::min(child->box.contentRect.width, cbWidth);
+            child->box.contentRect.width = intrW;
+            layoutNode(child, intrW + child->box.padding.left + child->box.padding.right +
+                       child->box.border.left + child->box.border.right, metrics);
+        } else {
+            layoutNode(child, cbWidth, metrics);
+        }
 
         float top = resolveDim(styleVal(childStyle, "top"), cbHeight, childFontSize);
-        float right = resolveDim(styleVal(childStyle, "right"), cbWidth, childFontSize);
         float bottom = resolveDim(styleVal(childStyle, "bottom"), cbHeight, childFontSize);
-        float left = resolveDim(styleVal(childStyle, "left"), cbWidth, childFontSize);
 
-        float specAbsW = resolveDim(styleVal(childStyle, "width"), cbWidth, childFontSize);
         if (specAbsW < 0 && left >= 0 && right >= 0) {
             float w = cbWidth - left - right -
                       child->box.margin.left - child->box.margin.right -

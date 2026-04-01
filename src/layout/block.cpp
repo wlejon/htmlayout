@@ -488,18 +488,38 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
         if (childFontSize <= 0) childFontSize = fontSize;
 
-        // Layout the child to determine its intrinsic size
-        layoutNode(child, cbWidth, metrics);
+        // Resolve offsets and explicit width to determine layout available width
+        float absLeft = resolveDimension(styleVal(childStyle, "left"), cbWidth, childFontSize);
+        float absRight = resolveDimension(styleVal(childStyle, "right"), cbWidth, childFontSize);
+        float absSpecW = resolveDimension(styleVal(childStyle, "width"), cbWidth, childFontSize);
+
+        // For absolutely positioned elements with width:auto, shrink-wrap to content
+        // unless both left and right are set (which stretches to fill).
+        float layoutAvail = cbWidth;
+        bool shrinkWrap = (absSpecW < 0 && !(absLeft >= 0 && absRight >= 0));
+        if (shrinkWrap) {
+            // Layout with a large available width to measure intrinsic content size
+            layoutNode(child, 100000.0f, metrics);
+            // Use the content width that the child actually used
+            float intrinsicW = child->box.contentRect.width;
+            // Cap to container width
+            if (intrinsicW > cbWidth) intrinsicW = cbWidth;
+            child->box.contentRect.width = intrinsicW;
+            // Re-layout at the correct width for proper child positioning
+            layoutNode(child, intrinsicW + child->box.padding.left + child->box.padding.right +
+                       child->box.border.left + child->box.border.right, metrics);
+        } else {
+            layoutNode(child, cbWidth, metrics);
+        }
 
         // Resolve offsets: top/right/bottom/left
         float top = resolveDimension(styleVal(childStyle, "top"), cbHeight, childFontSize);
-        float right = resolveDimension(styleVal(childStyle, "right"), cbWidth, childFontSize);
+        float right = absRight;
         float bottom = resolveDimension(styleVal(childStyle, "bottom"), cbHeight, childFontSize);
-        float left = resolveDimension(styleVal(childStyle, "left"), cbWidth, childFontSize);
+        float left = absLeft;
 
         // Resolve width for absolute: if left and right are both set and width is auto
-        float specW = resolveDimension(styleVal(childStyle, "width"), cbWidth, childFontSize);
-        if (specW < 0 && left >= 0 && right >= 0) {
+        if (absSpecW < 0 && left >= 0 && right >= 0) {
             float w = cbWidth - left - right -
                       child->box.margin.left - child->box.margin.right -
                       child->box.padding.left - child->box.padding.right -
