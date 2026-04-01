@@ -117,10 +117,38 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         childAvailableHeight = mainAvailable;
     }
 
-    // Collect flex items, filtering out absolutely/fixed positioned children
+    // Collect flex items, filtering out absolutely/fixed positioned children.
+    // Text nodes become anonymous flex items (CSS spec).
     std::vector<FlexItem> items;
     for (auto* child : getLayoutChildren(node)) {
-        if (child->isTextNode()) continue;
+        if (child->isTextNode()) {
+            // Anonymous flex item: measure text and include as a flex item
+            std::string text = child->textContent();
+            bool allWhitespace = true;
+            for (char c : text) {
+                if (!std::isspace(static_cast<unsigned char>(c))) { allWhitespace = false; break; }
+            }
+            if (allWhitespace) continue;
+
+            const std::string& fontFamily = styleVal(style, "font-family");
+            const std::string& fontWeight = styleVal(style, "font-weight");
+            float textW = metrics.measureWidth(text, fontFamily, fontSize, fontWeight);
+            float textH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+
+            child->box.contentRect.width = textW;
+            child->box.contentRect.height = textH;
+
+            FlexItem item;
+            item.node = child;
+            item.flexGrow = 0;
+            item.flexShrink = 1;
+            item.flexBasis = isRow ? textW : textH;
+            item.minMain = 0;
+            item.maxMain = -1;
+            item.order = 0;
+            items.push_back(item);
+            continue;
+        }
         child->viewportHeight = node->viewportHeight;
         child->availableHeight = childAvailableHeight;
         auto& cs = child->computedStyle();
@@ -288,6 +316,18 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         // Layout each item with its final main size
         for (auto* item : line.items) {
+            // Text nodes (anonymous flex items) already have their size set
+            if (item->node->isTextNode()) {
+                if (isRow) {
+                    item->node->box.contentRect.width = item->finalMain;
+                    item->crossSize = item->node->box.contentRect.height;
+                } else {
+                    item->node->box.contentRect.height = item->finalMain;
+                    item->crossSize = item->node->box.contentRect.width;
+                }
+                continue;
+            }
+
             auto& cs = item->node->computedStyle();
             float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;

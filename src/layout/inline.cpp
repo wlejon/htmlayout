@@ -182,7 +182,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 const std::string& d = styleVal(cs, "display");
                 if (d == "none") continue;
                 ibHasContent = true;
-                if (d != "inline" && d != "inline-block") ibAllInline = false;
+                if (d != "inline" && d != "inline-block" && d != "inline-flex" && d != "inline-grid") ibAllInline = false;
             }
         }
 
@@ -323,9 +323,9 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             const std::string& childPos = styleVal(childStyle, "position");
             if (childPos == "absolute" || childPos == "fixed") continue;
 
-            if (childDisplay == "inline-block") {
-                // Layout as inline-block, then add to line items
-                layoutInline(child, contentAvail, metrics);
+            if (childDisplay == "inline-block" || childDisplay == "inline-flex" || childDisplay == "inline-grid") {
+                // Layout as atomic inline-level box, then add to line items
+                layoutNode(child, contentAvail, metrics);
                 LineItem item;
                 item.width = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
                 item.height = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;

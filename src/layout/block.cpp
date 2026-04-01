@@ -166,7 +166,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             const std::string& cp = styleVal(cs, "position");
             if (cp == "absolute" || cp == "fixed") continue;
             hasVisibleContent = true;
-            if (d != "inline" && d != "inline-block") {
+            if (d != "inline" && d != "inline-block" && d != "inline-flex" && d != "inline-grid") {
                 allInlineChildren = false;
             }
         }
@@ -424,7 +424,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (childPos == "absolute" || childPos == "fixed") continue;
 
         // Collect inline/inline-block children for horizontal layout
-        if (childDisplay == "inline" || childDisplay == "inline-block") {
+        if (childDisplay == "inline" || childDisplay == "inline-block" ||
+            childDisplay == "inline-flex" || childDisplay == "inline-grid") {
             pendingInline.push_back(child);
             continue;
         }
