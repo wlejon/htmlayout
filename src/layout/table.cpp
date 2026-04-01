@@ -98,7 +98,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     std::vector<LayoutNode*> absChildren;
 
     auto collectRows = [&](LayoutNode* parent) {
-        for (auto* child : parent->children()) {
+        for (auto* child : getLayoutChildren(parent)) {
             if (child->isTextNode()) continue;
             auto& cs = child->computedStyle();
             const std::string& d = styleVal(cs, "display");
@@ -132,7 +132,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     if (isTableRow(gd)) {
                         TableRow row;
                         row.rowNode = groupChild;
-                        for (auto* cell : groupChild->children()) {
+                        for (auto* cell : getLayoutChildren(groupChild)) {
                             if (cell->isTextNode()) continue;
                             auto& cellStyle = cell->computedStyle();
                             if (styleVal(cellStyle, "display") == "none") {

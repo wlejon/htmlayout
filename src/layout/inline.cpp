@@ -172,7 +172,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         // Check if children are all inline-level
         bool ibAllInline = true;
         bool ibHasContent = false;
-        for (auto* child : node->children()) {
+        for (auto* child : getLayoutChildren(node)) {
             if (child->isTextNode()) {
                 const std::string& t = child->textContent();
                 for (char c : t) {
@@ -191,7 +191,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             // Inline content in inline-block: measure text and inline children
             float ibLineHeight = resolveLineHeight(lineHeightVal, fontSize);
             float cursorX = 0, lineMaxH = 0;
-            for (auto* child : node->children()) {
+            for (auto* child : getLayoutChildren(node)) {
                 if (child->isTextNode()) {
                     auto runs = breakTextIntoRuns(child->textContent(), contentAvail,
                         fontFamily, fontSize, fontWeight, whiteSpace, metrics);
@@ -239,7 +239,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
 
         } else {
             // Block children inside inline-block
-            for (auto* child : node->children()) {
+            for (auto* child : getLayoutChildren(node)) {
                 if (child->isTextNode()) continue;
                 auto& cs = child->computedStyle();
                 if (styleVal(cs, "display") == "none") { child->box = LayoutBox{}; continue; }
@@ -353,7 +353,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     std::vector<LineItem> allItems;
     std::vector<LayoutNode*> inlineAbsChildren;
 
-    for (auto* child : node->children()) {
+    for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
             // Break text into runs
             const std::string& owrap = styleVal(style, "overflow-wrap");

@@ -111,6 +111,9 @@ void applyOverflowClipping(LayoutNode* root);
 // Hit test: find the deepest LayoutNode at a given point
 LayoutNode* hitTest(LayoutNode* root, float x, float y);
 
+// Get children for layout, flattening any 'display: contents' nodes into the parent's sequence.
+std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node);
+
 // Mark a subtree as dirty for incremental relayout.
 // Marks the given node and all its ancestors as needing re-layout.
 void markDirty(LayoutNode* node);

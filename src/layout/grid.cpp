@@ -356,7 +356,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     std::vector<GridItem> items;
     std::vector<LayoutNode*> absChildren;
 
-    for (auto* child : node->children()) {
+    for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) continue;
         auto& cs = child->computedStyle();
         if (styleVal(cs, "display") == "none") {

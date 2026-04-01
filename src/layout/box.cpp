@@ -313,7 +313,7 @@ void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& m
             auto* n = stack.back();
             stack.pop_back();
             n->box.dirty = false;
-            for (auto* c : n->children()) stack.push_back(c);
+            for (auto* c : getLayoutChildren(n)) stack.push_back(c);
         }
     } else {
         // Walk tree, re-layout only dirty subtrees
@@ -330,7 +330,7 @@ void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& m
                     auto* n = sub.back();
                     sub.pop_back();
                     n->box.dirty = false;
-                    for (auto* c : n->children()) sub.push_back(c);
+                    for (auto* c : getLayoutChildren(n)) sub.push_back(c);
                 }
             } else {
                 for (auto* c : node->children()) {
@@ -366,6 +366,23 @@ static const std::vector<std::string>& layoutProperties() {
         "word-break", "overflow-wrap", "text-overflow",
     };
     return props;
+}
+
+std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node) {
+    std::vector<LayoutNode*> result;
+    for (auto* child : node->children()) {
+        if (!child->isTextNode()) {
+            auto& cs = child->computedStyle();
+            if (styleVal(cs, "display") == "contents") {
+                // Flatten: promote this node's children into the parent's sequence
+                auto grandchildren = getLayoutChildren(child);
+                result.insert(result.end(), grandchildren.begin(), grandchildren.end());
+                continue;
+            }
+        }
+        result.push_back(child);
+    }
+    return result;
 }
 
 bool needsRelayout(const std::vector<std::string>& changedProperties) {

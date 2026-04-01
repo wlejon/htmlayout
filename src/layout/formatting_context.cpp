@@ -184,7 +184,7 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
 
     float maxChildMin = 0.0f;
 
-    for (auto* child : node->children()) {
+    for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
             // Min-content: each word on its own line, take the widest word
             std::string text = child->textContent();
@@ -229,7 +229,7 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
 
     float maxChildMax = 0.0f;
 
-    for (auto* child : node->children()) {
+    for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
             // Max-content: no wrapping, measure the whole text as one line
             std::string text = child->textContent();

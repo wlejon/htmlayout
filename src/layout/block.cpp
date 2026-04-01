@@ -130,7 +130,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // Propagate viewport height and available height to all children before layout
-    for (auto* child : node->children()) {
+    for (auto* child : getLayoutChildren(node)) {
         if (!child->isTextNode()) {
             child->viewportHeight = node->viewportHeight;
             child->availableHeight = earlyChildAvailableHeight;
@@ -145,7 +145,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // (text nodes, inline, inline-block — no block children)
     bool allInlineChildren = true;
     bool hasVisibleContent = false;
-    for (auto* child : node->children()) {
+    for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
             const std::string& text = child->textContent();
             for (char c : text) {
@@ -181,7 +181,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         };
         std::vector<IFCItem> items;
 
-        for (auto* child : node->children()) {
+        for (auto* child : getLayoutChildren(node)) {
             if (child->isTextNode()) {
                 auto runs = breakTextIntoRuns(child->textContent(), childAvailable,
                     fontFamily, fontSize, fontWeight, whiteSpace, metrics);
@@ -387,7 +387,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         pendingInline.clear();
     };
 
-    for (auto* child : node->children()) {
+    for (auto* child : getLayoutChildren(node)) {
         auto& childStyle = child->computedStyle();
 
         if (child->isTextNode()) {
@@ -473,7 +473,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         bool isEmptyBox = (child->box.contentRect.height == 0 &&
                            child->box.padding.top == 0 && child->box.padding.bottom == 0 &&
                            child->box.border.top == 0 && child->box.border.bottom == 0 &&
-                           child->children().empty());
+                           getLayoutChildren(child).empty());
 
         float effectiveMargin;
         if (isEmptyBox) {
@@ -586,7 +586,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Propagate available height to in-flow children for percentage height resolution.
     // Children can use percentage heights only when the parent has a definite height.
     float childAvailableHeight = (specifiedHeight >= 0.0f) ? node->box.contentRect.height : 0.0f;
-    for (auto* child : node->children()) {
+    for (auto* child : getLayoutChildren(node)) {
         if (!child->isTextNode()) {
             auto& cs = child->computedStyle();
             const std::string& cp = styleVal(cs, "position");
@@ -726,7 +726,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // Redistribute in-flow children into columns
         // Collect in-flow children (not absolute, not display:none)
         std::vector<LayoutNode*> inFlowChildren;
-        for (auto* child : node->children()) {
+        for (auto* child : getLayoutChildren(node)) {
             if (child->isTextNode()) continue;
             auto& cs = child->computedStyle();
             if (styleVal(cs, "display") == "none") continue;

@@ -111,7 +111,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Collect flex items, filtering out absolutely/fixed positioned children
     std::vector<LayoutNode*> absChildren;
     std::vector<FlexItem> items;
-    for (auto* child : node->children()) {
+    for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) continue;
         child->viewportHeight = node->viewportHeight;
         child->availableHeight = childAvailableHeight;

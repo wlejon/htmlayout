@@ -206,6 +206,11 @@ input, button, select, textarea {
     display: inline-block;
 }
 
+input[type="checkbox"], input[type="radio"] {
+    vertical-align: middle;
+    margin-right: 3px;
+}
+
 button {
     cursor: pointer;
 }
