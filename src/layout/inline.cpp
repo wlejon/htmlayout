@@ -193,8 +193,11 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             float cursorX = 0, lineMaxH = 0;
             for (auto* child : getLayoutChildren(node)) {
                 if (child->isTextNode()) {
+                    float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
+                    float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
                     auto runs = breakTextIntoRuns(child->textContent(), contentAvail,
-                        fontFamily, fontSize, fontWeight, whiteSpace, metrics);
+                        fontFamily, fontSize, fontWeight, whiteSpace, metrics,
+                        "normal", "normal", ls, ws);
                     bool firstRun = true;
                     for (auto& run : runs) {
                         if (run.text.empty() && run.width == 0) continue;
@@ -367,10 +370,12 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             // Break text into runs
             const std::string& owrap = styleVal(style, "overflow-wrap");
             const std::string& wbreak = styleVal(style, "word-break");
+            float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
+            float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
             auto runs = breakTextIntoRuns(
                 child->textContent(), contentAvail,
                 fontFamily, fontSize, fontWeight, whiteSpace, metrics,
-                owrap, wbreak);
+                owrap, wbreak, ls, ws);
 
             for (auto& run : runs) {
                 LineItem item;
@@ -441,6 +446,9 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         resolvedAlign = isRtl ? "left" : "right";
     }
 
+    // Resolve text-indent (applies to first line only)
+    float textIndent = resolveLength(styleVal(style, "text-indent"), contentAvail, fontSize);
+
     // Position items within line boxes
     float cursorY = 0;
     for (size_t lineIdx = 0; lineIdx < lineBoxes.size(); lineIdx++) {
@@ -449,6 +457,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         float xOffset = alignLine(line, contentAvail, resolvedAlign, isLastLine);
         float gap = (resolvedAlign == "justify") ? justifyGap(line, contentAvail, isLastLine) : 0;
         float cursorX = xOffset;
+        if (lineIdx == 0) cursorX += textIndent;
 
         for (size_t itemIdx = 0; itemIdx < line.items.size(); itemIdx++) {
             auto& item = line.items[itemIdx];

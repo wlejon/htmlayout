@@ -323,8 +323,19 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Compute row Y positions
     float cursorY = 0;
 
-    // Layout captions above the table
+    // Split captions into top/bottom based on caption-side property
+    std::vector<LayoutNode*> topCaptions, bottomCaptions;
     for (auto* cap : captions) {
+        auto& cs = cap->computedStyle();
+        if (styleVal(cs, "caption-side") == "bottom") {
+            bottomCaptions.push_back(cap);
+        } else {
+            topCaptions.push_back(cap);
+        }
+    }
+
+    // Layout top captions
+    for (auto* cap : topCaptions) {
         layoutNode(cap, tableContentWidth, metrics);
         cap->box.contentRect.x = cap->box.margin.left + cap->box.padding.left + cap->box.border.left;
         cap->box.contentRect.y = cursorY + cap->box.margin.top + cap->box.padding.top + cap->box.border.top;
@@ -383,13 +394,30 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         cell->box.contentRect.y = cellRelY + cell->box.margin.top +
             cell->box.padding.top + cell->box.border.top;
 
-        // Stretch cell height to total spanned row height
+        // Stretch cell height to total spanned row height and apply vertical-align
         float targetH = totalH - cell->box.margin.top - cell->box.margin.bottom -
             cell->box.padding.top - cell->box.padding.bottom -
             cell->box.border.top - cell->box.border.bottom;
-        if (targetH > cell->box.contentRect.height) {
+        float contentH = cell->box.contentRect.height;
+        if (targetH > contentH) {
+            auto& cs = cell->computedStyle();
+            const std::string& valign = styleVal(cs, "vertical-align");
+            if (valign == "middle") {
+                cell->box.contentRect.y += (targetH - contentH) / 2.0f;
+            } else if (valign == "bottom") {
+                cell->box.contentRect.y += (targetH - contentH);
+            }
+            // else top (default): no offset
             cell->box.contentRect.height = targetH;
         }
+    }
+
+    // Layout bottom captions
+    for (auto* cap : bottomCaptions) {
+        layoutNode(cap, tableContentWidth, metrics);
+        cap->box.contentRect.x = cap->box.margin.left + cap->box.padding.left + cap->box.border.left;
+        cap->box.contentRect.y = cursorY + cap->box.margin.top + cap->box.padding.top + cap->box.border.top;
+        cursorY += cap->box.fullHeight() + cap->box.margin.top + cap->box.margin.bottom;
     }
 
     // Set table dimensions

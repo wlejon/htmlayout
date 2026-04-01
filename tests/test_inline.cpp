@@ -399,6 +399,71 @@ static void testInlineAbsoluteBottomRight() {
     check(approx(absChild.box.contentRect.y, 140.0f), "inline abs bottom/right: y = 140");
 }
 
+// ========== text spacing and indent tests ==========
+
+static void testLetterSpacing() {
+    printf("--- Inline: letter-spacing ---\n");
+    // Each char = 10px + 2px letter-spacing = 12px per char
+    // "abc" = 3 chars * 12 = 36px (vs 30px without)
+    FixedTextMetrics m;
+    auto runs = breakTextIntoRuns("abc", 200, "serif", 16, "normal", "normal", m,
+                                  "normal", "normal", 2.0f, 0);
+    check(runs.size() == 1, "letter-spacing: single run");
+    check(approx(runs[0].width, 36, 1), "letter-spacing: width includes spacing");
+}
+
+static void testWordSpacing() {
+    printf("--- Inline: word-spacing ---\n");
+    // "a b" = word "a" (10px) + space (10px base + 5px word-spacing) + word "b" (10px)
+    // Total = 10 + 15 + 10 = 35px (vs 30px without)
+    FixedTextMetrics m;
+    auto runs = breakTextIntoRuns("a b", 200, "serif", 16, "normal", "normal", m,
+                                  "normal", "normal", 0, 5.0f);
+    check(runs.size() == 1, "word-spacing: single run");
+    check(runs[0].width > 30, "word-spacing: wider than without spacing");
+}
+
+static void testTextIndent() {
+    printf("--- Inline: text-indent ---\n");
+    // Create an inline formatting context with text-indent
+    InlineMockNode root;
+    root.tag = "p";
+    root.style["display"] = "block";
+    root.style["position"] = "static";
+    root.style["width"] = "200px"; root.style["height"] = "auto";
+    root.style["min-width"] = "0"; root.style["min-height"] = "0";
+    root.style["max-width"] = "none"; root.style["max-height"] = "none";
+    root.style["margin-top"] = "0"; root.style["margin-right"] = "0";
+    root.style["margin-bottom"] = "0"; root.style["margin-left"] = "0";
+    root.style["padding-top"] = "0"; root.style["padding-right"] = "0";
+    root.style["padding-bottom"] = "0"; root.style["padding-left"] = "0";
+    root.style["border-top-width"] = "0"; root.style["border-right-width"] = "0";
+    root.style["border-bottom-width"] = "0"; root.style["border-left-width"] = "0";
+    root.style["border-top-style"] = "none"; root.style["border-right-style"] = "none";
+    root.style["border-bottom-style"] = "none"; root.style["border-left-style"] = "none";
+    root.style["box-sizing"] = "content-box";
+    root.style["font-size"] = "16px";
+    root.style["font-family"] = "serif";
+    root.style["font-weight"] = "normal";
+    root.style["text-align"] = "left";
+    root.style["text-indent"] = "30px";
+    root.style["overflow"] = "visible";
+    root.style["letter-spacing"] = "normal";
+    root.style["word-spacing"] = "normal";
+
+    InlineMockNode textNode;
+    textNode.isText = true;
+    textNode.text = "Hello World";
+    textNode.tag = "";
+    root.addChild(&textNode);
+
+    FixedTextMetrics m;
+    layoutTree(&root, 400, m);
+
+    // First text run should be indented by 30px
+    check(approx(textNode.box.contentRect.x, 30, 2), "text-indent: first line indented 30px");
+}
+
 // ========== Entry point ==========
 
 void testInlineLayout() {
@@ -423,4 +488,9 @@ void testInlineLayout() {
     // Absolute positioning in inline containers
     testInlineAbsolutePositioning();
     testInlineAbsoluteBottomRight();
+
+    // Text spacing and indent
+    testLetterSpacing();
+    testWordSpacing();
+    testTextIndent();
 }

@@ -544,6 +544,97 @@ static void testGridTemplateAreasAutoTracks() {
     check(approx(b.box.contentRect.x, c.box.contentRect.x, 2), "template-areas auto: b and c same col");
 }
 
+// ========== grid span and auto-flow tests ==========
+
+static void testGridSpanN() {
+    printf("--- Grid: span N syntax ---\n");
+    GridNode grid; grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-columns"] = "100px 100px 100px";
+    grid.style_["grid-template-rows"] = "50px 50px";
+    grid.style_["width"] = "300px";
+    grid.style_["gap"] = "0"; grid.style_["row-gap"] = "0"; grid.style_["column-gap"] = "0";
+
+    // Item spanning 2 columns via grid-column: 1 / span 2
+    GridNode a; a.initBlock();
+    a.style_["grid-column-start"] = "1";
+    a.style_["grid-column-end"] = "span 2";
+    a.style_["grid-row-start"] = "1";
+
+    // Regular item in col 3
+    GridNode b; b.initBlock();
+    a.style_["grid-row-end"] = "auto";
+
+    grid.addChild(&a); grid.addChild(&b);
+
+    GridMetrics m;
+    layoutTree(&grid, 400, m);
+
+    // 'a' should span 2 columns = 200px wide
+    check(approx(a.box.contentRect.width, 200, 2), "grid span 2: item spans 2 columns");
+    // 'b' should auto-place into remaining cell
+    check(approx(b.box.contentRect.width, 100, 2), "grid span 2: next item is single col");
+}
+
+static void testGridSpanNRowSpan() {
+    printf("--- Grid: span N on rows ---\n");
+    GridNode grid; grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-columns"] = "100px 100px";
+    grid.style_["grid-template-rows"] = "40px 40px 40px";
+    grid.style_["width"] = "200px";
+    grid.style_["gap"] = "0"; grid.style_["row-gap"] = "0"; grid.style_["column-gap"] = "0";
+
+    // Item spanning 3 rows
+    GridNode a; a.initBlock();
+    a.style_["grid-row-start"] = "1";
+    a.style_["grid-row-end"] = "span 3";
+    a.style_["grid-column-start"] = "1";
+
+    GridNode b; b.initBlock();
+    GridNode c; c.initBlock();
+    GridNode d; d.initBlock();
+
+    grid.addChild(&a); grid.addChild(&b); grid.addChild(&c); grid.addChild(&d);
+
+    GridMetrics m;
+    layoutTree(&grid, 400, m);
+
+    // 'a' should span 3 rows = 120px tall
+    check(approx(a.box.contentRect.height, 120, 2), "grid row span 3: item spans 3 rows");
+}
+
+static void testGridAutoFlowColumn() {
+    printf("--- Grid: auto-flow column ---\n");
+    GridNode grid; grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-columns"] = "100px 100px";
+    grid.style_["grid-template-rows"] = "50px 50px";
+    grid.style_["grid-auto-flow"] = "column";
+    grid.style_["width"] = "200px";
+    grid.style_["gap"] = "0"; grid.style_["row-gap"] = "0"; grid.style_["column-gap"] = "0";
+
+    GridNode a; a.initBlock(); // should go to (0,0)
+    GridNode b; b.initBlock(); // column flow: should go to (1,0) - same column, next row
+    GridNode c; c.initBlock(); // should go to (0,1) - next column
+    GridNode d; d.initBlock(); // should go to (1,1)
+
+    grid.addChild(&a); grid.addChild(&b); grid.addChild(&c); grid.addChild(&d);
+
+    GridMetrics m;
+    layoutTree(&grid, 400, m);
+
+    // With column flow: a(0,0), b(1,0), c(0,1), d(1,1)
+    // 'a' and 'b' should be in column 0 (x ≈ 0)
+    check(approx(a.box.contentRect.x, b.box.contentRect.x, 2), "auto-flow column: a,b same col");
+    // 'b' should be below 'a'
+    check(b.box.contentRect.y > a.box.contentRect.y, "auto-flow column: b below a");
+    // 'c' should be in column 1 (x ≈ 100)
+    check(approx(c.box.contentRect.x, 100, 2), "auto-flow column: c in col 2");
+    // 'c' should be at top of column 1
+    check(approx(c.box.contentRect.y, 0, 2), "auto-flow column: c at top of col 2");
+}
+
 // ========== Entry point ==========
 
 void testGridLayout() {
@@ -571,4 +662,9 @@ void testGridLayout() {
     // grid-template-areas
     testGridTemplateAreas();
     testGridTemplateAreasAutoTracks();
+
+    // span N and auto-flow
+    testGridSpanN();
+    testGridSpanNRowSpan();
+    testGridAutoFlowColumn();
 }

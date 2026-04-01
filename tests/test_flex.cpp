@@ -520,6 +520,43 @@ static void testFlexAlignContentStretch() {
     check(approx(b.box.contentRect.height, 150, 2), "align-content stretch: second item height");
 }
 
+// ========== baseline alignment tests ==========
+
+static void testFlexAlignBaseline() {
+    // Two items with different font sizes should align on baseline
+    FlexMockNode container; initFlexContainer(container);
+    container.style["align-items"] = "baseline";
+    container.style["width"] = "400px";
+
+    FlexMockNode a; initFlexItem(a);
+    a.style["width"] = "100px"; a.style["height"] = "40px";
+    a.style["font-size"] = "16px";
+    a.style["padding-top"] = "10px";
+
+    FlexMockNode b; initFlexItem(b);
+    b.style["width"] = "100px"; b.style["height"] = "40px";
+    b.style["font-size"] = "32px";
+    b.style["padding-top"] = "5px";
+
+    container.addChild(&a); container.addChild(&b);
+
+    FlexTextMetrics m;
+    layoutTree(&container, 400, m);
+
+    // Item b has larger font, so its baseline is lower.
+    // Item a should be pushed down so baselines align.
+    // a baseline = margin(0) + border(0) + padding(10) + font(16) = 26
+    // b baseline = margin(0) + border(0) + padding(5) + font(32) = 37
+    // a should be offset by 37 - 26 = 11
+    check(a.box.contentRect.y > b.box.contentRect.y,
+          "flex baseline: smaller font item pushed down");
+    // contentRect.y already includes margin+padding+border from container top
+    // baseline = contentRect.y + fontSize (baseline is fontSize below content top)
+    float aBaseline = a.box.contentRect.y + 16.0f;
+    float bBaseline = b.box.contentRect.y + 32.0f;
+    check(approx(aBaseline, bBaseline, 2), "flex baseline: baselines aligned");
+}
+
 // ========== Entry point ==========
 
 void testFlexLayout() {
@@ -542,6 +579,9 @@ void testFlexLayout() {
     testFlexAbsolutePositioning();
     testFlexAbsoluteBottomRight();
     testFlexAbsoluteStretch();
+
+    // baseline alignment
+    testFlexAlignBaseline();
 
     // align-content
     testFlexAlignContentCenter();

@@ -1626,6 +1626,78 @@ static void testTableColspanAndRowspan() {
           "table combined: row2 cell skips spanned columns");
 }
 
+static void testTableCaptionSideBottom() {
+    printf("--- Table: caption-side: bottom ---\n");
+    CovNode table; table.initTable();
+    table.style_["width"] = "300px";
+
+    CovNode caption; caption.initBlock();
+    caption.style_["display"] = "table-caption"; caption.style_["height"] = "30px";
+    caption.style_["caption-side"] = "bottom";
+
+    CovNode row; row.initBlock(); row.style_["display"] = "table-row";
+    CovNode cell; cell.initBlock(); cell.style_["display"] = "table-cell";
+    cell.style_["height"] = "50px";
+    row.addChild(&cell);
+
+    table.addChild(&caption);
+    table.addChild(&row);
+
+    CovMetrics m;
+    layoutTree(&table, 800, m);
+
+    // Caption should be below the row content
+    check(caption.box.contentRect.y > cell.box.contentRect.y,
+          "table caption-side:bottom: caption below cells");
+}
+
+static void testTableVerticalAlignMiddle() {
+    printf("--- Table: vertical-align: middle ---\n");
+    CovNode table; table.initTable();
+    table.style_["width"] = "300px";
+
+    CovNode row; row.initBlock(); row.style_["display"] = "table-row";
+    CovNode tall; tall.initBlock();
+    tall.style_["display"] = "table-cell"; tall.style_["height"] = "100px";
+    CovNode mid; mid.initBlock();
+    mid.style_["display"] = "table-cell"; mid.style_["height"] = "40px";
+    mid.style_["vertical-align"] = "middle";
+
+    row.addChild(&tall); row.addChild(&mid);
+    table.addChild(&row);
+
+    CovMetrics m;
+    layoutTree(&table, 800, m);
+
+    // mid cell should be vertically centered in the 100px row
+    // Content offset should be roughly (100-40)/2 = 30 from the cell's baseline
+    check(mid.box.contentRect.y > tall.box.contentRect.y + 10,
+          "table vertical-align:middle: cell centered vertically");
+}
+
+static void testTableVerticalAlignBottom() {
+    printf("--- Table: vertical-align: bottom ---\n");
+    CovNode table; table.initTable();
+    table.style_["width"] = "300px";
+
+    CovNode row; row.initBlock(); row.style_["display"] = "table-row";
+    CovNode tall; tall.initBlock();
+    tall.style_["display"] = "table-cell"; tall.style_["height"] = "100px";
+    CovNode bot; bot.initBlock();
+    bot.style_["display"] = "table-cell"; bot.style_["height"] = "30px";
+    bot.style_["vertical-align"] = "bottom";
+
+    row.addChild(&tall); row.addChild(&bot);
+    table.addChild(&row);
+
+    CovMetrics m;
+    layoutTree(&table, 800, m);
+
+    // bot cell content should be at the bottom of the row
+    check(bot.box.contentRect.y > tall.box.contentRect.y + 50,
+          "table vertical-align:bottom: cell at bottom");
+}
+
 // ======================================================================
 // HIT TEST COVERAGE
 // ======================================================================
@@ -2082,6 +2154,9 @@ void testCoverage() {
     testTableColspan();
     testTableRowspan();
     testTableColspanAndRowspan();
+    testTableCaptionSideBottom();
+    testTableVerticalAlignMiddle();
+    testTableVerticalAlignBottom();
 
     // Hit testing
     testHitTestVisibilityHidden();

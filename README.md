@@ -23,18 +23,25 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 **Layout Engine**
 - Block formatting context with margin collapsing and floats (`left`, `right`, `clear`)
 - Inline formatting context with line wrapping and text alignment (`left`, `right`, `center`, `justify`)
-- Flexbox (`flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-content`, grow/shrink, gap, order)
-- CSS Grid (templates, `grid-template-areas`, auto-placement, 1-based line placement, gap, `fr` units)
-- Table layout (`table-row`, `table-cell`, `table-caption`, `border-spacing`, `border-collapse`, `rowspan`, `colspan`)
+- Flexbox (`flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-content`, baseline alignment, grow/shrink, gap, order)
+- CSS Grid (templates, `grid-template-areas`, `span N`, `grid-auto-flow`, auto-placement, 1-based line placement, gap, `fr` units)
+- Table layout (`table-row`, `table-cell`, `table-caption`, `border-spacing`, `border-collapse`, `rowspan`, `colspan`, `caption-side`, `vertical-align`)
 - Multi-column layout (`column-count`, `column-width`, `column-gap`, `column-span: all`, `break-before`/`break-after`)
 - Length units: `px`, `em`, `%`, `vw`, `vh`, `vmin`, `vmax`, `rem`, `ch`, `ex`, `pt`, `cm`, `mm`, `in`, `pc`
 - `calc()` expressions with basic math (`+`, `-`, `*`, `/`) and nested parentheses
 - Intrinsic sizing (`min-content`, `max-content`, `fit-content`)
 - Hit testing with z-order, overflow clipping, and `pointer-events`
 - Incremental (dirty-flag) relayout
-- `text-overflow: ellipsis`, `overflow-wrap`, `word-break`, `white-space` handling
+- `text-overflow: ellipsis`, `overflow-wrap`, `word-break`, `white-space` handling, `text-indent`
+- `letter-spacing`, `word-spacing` applied during text measurement
 - `display: contents` (children promoted into parent formatting context)
 - `position: relative`, `absolute`, `fixed`, `sticky` (layout-time positioning)
+
+## Current Limitations
+
+- **Positioning**: `position: sticky` applies a static offset only; scroll-based clamping is not performed (layout-time only).
+- **At-rules**: `@font-face`, `@keyframes`, and `@import` are parsed but discarded (no font loading, animation, or import resolution).
+- **Bidirectional text**: `direction: rtl` affects text alignment but does not reorder inline content. No Unicode bidi algorithm.
 
 ## Requirements
 

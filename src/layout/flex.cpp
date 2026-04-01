@@ -422,7 +422,30 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             const std::string& align = (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign;
 
             float crossPos = crossCursor;
-            if (align == "center") {
+            if (align == "baseline" && isRow) {
+                // Baseline alignment: compute item baseline as distance from
+                // outer top edge to the first text baseline (font-size from content top)
+                float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                if (childFontSize <= 0) childFontSize = fontSize;
+                float itemBaseline = item->node->box.margin.top +
+                    item->node->box.border.top + item->node->box.padding.top + childFontSize;
+
+                // Find max baseline in this line for baseline-aligned items
+                float maxBaseline = 0;
+                for (auto* li : line.items) {
+                    auto& lis = li->node->computedStyle();
+                    const std::string& liSelf = styleVal(lis, "align-self");
+                    const std::string& liAlign = (liSelf == "auto" || liSelf.empty()) ? alignItems : liSelf;
+                    if (liAlign == "baseline") {
+                        float lfs = resolveLength(styleVal(lis, "font-size"), fontSize, fontSize);
+                        if (lfs <= 0) lfs = fontSize;
+                        float lb = li->node->box.margin.top +
+                            li->node->box.border.top + li->node->box.padding.top + lfs;
+                        maxBaseline = std::max(maxBaseline, lb);
+                    }
+                }
+                crossPos = crossCursor + (maxBaseline - itemBaseline);
+            } else if (align == "center") {
                 crossPos = crossCursor + (line.crossSize - item->crossSize) / 2.0f;
             } else if (align == "flex-end") {
                 crossPos = crossCursor + line.crossSize - item->crossSize;

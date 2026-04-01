@@ -24,6 +24,8 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                                         const std::string& whiteSpace,
                                         TextMetrics& metrics,
                                         const std::string& overflowWrap = "normal",
-                                        const std::string& wordBreak = "normal");
+                                        const std::string& wordBreak = "normal",
+                                        float letterSpacing = 0,
+                                        float wordSpacing = 0);
 
 } // namespace htmlayout::layout

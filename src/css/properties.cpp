@@ -66,6 +66,7 @@ const std::vector<PropertyDef>& knownProperties() {
         {"font-style",        "normal",    true},
         {"line-height",       "normal",    true},
         {"text-align",        "start",     true},
+        {"text-indent",       "0",         true},
         {"text-decoration",   "none",      false},
         {"text-transform",    "none",      true},
         {"white-space",       "normal",    true},

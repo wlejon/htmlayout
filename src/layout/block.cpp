@@ -189,8 +189,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         for (auto* child : getLayoutChildren(node)) {
             if (child->isTextNode()) {
+                float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
+                float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
                 auto runs = breakTextIntoRuns(child->textContent(), childAvailable,
-                    fontFamily, fontSize, fontWeight, whiteSpace, metrics);
+                    fontFamily, fontSize, fontWeight, whiteSpace, metrics,
+                    "normal", "normal", ls, ws);
                 for (auto& run : runs) {
                     if (run.text.empty() && run.width == 0) continue;
                     items.push_back({run.width, std::max(run.height, lineHeight), child, false});
@@ -240,8 +243,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
+        // Resolve text-indent (first line only)
+        float textIndent = resolveLength(styleVal(style, "text-indent"), childAvailable, fontSize);
+
         // Position items per line with text-align offset
-        for (auto& line : lines) {
+        for (size_t lineIdx = 0; lineIdx < lines.size(); lineIdx++) {
+            auto& line = lines[lineIdx];
             float extraSpace = childAvailable - line.totalWidth;
             float xOffset = 0;
             if (extraSpace > 0) {
@@ -249,6 +256,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 else if (resolvedAlign == "right" || resolvedAlign == "end") xOffset = extraSpace;
             }
             float cursorX = xOffset;
+            if (lineIdx == 0) cursorX += textIndent;
 
             for (size_t i = line.start; i < line.end; i++) {
                 auto& item = items[i];
@@ -328,9 +336,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         for (auto* inl : pendingInline) {
             if (inl->isTextNode()) {
                 float tw = 0, th = 0;
+                float ls2 = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
+                float ws2 = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
                 auto runs = breakTextIntoRuns(inl->textContent(), childAvailable,
                     styleVal(style, "font-family"), fontSize, styleVal(style, "font-weight"),
-                    styleVal(style, "white-space"), metrics);
+                    styleVal(style, "white-space"), metrics,
+                    "normal", "normal", ls2, ws2);
                 for (auto& run : runs) {
                     tw += run.width;
                     th = std::max(th, run.height);

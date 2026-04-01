@@ -12,11 +12,30 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                                         const std::string& whiteSpace,
                                         TextMetrics& metrics,
                                         const std::string& overflowWrap,
-                                        const std::string& wordBreak) {
+                                        const std::string& wordBreak,
+                                        float letterSpacing,
+                                        float wordSpacing) {
     std::vector<TextRun> runs;
     if (text.empty() || availableWidth <= 0) return runs;
 
     float lineH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+
+    // Helper: measure text width with letter-spacing applied
+    auto measureWithSpacing = [&](const std::string& s) -> float {
+        float w = metrics.measureWidth(s, fontFamily, fontSize, fontWeight);
+        if (letterSpacing != 0 && !s.empty()) {
+            w += letterSpacing * static_cast<float>(s.size());
+        }
+        return w;
+    };
+
+    // Space width including word-spacing
+    auto measureSpace = [&]() -> float {
+        float w = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
+        if (letterSpacing != 0) w += letterSpacing;
+        w += wordSpacing;
+        return w;
+    };
 
     // white-space: pre-line — collapse spaces but preserve newlines, wrap at width
     if (whiteSpace == "pre-line") {
@@ -49,9 +68,9 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
             // Greedy line packing within this source line
             std::string currentLine;
             float currentWidth = 0;
-            float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
+            float spaceWidth = measureSpace();
             for (size_t i = 0; i < words.size(); i++) {
-                float wordWidth = metrics.measureWidth(words[i], fontFamily, fontSize, fontWeight);
+                float wordWidth = measureWithSpacing(words[i]);
                 if (currentLine.empty()) {
                     currentLine = words[i];
                     currentWidth = wordWidth;
@@ -80,7 +99,7 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
         std::istringstream stream(text);
         std::string line;
         while (std::getline(stream, line)) {
-            float w = metrics.measureWidth(line, fontFamily, fontSize, fontWeight);
+            float w = measureWithSpacing(line);
             if (whiteSpace == "pre-wrap" && w > availableWidth && !line.empty()) {
                 // pre-wrap: preserve whitespace but wrap at available width
                 // For simplicity, wrap at word boundaries
@@ -89,11 +108,11 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                 for (size_t i = 0; i < line.size(); i++) {
                     char c = line[i];
                     std::string test = current + c;
-                    float testW = metrics.measureWidth(test, fontFamily, fontSize, fontWeight);
+                    float testW = measureWithSpacing(test);
                     if (testW > availableWidth && !current.empty()) {
                         runs.push_back({current, currentW, lineH});
                         current = std::string(1, c);
-                        currentW = metrics.measureWidth(current, fontFamily, fontSize, fontWeight);
+                        currentW = measureWithSpacing(current);
                     } else {
                         current = test;
                         currentW = testW;
@@ -128,7 +147,7 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
         // Trim trailing space
         if (!collapsed.empty() && collapsed.back() == ' ')
             collapsed.pop_back();
-        float w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
+        float w = measureWithSpacing(collapsed);
         if (!collapsed.empty()) {
             runs.push_back({collapsed, w, lineH});
         }
@@ -161,13 +180,13 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
     // 2. Greedy line packing
     std::string currentLine;
     float currentWidth = 0;
-    float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
+    float spaceWidth = measureSpace();
 
     bool canBreakWord = (overflowWrap == "break-word" || overflowWrap == "anywhere" ||
                          wordBreak == "break-all");
 
     for (size_t i = 0; i < words.size(); i++) {
-        float wordWidth = metrics.measureWidth(words[i], fontFamily, fontSize, fontWeight);
+        float wordWidth = measureWithSpacing(words[i]);
 
         if (currentLine.empty()) {
             // First word on line
@@ -177,11 +196,11 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                 float partialW = 0;
                 for (size_t ci = 0; ci < words[i].size(); ci++) {
                     std::string test = partial + words[i][ci];
-                    float testW = metrics.measureWidth(test, fontFamily, fontSize, fontWeight);
+                    float testW = measureWithSpacing(test);
                     if (testW > availableWidth && !partial.empty()) {
                         runs.push_back({partial, partialW, lineH});
                         partial = std::string(1, words[i][ci]);
-                        partialW = metrics.measureWidth(partial, fontFamily, fontSize, fontWeight);
+                        partialW = measureWithSpacing(partial);
                     } else {
                         partial = test;
                         partialW = testW;
@@ -208,11 +227,11 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                     float partialW = 0;
                     for (size_t ci = 0; ci < words[i].size(); ci++) {
                         std::string test = partial + words[i][ci];
-                        float testW = metrics.measureWidth(test, fontFamily, fontSize, fontWeight);
+                        float testW = measureWithSpacing(test);
                         if (testW > availableWidth && !partial.empty()) {
                             runs.push_back({partial, partialW, lineH});
                             partial = std::string(1, words[i][ci]);
-                            partialW = metrics.measureWidth(partial, fontFamily, fontSize, fontWeight);
+                            partialW = measureWithSpacing(partial);
                         } else {
                             partial = test;
                             partialW = testW;

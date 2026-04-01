@@ -270,9 +270,21 @@ struct GridPlacement {
     int colEnd = 0;
 };
 
+// Returns positive for line numbers, negative for span counts (e.g., -2 = span 2), 0 for auto.
 int parseGridLine(const std::string& val) {
     if (val.empty() || val == "auto") return 0;
-    if (val == "span") return 0; // simplified: span without number = span 1
+    // "span" or "span N"
+    if (val.size() >= 4 && val.substr(0, 4) == "span") {
+        std::string rest = val.substr(4);
+        // Trim leading whitespace
+        size_t s = rest.find_first_not_of(" \t");
+        if (s == std::string::npos || rest.empty()) return -1; // bare "span" = span 1
+        rest = rest.substr(s);
+        int n = 1;
+        try { n = std::stoi(rest); } catch (...) {}
+        if (n < 1) n = 1;
+        return -n; // negative = span count
+    }
     try { return std::stoi(val); } catch (...) { return 0; }
 }
 
@@ -492,41 +504,93 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (gp.colStart > 0) item.col = gp.colStart - 1;
         if (gp.rowStart > 0) item.row = gp.rowStart - 1;
 
-        if (gp.colEnd > 0 && item.col >= 0) {
+        // Resolve span values (negative = span count)
+        if (gp.colEnd < 0) {
+            // colEnd is a span count
+            item.colSpan = -gp.colEnd;
+        } else if (gp.colEnd > 0 && item.col >= 0) {
             item.colSpan = gp.colEnd - gp.colStart;
             if (item.colSpan < 1) item.colSpan = 1;
+        } else if (gp.colStart < 0) {
+            // colStart is a span (e.g., grid-column: span 2)
+            item.colSpan = -gp.colStart;
+            item.col = -1; // needs auto-placement
         }
-        if (gp.rowEnd > 0 && item.row >= 0) {
+
+        if (gp.rowEnd < 0) {
+            item.rowSpan = -gp.rowEnd;
+        } else if (gp.rowEnd > 0 && item.row >= 0) {
             item.rowSpan = gp.rowEnd - gp.rowStart;
             if (item.rowSpan < 1) item.rowSpan = 1;
+        } else if (gp.rowStart < 0) {
+            item.rowSpan = -gp.rowStart;
+            item.row = -1;
         }
     }
+
+    // Check auto-flow direction
+    const std::string& autoFlow = styleVal(style, "grid-auto-flow");
+    bool columnFlow = (autoFlow == "column");
 
     // Auto-place items that don't have explicit positions
     size_t autoRow = 0, autoCol = 0;
     for (auto& item : items) {
         if (item.col < 0 && item.row < 0) {
-            // Find next available cell
+            // Find next available cell that fits the item's span
             ensureRows(autoRow);
-            while (autoRow < occupied.size() && autoCol < numCols && occupied[autoRow][autoCol]) {
-                autoCol++;
-                if (autoCol >= numCols) { autoCol = 0; autoRow++; ensureRows(autoRow); }
+            if (columnFlow) {
+                // Column-major: advance row first, then column
+                // Use numRows from explicit tracks as the wrapping point
+                size_t wrapRows = numRows > 0 ? numRows : items.size();
+                auto fits = [&](size_t r, size_t c) {
+                    for (int dr = 0; dr < item.rowSpan; dr++) {
+                        ensureRows(r + dr);
+                        for (int dc = 0; dc < item.colSpan; dc++) {
+                            if (c + dc >= numCols || occupied[r + dr][c + dc]) return false;
+                        }
+                    }
+                    return true;
+                };
+                while (!fits(autoRow, autoCol)) {
+                    autoRow++;
+                    if (autoRow + item.rowSpan > wrapRows) { autoRow = 0; autoCol++; }
+                    ensureRows(autoRow);
+                }
+                item.row = static_cast<int>(autoRow);
+                item.col = static_cast<int>(autoCol);
+                autoRow += item.rowSpan;
+                if (autoRow >= wrapRows) { autoRow = 0; autoCol++; }
+            } else {
+                // Row-major: advance column first, then row
+                auto fits = [&](size_t r, size_t c) {
+                    for (int dr = 0; dr < item.rowSpan; dr++) {
+                        ensureRows(r + dr);
+                        for (int dc = 0; dc < item.colSpan; dc++) {
+                            if (c + dc >= numCols || occupied[r + dr][c + dc]) return false;
+                        }
+                    }
+                    return true;
+                };
+                while (!fits(autoRow, autoCol)) {
+                    autoCol++;
+                    if (autoCol + item.colSpan > numCols) { autoCol = 0; autoRow++; ensureRows(autoRow); }
+                }
+                item.row = static_cast<int>(autoRow);
+                item.col = static_cast<int>(autoCol);
+                autoCol += item.colSpan;
+                if (autoCol >= numCols) { autoCol = 0; autoRow++; }
             }
-            item.row = static_cast<int>(autoRow);
-            item.col = static_cast<int>(autoCol);
-            autoCol++;
-            if (autoCol >= numCols) { autoCol = 0; autoRow++; }
         } else if (item.col < 0) {
             // Has explicit row, find next column in that row
             ensureRows(item.row);
             size_t c = 0;
-            while (c < numCols && occupied[item.row][c]) c++;
+            while (c + item.colSpan > numCols || (c < numCols && occupied[item.row][c])) c++;
             item.col = static_cast<int>(c);
         } else if (item.row < 0) {
             // Has explicit column, find next row for that column
             size_t r = 0;
             ensureRows(r);
-            while (r < occupied.size() && occupied[r][item.col]) r++;
+            while (occupied.size() > r && occupied[r][item.col]) { r++; ensureRows(r); }
             item.row = static_cast<int>(r);
         }
 
