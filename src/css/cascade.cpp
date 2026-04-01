@@ -333,8 +333,9 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             std::string partName = elem.partName();
             if (partName.empty()) continue;
         } else {
-            // Normal scope check: rule scope must match element scope
-            if (rule.scope != elem.scope()) continue;
+            // Scope check: null-scope rules (UA defaults) apply everywhere;
+            // non-null-scope rules only match elements in their shadow root
+            if (rule.scope != nullptr && rule.scope != elem.scope()) continue;
         }
 
         // For :host selectors, match directly (the :host pseudo-class handles the logic)
@@ -532,7 +533,7 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
     std::vector<MatchedDecl> matched;
 
     for (auto& rule : rules_) {
-        if (rule.scope != elem.scope()) continue;
+        if (rule.scope != nullptr && rule.scope != elem.scope()) continue;
 
         // Check if the subject compound has a pseudo-element matching pseudoName
         auto& chain = rule.selector.chain;
