@@ -126,18 +126,18 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     float paddingH = node->box.padding.left + node->box.padding.right;
     float borderH = node->box.border.left + node->box.border.right;
 
-    // For inline-block: resolve explicit width/height
-    if (display == "inline-block") {
+    // Check for intrinsic size (replaced elements like <input>)
+    float intrW = 0, intrH = 0;
+    bool hasIntrinsic = node->intrinsicSize(intrW, intrH, availableWidth - paddingH - borderH);
+
+    // For inline-block or inline replaced elements: resolve explicit width/height
+    if (display == "inline-block" || hasIntrinsic) {
         float specW = resolveLength(styleVal(style, "width"), availableWidth, fontSize);
         float specH = resolveLength(styleVal(style, "height"), 0, fontSize);
         const std::string& widthVal = styleVal(style, "width");
         const std::string& heightVal = styleVal(style, "height");
 
         float contentAvail = availableWidth - paddingH - borderH;
-
-        // Check for intrinsic size (replaced elements like <input>)
-        float intrW = 0, intrH = 0;
-        bool hasIntrinsic = node->intrinsicSize(intrW, intrH, contentAvail);
 
         if (widthVal != "auto" && !widthVal.empty()) {
             const std::string& boxSizing = styleVal(style, "box-sizing");
