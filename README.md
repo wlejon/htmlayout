@@ -8,14 +8,16 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 
 **CSS Engine**
 - W3C-compliant tokenizer and parser
-- Selector matching: type, class, ID, attribute, pseudo-classes (`:nth-child`, `:not`, `:is`, `:hover`, `:focus`, etc.), pseudo-elements (`::before`, `::after`)
+- Selector matching: type, class, ID, attribute, pseudo-classes (`:nth-child`, `:not`, `:is`, `:hover`, `:focus`, `:defined`, etc.), pseudo-elements (`::before`, `::after`, `::slotted()`, `::part()`)
 - Combinators: descendant, child (`>`), adjacent sibling (`+`), general sibling (`~`)
 - Full cascade with specificity, source order, `!important`, and inheritance
-- Shorthand expansion (`margin`, `padding`, `border`, `flex`, `background`, `font`)
+- `@layer` cascade layers with spec-compliant priority ordering
+- `@container` queries with named containers and size containment
+- Shorthand expansion (`margin`, `padding`, `border`, `flex`, `background`, `font`, `container`)
 - Color parsing (named, hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`)
 - `@media` query evaluation
 - Built-in user-agent stylesheet
-- Shadow DOM scoping
+- Shadow DOM and web component support: `:host`, `:host()`, `:host-context()`, `::slotted()`, `::part()`, scoped stylesheets
 
 **Layout Engine**
 - Block formatting context with margin collapsing and floats
@@ -72,7 +74,9 @@ class MyElement : public htmlayout::css::ElementRef {
     int childIndexOfType() const override;
     int siblingCount() const override;
     int siblingCountOfType() const override;
-    // Optional: isHovered(), isFocused(), isActive(), scope()
+    // Optional: isHovered(), isFocused(), isActive(), scope(),
+    //   shadowRoot(), assignedSlot(), partName(), isDefined(),
+    //   containerType(), containerName(), containerInlineSize(), containerBlockSize()
 };
 
 // Bridge your DOM for layout
@@ -142,7 +146,7 @@ layoutTreeIncremental(rootNode, viewportWidth, metrics);
 ```
 src/css/       CSS tokenizer, parser, selector matcher, cascade, properties, color
 src/layout/    Block, inline, flex, grid, table layout, hit testing, text breaking
-tests/         Test suite (~4,500 lines across 14 test files)
+tests/         Test suite (~5,700 lines across 15 test files)
 third_party/   Bundled gumbo HTML5 parser
 docs/          Architecture document
 ```
@@ -158,7 +162,7 @@ Key design principles:
 
 - **Consumer owns the DOM** -- htmlayout never allocates or manages DOM nodes. You implement `ElementRef` and `LayoutNode` to bridge your own tree.
 - **No global state** -- `Cascade` is instance-based. Layout is a pure tree walk. Multiple independent instances can coexist.
-- **Shadow DOM scoping** -- Stylesheets can be scoped to shadow roots. The cascade automatically restricts rule matching to elements within the correct scope.
+- **Web component support** -- Full Shadow DOM scoping with `:host`, `:host-context()`, `::slotted()`, `::part()`, and `:defined`. Cascade layers (`@layer`) and container queries (`@container`) for modern component authoring.
 - **No rendering** -- Layout outputs positioned boxes. Drawing is your responsibility.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design document and API reference.
