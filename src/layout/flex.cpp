@@ -97,13 +97,19 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float gapMain = resolveLength(styleVal(style, isRow ? "column-gap" : "row-gap"), mainAvailable, fontSize);
     float gapCross = resolveLength(styleVal(style, isRow ? "row-gap" : "column-gap"), mainAvailable, fontSize);
 
-    // Collect flex items
+    // Collect flex items, filtering out absolutely/fixed positioned children
+    std::vector<LayoutNode*> absChildren;
     std::vector<FlexItem> items;
     for (auto* child : node->children()) {
         if (child->isTextNode()) continue;
         auto& cs = child->computedStyle();
         if (styleVal(cs, "display") == "none") {
             child->box = LayoutBox{};
+            continue;
+        }
+        const std::string& childPos = styleVal(cs, "position");
+        if (childPos == "absolute" || childPos == "fixed") {
+            absChildren.push_back(child);
             continue;
         }
 
@@ -371,6 +377,28 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 item->node->box.contentRect.x = crossPos +
                     item->node->box.margin.left + item->node->box.padding.left + item->node->box.border.left;
             }
+
+            // Apply position: relative offset
+            const std::string& childPos = styleVal(cs, "position");
+            if (childPos == "relative" || childPos == "sticky") {
+                float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                if (childFontSize <= 0) childFontSize = fontSize;
+                const std::string& topVal = styleVal(cs, "top");
+                const std::string& leftVal = styleVal(cs, "left");
+                const std::string& bottomVal = styleVal(cs, "bottom");
+                const std::string& rightVal = styleVal(cs, "right");
+
+                if (topVal != "auto" && !topVal.empty()) {
+                    item->node->box.contentRect.y += resolveLength(topVal, 0, childFontSize);
+                } else if (bottomVal != "auto" && !bottomVal.empty()) {
+                    item->node->box.contentRect.y -= resolveLength(bottomVal, 0, childFontSize);
+                }
+                if (leftVal != "auto" && !leftVal.empty()) {
+                    item->node->box.contentRect.x += resolveLength(leftVal, containerMain, childFontSize);
+                } else if (rightVal != "auto" && !rightVal.empty()) {
+                    item->node->box.contentRect.x -= resolveLength(rightVal, containerMain, childFontSize);
+                }
+            }
         }
 
         crossCursor += line.crossSize + gapCross;
@@ -388,6 +416,61 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (node->box.contentRect.height < 0) node->box.contentRect.height = 0;
     } else {
         node->box.contentRect.height = crossCursor > 0 ? crossCursor - gapCross : 0;
+    }
+
+    // Position absolutely/fixed positioned children against this container
+    float cbWidth = node->box.contentRect.width;
+    float cbHeight = node->box.contentRect.height;
+
+    for (auto* child : absChildren) {
+        auto& childStyle = child->computedStyle();
+        float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
+        if (childFontSize <= 0) childFontSize = fontSize;
+
+        layoutNode(child, cbWidth, metrics);
+
+        float top = resolveDim(styleVal(childStyle, "top"), cbHeight, childFontSize);
+        float right = resolveDim(styleVal(childStyle, "right"), cbWidth, childFontSize);
+        float bottom = resolveDim(styleVal(childStyle, "bottom"), cbHeight, childFontSize);
+        float left = resolveDim(styleVal(childStyle, "left"), cbWidth, childFontSize);
+
+        float specAbsW = resolveDim(styleVal(childStyle, "width"), cbWidth, childFontSize);
+        if (specAbsW < 0 && left >= 0 && right >= 0) {
+            float w = cbWidth - left - right -
+                      child->box.margin.left - child->box.margin.right -
+                      child->box.padding.left - child->box.padding.right -
+                      child->box.border.left - child->box.border.right;
+            if (w > 0) child->box.contentRect.width = w;
+        }
+
+        float specAbsH = resolveDim(styleVal(childStyle, "height"), cbHeight, childFontSize);
+        if (specAbsH < 0 && top >= 0 && bottom >= 0) {
+            float h = cbHeight - top - bottom -
+                      child->box.margin.top - child->box.margin.bottom -
+                      child->box.padding.top - child->box.padding.bottom -
+                      child->box.border.top - child->box.border.bottom;
+            if (h > 0) child->box.contentRect.height = h;
+        }
+
+        float xPos = child->box.margin.left + child->box.padding.left + child->box.border.left;
+        float yPos = child->box.margin.top + child->box.padding.top + child->box.border.top;
+
+        if (left >= 0) {
+            xPos = left + child->box.margin.left + child->box.padding.left + child->box.border.left;
+        } else if (right >= 0) {
+            xPos = cbWidth - right - child->box.margin.right -
+                   child->box.padding.right - child->box.border.right - child->box.contentRect.width;
+        }
+
+        if (top >= 0) {
+            yPos = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
+        } else if (bottom >= 0) {
+            yPos = cbHeight - bottom - child->box.margin.bottom -
+                   child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
+        }
+
+        child->box.contentRect.x = xPos;
+        child->box.contentRect.y = yPos;
     }
 }
 

@@ -16,6 +16,11 @@ const std::string& styleVal(const css::ComputedStyle& style, const std::string& 
     return it != style.end() ? it->second : empty;
 }
 
+float resolveDim(const std::string& value, float available, float fontSize) {
+    if (value.empty() || value == "auto" || value == "none") return -1.0f;
+    return resolveLength(value, available, fontSize);
+}
+
 // An item on a line: either a text run or an inline/inline-block element
 struct LineItem {
     float width = 0;
@@ -162,6 +167,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         // Layout children inside inline-block
         float cursorY = 0;
         float maxContentW = 0;
+        std::vector<LayoutNode*> absChildren;
 
         // Check if children are all inline-level
         bool ibAllInline = true;
@@ -204,6 +210,11 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 } else {
                     auto& cs = child->computedStyle();
                     if (styleVal(cs, "display") == "none") { child->box = LayoutBox{}; continue; }
+                    const std::string& childPos = styleVal(cs, "position");
+                    if (childPos == "absolute" || childPos == "fixed") {
+                        absChildren.push_back(child);
+                        continue;
+                    }
                     layoutNode(child, contentAvail, metrics);
                     float cw = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
                     float ch = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
@@ -225,10 +236,18 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 maxContentW = std::max(maxContentW, cursorX);
                 cursorY += lineMaxH;
             }
+
         } else {
             // Block children inside inline-block
             for (auto* child : node->children()) {
                 if (child->isTextNode()) continue;
+                auto& cs = child->computedStyle();
+                if (styleVal(cs, "display") == "none") { child->box = LayoutBox{}; continue; }
+                const std::string& childPos = styleVal(cs, "position");
+                if (childPos == "absolute" || childPos == "fixed") {
+                    absChildren.push_back(child);
+                    continue;
+                }
                 layoutNode(child, contentAvail, metrics);
                 child->box.contentRect.x = child->box.margin.left + child->box.padding.left + child->box.border.left;
                 child->box.contentRect.y = cursorY + child->box.padding.top + child->box.border.top;
@@ -259,12 +278,70 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             node->box.contentRect.width = (maxContentW > 0) ? maxContentW : contentAvail;
         }
 
+        // Position absolutely/fixed positioned children against this container
+        {
+            float cbWidth = node->box.contentRect.width;
+            float cbHeight = node->box.contentRect.height;
+
+            for (auto* child : absChildren) {
+                auto& childStyle = child->computedStyle();
+                float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
+                if (childFontSize <= 0) childFontSize = fontSize;
+
+                layoutNode(child, cbWidth, metrics);
+
+                float top = resolveDim(styleVal(childStyle, "top"), cbHeight, childFontSize);
+                float right = resolveDim(styleVal(childStyle, "right"), cbWidth, childFontSize);
+                float bottom = resolveDim(styleVal(childStyle, "bottom"), cbHeight, childFontSize);
+                float left = resolveDim(styleVal(childStyle, "left"), cbWidth, childFontSize);
+
+                float specAbsW = resolveDim(styleVal(childStyle, "width"), cbWidth, childFontSize);
+                if (specAbsW < 0 && left >= 0 && right >= 0) {
+                    float w = cbWidth - left - right -
+                              child->box.margin.left - child->box.margin.right -
+                              child->box.padding.left - child->box.padding.right -
+                              child->box.border.left - child->box.border.right;
+                    if (w > 0) child->box.contentRect.width = w;
+                }
+
+                float specAbsH = resolveDim(styleVal(childStyle, "height"), cbHeight, childFontSize);
+                if (specAbsH < 0 && top >= 0 && bottom >= 0) {
+                    float h = cbHeight - top - bottom -
+                              child->box.margin.top - child->box.margin.bottom -
+                              child->box.padding.top - child->box.padding.bottom -
+                              child->box.border.top - child->box.border.bottom;
+                    if (h > 0) child->box.contentRect.height = h;
+                }
+
+                float xPos = child->box.margin.left + child->box.padding.left + child->box.border.left;
+                float yPos = child->box.margin.top + child->box.padding.top + child->box.border.top;
+
+                if (left >= 0) {
+                    xPos = left + child->box.margin.left + child->box.padding.left + child->box.border.left;
+                } else if (right >= 0) {
+                    xPos = cbWidth - right - child->box.margin.right -
+                           child->box.padding.right - child->box.border.right - child->box.contentRect.width;
+                }
+
+                if (top >= 0) {
+                    yPos = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
+                } else if (bottom >= 0) {
+                    yPos = cbHeight - bottom - child->box.margin.bottom -
+                           child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
+                }
+
+                child->box.contentRect.x = xPos;
+                child->box.contentRect.y = yPos;
+            }
+        }
+
         return;
     }
 
     // Pure inline element: collect all children into line items
     float contentAvail = availableWidth - paddingH - borderH;
     std::vector<LineItem> allItems;
+    std::vector<LayoutNode*> inlineAbsChildren;
 
     for (auto* child : node->children()) {
         if (child->isTextNode()) {
@@ -291,6 +368,12 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
 
             if (childDisplay == "none") {
                 child->box = LayoutBox{};
+                continue;
+            }
+
+            const std::string& childPos = styleVal(childStyle, "position");
+            if (childPos == "absolute" || childPos == "fixed") {
+                inlineAbsChildren.push_back(child);
                 continue;
             }
 
@@ -385,6 +468,63 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     }
     node->box.contentRect.width = maxLineWidth;
     node->box.contentRect.height = cursorY;
+
+    // Position absolutely/fixed positioned children against this inline container
+    {
+        float cbWidth = node->box.contentRect.width;
+        float cbHeight = node->box.contentRect.height;
+
+        for (auto* child : inlineAbsChildren) {
+            auto& childStyle = child->computedStyle();
+            float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
+            if (childFontSize <= 0) childFontSize = fontSize;
+
+            layoutNode(child, cbWidth, metrics);
+
+            float top = resolveDim(styleVal(childStyle, "top"), cbHeight, childFontSize);
+            float right = resolveDim(styleVal(childStyle, "right"), cbWidth, childFontSize);
+            float bottom = resolveDim(styleVal(childStyle, "bottom"), cbHeight, childFontSize);
+            float left = resolveDim(styleVal(childStyle, "left"), cbWidth, childFontSize);
+
+            float specAbsW = resolveDim(styleVal(childStyle, "width"), cbWidth, childFontSize);
+            if (specAbsW < 0 && left >= 0 && right >= 0) {
+                float w = cbWidth - left - right -
+                          child->box.margin.left - child->box.margin.right -
+                          child->box.padding.left - child->box.padding.right -
+                          child->box.border.left - child->box.border.right;
+                if (w > 0) child->box.contentRect.width = w;
+            }
+
+            float specAbsH = resolveDim(styleVal(childStyle, "height"), cbHeight, childFontSize);
+            if (specAbsH < 0 && top >= 0 && bottom >= 0) {
+                float h = cbHeight - top - bottom -
+                          child->box.margin.top - child->box.margin.bottom -
+                          child->box.padding.top - child->box.padding.bottom -
+                          child->box.border.top - child->box.border.bottom;
+                if (h > 0) child->box.contentRect.height = h;
+            }
+
+            float xPos = child->box.margin.left + child->box.padding.left + child->box.border.left;
+            float yPos = child->box.margin.top + child->box.padding.top + child->box.border.top;
+
+            if (left >= 0) {
+                xPos = left + child->box.margin.left + child->box.padding.left + child->box.border.left;
+            } else if (right >= 0) {
+                xPos = cbWidth - right - child->box.margin.right -
+                       child->box.padding.right - child->box.border.right - child->box.contentRect.width;
+            }
+
+            if (top >= 0) {
+                yPos = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
+            } else if (bottom >= 0) {
+                yPos = cbHeight - bottom - child->box.margin.bottom -
+                       child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
+            }
+
+            child->box.contentRect.x = xPos;
+            child->box.contentRect.y = yPos;
+        }
+    }
 
     // Text-overflow detection: mark if content was truncated
     const std::string& textOverflow = styleVal(style, "text-overflow");
