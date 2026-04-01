@@ -205,18 +205,27 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             item.hypotheticalMain = item.minMain;
     }
 
+    // Compute per-item main-axis margins for sizing and positioning
+    auto itemMarginMain = [&](const FlexItem& item) -> float {
+        if (isRow)
+            return item.node->box.margin.left + item.node->box.margin.right;
+        else
+            return item.node->box.margin.top + item.node->box.margin.bottom;
+    };
+
     // Split into flex lines
     std::vector<FlexLine> lines;
     {
         FlexLine currentLine;
         float lineMain = 0;
         for (size_t i = 0; i < items.size(); i++) {
-            float itemMain = items[i].hypotheticalMain + (currentLine.items.empty() ? 0 : gapMain);
+            float itemOuter = items[i].hypotheticalMain + itemMarginMain(items[i]);
+            float itemMain = itemOuter + (currentLine.items.empty() ? 0 : gapMain);
             if (isWrap && !currentLine.items.empty() && lineMain + itemMain > mainAvailable) {
                 lines.push_back(std::move(currentLine));
                 currentLine = FlexLine{};
                 lineMain = 0;
-                itemMain = items[i].hypotheticalMain;
+                itemMain = itemOuter;
             }
             currentLine.items.push_back(&items[i]);
             lineMain += itemMain;
@@ -228,10 +237,14 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Resolve flexible lengths per line
     for (auto& line : lines) {
         float totalHypothetical = 0;
+        float totalMargins = 0;
         float totalGaps = (line.items.size() > 1) ? gapMain * (line.items.size() - 1) : 0;
-        for (auto* item : line.items) totalHypothetical += item->hypotheticalMain;
+        for (auto* item : line.items) {
+            totalHypothetical += item->hypotheticalMain;
+            totalMargins += itemMarginMain(*item);
+        }
 
-        float freeSpace = mainAvailable - totalHypothetical - totalGaps;
+        float freeSpace = mainAvailable - totalHypothetical - totalMargins - totalGaps;
 
         if (freeSpace > 0) {
             // Distribute via flex-grow
@@ -317,9 +330,13 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto& line : lines) {
         // Compute justify-content offsets
         float totalMain = 0;
+        float totalMainMargins = 0;
         float totalGaps = (line.items.size() > 1) ? gapMain * (line.items.size() - 1) : 0;
-        for (auto* item : line.items) totalMain += item->finalMain;
-        float freeMain = mainAvailable - totalMain - totalGaps;
+        for (auto* item : line.items) {
+            totalMain += item->finalMain;
+            totalMainMargins += itemMarginMain(*item);
+        }
+        float freeMain = mainAvailable - totalMain - totalMainMargins - totalGaps;
         if (freeMain < 0) freeMain = 0;
 
         float mainCursor = 0;
@@ -384,15 +401,18 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
             // else flex-start (default): crossPos stays at crossCursor
 
-            // Set position
+            // Set position (margins are added to contentRect below, advance
+            // cursor by outer size = finalMain + margins)
+            float marginM = itemMarginMain(*item);
+            float outerMain = item->finalMain + marginM;
             float mainPos;
             if (isReverse) {
-                mainCursor -= item->finalMain;
+                mainCursor -= outerMain;
                 mainPos = mainCursor;
                 if (i + 1 < line.items.size()) mainCursor -= gap;
             } else {
                 mainPos = mainCursor;
-                mainCursor += item->finalMain;
+                mainCursor += outerMain;
                 if (i + 1 < line.items.size()) mainCursor += gap;
             }
 
