@@ -68,6 +68,14 @@ struct LayoutNode {
 
     // Output: layout writes the positioned box here
     LayoutBox box;
+
+    // Available height from containing block (for percentage height resolution).
+    // Set by the parent before layout; 0 means percentage heights resolve to auto.
+    float availableHeight = 0;
+
+    // Viewport height, propagated from root to all descendants.
+    // Used as fallback for absolute elements whose containing block has no definite height.
+    float viewportHeight = 0;
 };
 
 // Text measurement callback — consumers provide this (e.g. via Skia)

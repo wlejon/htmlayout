@@ -15,6 +15,8 @@ void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
 
 void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
     if (!root) return;
+    root->availableHeight = viewport.height;
+    root->viewportHeight = viewport.height;
     layoutNode(root, viewport.width, metrics);
     root->box.contentRect.x = root->box.margin.left + root->box.padding.left + root->box.border.left;
     root->box.contentRect.y = root->box.margin.top + root->box.padding.top + root->box.border.top;

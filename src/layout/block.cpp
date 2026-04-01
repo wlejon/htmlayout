@@ -113,6 +113,13 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Available width for children
     float childAvailable = contentWidth;
 
+    // Propagate viewport height to all children before layout
+    for (auto* child : node->children()) {
+        if (!child->isTextNode()) {
+            child->viewportHeight = node->viewportHeight;
+        }
+    }
+
     // Shared state for both BFC and IFC paths
     std::vector<LayoutNode*> absChildren;
     float cursorY = 0.0f;
@@ -179,35 +186,70 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
-        // Position items in line boxes
-        float cursorX = 0, lineMaxH = 0;
-        for (auto& item : items) {
-            if (cursorX > 0 && cursorX + item.width > childAvailable) {
-                cursorY += lineMaxH;
-                cursorX = 0;
-                lineMaxH = 0;
+        // Resolve text-align for line positioning
+        const std::string& textAlign = styleVal(style, "text-align");
+        const std::string& direction = styleVal(style, "direction");
+        std::string resolvedAlign = textAlign;
+        if (resolvedAlign == "start" || resolvedAlign.empty()) {
+            resolvedAlign = (direction == "rtl") ? "right" : "left";
+        } else if (resolvedAlign == "end") {
+            resolvedAlign = (direction == "rtl") ? "left" : "right";
+        }
+
+        // Build line boxes first, then position with alignment
+        struct LineBounds { size_t start; size_t end; float totalWidth; float maxHeight; };
+        std::vector<LineBounds> lines;
+        {
+            size_t lineStart = 0;
+            float cursorX = 0, lineMaxH = 0;
+            for (size_t i = 0; i < items.size(); i++) {
+                if (cursorX > 0 && cursorX + items[i].width > childAvailable) {
+                    lines.push_back({lineStart, i, cursorX, lineMaxH});
+                    lineStart = i;
+                    cursorX = 0;
+                    lineMaxH = 0;
+                }
+                cursorX += items[i].width;
+                lineMaxH = std::max(lineMaxH, items[i].height);
             }
-            if (item.node) {
-                if (item.isElement) {
-                    item.node->box.contentRect.x = cursorX + item.node->box.margin.left +
-                        item.node->box.padding.left + item.node->box.border.left;
-                    item.node->box.contentRect.y = cursorY + item.node->box.margin.top +
-                        item.node->box.padding.top + item.node->box.border.top;
-                } else {
-                    // Store first text run position for drawing
-                    // (subsequent runs from same text node keep the first position)
-                    if (item.node->box.contentRect.width == 0) {
-                        item.node->box.contentRect.x = cursorX;
-                        item.node->box.contentRect.y = cursorY;
-                        item.node->box.contentRect.width = item.width;
-                        item.node->box.contentRect.height = item.height;
+            if (lineStart < items.size()) {
+                lines.push_back({lineStart, items.size(), cursorX, lineMaxH});
+            }
+        }
+
+        // Position items per line with text-align offset
+        for (auto& line : lines) {
+            float extraSpace = childAvailable - line.totalWidth;
+            float xOffset = 0;
+            if (extraSpace > 0) {
+                if (resolvedAlign == "center") xOffset = extraSpace / 2.0f;
+                else if (resolvedAlign == "right" || resolvedAlign == "end") xOffset = extraSpace;
+            }
+            float cursorX = xOffset;
+
+            for (size_t i = line.start; i < line.end; i++) {
+                auto& item = items[i];
+                if (item.node) {
+                    if (item.isElement) {
+                        item.node->box.contentRect.x = cursorX + item.node->box.margin.left +
+                            item.node->box.padding.left + item.node->box.border.left;
+                        item.node->box.contentRect.y = cursorY + item.node->box.margin.top +
+                            item.node->box.padding.top + item.node->box.border.top;
+                    } else {
+                        // Store first text run position for drawing
+                        // (subsequent runs from same text node keep the first position)
+                        if (item.node->box.contentRect.width == 0) {
+                            item.node->box.contentRect.x = cursorX;
+                            item.node->box.contentRect.y = cursorY;
+                            item.node->box.contentRect.width = item.width;
+                            item.node->box.contentRect.height = item.height;
+                        }
                     }
                 }
+                cursorX += item.width;
             }
-            cursorX += item.width;
-            lineMaxH = std::max(lineMaxH, item.height);
+            cursorY += line.maxHeight;
         }
-        if (cursorX > 0) cursorY += lineMaxH;
     } else {
     // Block formatting context: layout children vertically
     float prevMarginBottom = 0.0f;
@@ -237,16 +279,31 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         return {leftEdge, rightEdge};
     };
 
+    // Resolve text-align for anonymous inline boxes in BFC
+    const std::string& bfcTextAlign = styleVal(style, "text-align");
+    const std::string& bfcDirection = styleVal(style, "direction");
+    std::string bfcResolvedAlign = bfcTextAlign;
+    if (bfcResolvedAlign == "start" || bfcResolvedAlign.empty()) {
+        bfcResolvedAlign = (bfcDirection == "rtl") ? "right" : "left";
+    } else if (bfcResolvedAlign == "end") {
+        bfcResolvedAlign = (bfcDirection == "rtl") ? "left" : "right";
+    }
+
     // Helper: flush accumulated inline children as an anonymous line box
     std::vector<LayoutNode*> pendingInline;
     auto flushInlineRun = [&]() {
         if (pendingInline.empty()) return;
 
-        // Lay out each inline/inline-block child, then position horizontally
-        float inlineX = 0, lineMaxH = 0;
+        // First pass: measure all items and build line structure
+        struct AnonItem {
+            LayoutNode* node = nullptr;
+            float width = 0, height = 0;
+            bool isText = false;
+        };
+        std::vector<AnonItem> anonItems;
+
         for (auto* inl : pendingInline) {
             if (inl->isTextNode()) {
-                // Measure text run
                 float tw = 0, th = 0;
                 auto runs = breakTextIntoRuns(inl->textContent(), childAvailable,
                     styleVal(style, "font-family"), fontSize, styleVal(style, "font-weight"),
@@ -255,32 +312,61 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     tw += run.width;
                     th = std::max(th, run.height);
                 }
-                float lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize);
-                th = std::max(th, lineHeight);
-                inl->box.contentRect.x = inlineX;
-                inl->box.contentRect.y = cursorY;
-                inl->box.contentRect.width = tw;
-                inl->box.contentRect.height = th;
-                inlineX += tw;
-                lineMaxH = std::max(lineMaxH, th);
+                float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize);
+                th = std::max(th, lh);
+                anonItems.push_back({inl, tw, th, true});
             } else {
                 layoutNode(inl, childAvailable, metrics);
                 float cw = inl->box.fullWidth() + inl->box.margin.left + inl->box.margin.right;
                 float ch = inl->box.fullHeight() + inl->box.margin.top + inl->box.margin.bottom;
-                if (inlineX > 0 && inlineX + cw > childAvailable) {
-                    cursorY += lineMaxH;
-                    inlineX = 0;
-                    lineMaxH = 0;
-                }
-                inl->box.contentRect.x = inlineX + inl->box.margin.left +
-                    inl->box.padding.left + inl->box.border.left;
-                inl->box.contentRect.y = cursorY + inl->box.margin.top +
-                    inl->box.padding.top + inl->box.border.top;
-                inlineX += cw;
-                lineMaxH = std::max(lineMaxH, ch);
+                anonItems.push_back({inl, cw, ch, false});
             }
         }
-        if (inlineX > 0) cursorY += lineMaxH;
+
+        // Build lines
+        struct AnonLine { size_t start; size_t end; float totalWidth; float maxHeight; };
+        std::vector<AnonLine> anonLines;
+        {
+            size_t ls = 0;
+            float cx = 0, mh = 0;
+            for (size_t i = 0; i < anonItems.size(); i++) {
+                if (cx > 0 && cx + anonItems[i].width > childAvailable) {
+                    anonLines.push_back({ls, i, cx, mh});
+                    ls = i; cx = 0; mh = 0;
+                }
+                cx += anonItems[i].width;
+                mh = std::max(mh, anonItems[i].height);
+            }
+            if (ls < anonItems.size()) anonLines.push_back({ls, anonItems.size(), cx, mh});
+        }
+
+        // Position with text-align (skip zero-width lines from whitespace)
+        for (auto& line : anonLines) {
+            if (line.totalWidth <= 0) continue;
+            float extra = childAvailable - line.totalWidth;
+            float xOff = 0;
+            if (extra > 0) {
+                if (bfcResolvedAlign == "center") xOff = extra / 2.0f;
+                else if (bfcResolvedAlign == "right" || bfcResolvedAlign == "end") xOff = extra;
+            }
+            float cx = xOff;
+            for (size_t i = line.start; i < line.end; i++) {
+                auto& ai = anonItems[i];
+                if (ai.isText) {
+                    ai.node->box.contentRect.x = cx;
+                    ai.node->box.contentRect.y = cursorY;
+                    ai.node->box.contentRect.width = ai.width;
+                    ai.node->box.contentRect.height = ai.height;
+                } else {
+                    ai.node->box.contentRect.x = cx + ai.node->box.margin.left +
+                        ai.node->box.padding.left + ai.node->box.border.left;
+                    ai.node->box.contentRect.y = cursorY + ai.node->box.margin.top +
+                        ai.node->box.padding.top + ai.node->box.border.top;
+                }
+                cx += ai.width;
+            }
+            cursorY += line.maxHeight;
+        }
         pendingInline.clear();
     };
 
@@ -456,8 +542,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
     } // end BFC else block
 
-    // Resolve height
-    float specifiedHeight = resolveDimension(styleVal(style, "height"), 0.0f, fontSize);
+    // Resolve height using available height from containing block
+    float heightRef = node->availableHeight;
+    float specifiedHeight = resolveDimension(styleVal(style, "height"), heightRef, fontSize);
     if (specifiedHeight >= 0.0f) {
         const std::string& boxSizing = styleVal(style, "box-sizing");
         if (boxSizing == "border-box") {
@@ -474,19 +561,39 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // Apply min/max-height constraints
-    float minH = resolveDimension(styleVal(style, "min-height"), 0.0f, fontSize);
-    float maxH = resolveDimension(styleVal(style, "max-height"), 0.0f, fontSize);
+    float minH = resolveDimension(styleVal(style, "min-height"), heightRef, fontSize);
+    float maxH = resolveDimension(styleVal(style, "max-height"), heightRef, fontSize);
     if (minH >= 0.0f && node->box.contentRect.height < minH) node->box.contentRect.height = minH;
     if (maxH >= 0.0f && node->box.contentRect.height > maxH) node->box.contentRect.height = maxH;
+
+    // Propagate available height to in-flow children for percentage height resolution.
+    // Children can use percentage heights only when the parent has a definite height.
+    float childAvailableHeight = (specifiedHeight >= 0.0f) ? node->box.contentRect.height : 0.0f;
+    for (auto* child : node->children()) {
+        if (!child->isTextNode()) {
+            auto& cs = child->computedStyle();
+            const std::string& cp = styleVal(cs, "position");
+            if (cp != "absolute" && cp != "fixed") {
+                child->availableHeight = childAvailableHeight;
+            }
+        }
+    }
 
     // Now layout absolutely positioned children against this containing block
     float cbWidth = node->box.contentRect.width;
     float cbHeight = node->box.contentRect.height;
+    // For absolute children, use the containing block height for percentage resolution.
+    // If the containing block has no definite height, fall back to viewport height.
+    float absCbHeight = (cbHeight > 0) ? cbHeight : node->viewportHeight;
 
     for (auto* child : absChildren) {
         auto& childStyle = child->computedStyle();
         float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
         if (childFontSize <= 0) childFontSize = fontSize;
+
+        // Set available height for the absolute child's own percentage resolution
+        child->availableHeight = absCbHeight;
+        child->viewportHeight = node->viewportHeight;
 
         // Resolve offsets and explicit width to determine layout available width
         float absLeft = resolveDimension(styleVal(childStyle, "left"), cbWidth, childFontSize);
@@ -509,10 +616,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             layoutNode(child, cbWidth, metrics);
         }
 
-        // Resolve offsets: top/right/bottom/left
-        float top = resolveDimension(styleVal(childStyle, "top"), cbHeight, childFontSize);
+        // Resolve offsets against the containing block (use absCbHeight for percentages)
+        float top = resolveDimension(styleVal(childStyle, "top"), absCbHeight, childFontSize);
         float right = absRight;
-        float bottom = resolveDimension(styleVal(childStyle, "bottom"), cbHeight, childFontSize);
+        float bottom = resolveDimension(styleVal(childStyle, "bottom"), absCbHeight, childFontSize);
         float left = absLeft;
 
         // Resolve width for absolute: if left and right are both set and width is auto
@@ -525,9 +632,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
 
         // Resolve height for absolute: if top and bottom are both set and height is auto
-        float specH = resolveDimension(styleVal(childStyle, "height"), cbHeight, childFontSize);
+        float specH = resolveDimension(styleVal(childStyle, "height"), absCbHeight, childFontSize);
         if (specH < 0 && top >= 0 && bottom >= 0) {
-            float h = cbHeight - top - bottom -
+            float h = absCbHeight - top - bottom -
                       child->box.margin.top - child->box.margin.bottom -
                       child->box.padding.top - child->box.padding.bottom -
                       child->box.border.top - child->box.border.bottom;
@@ -548,7 +655,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (top >= 0) {
             yPos = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
         } else if (bottom >= 0) {
-            yPos = cbHeight - bottom - child->box.margin.bottom -
+            yPos = absCbHeight - bottom - child->box.margin.bottom -
                    child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
         }
 
