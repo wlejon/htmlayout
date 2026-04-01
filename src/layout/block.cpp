@@ -187,11 +187,22 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 cursorX = 0;
                 lineMaxH = 0;
             }
-            if (item.isElement && item.node) {
-                item.node->box.contentRect.x = cursorX + item.node->box.margin.left +
-                    item.node->box.padding.left + item.node->box.border.left;
-                item.node->box.contentRect.y = cursorY + item.node->box.margin.top +
-                    item.node->box.padding.top + item.node->box.border.top;
+            if (item.node) {
+                if (item.isElement) {
+                    item.node->box.contentRect.x = cursorX + item.node->box.margin.left +
+                        item.node->box.padding.left + item.node->box.border.left;
+                    item.node->box.contentRect.y = cursorY + item.node->box.margin.top +
+                        item.node->box.padding.top + item.node->box.border.top;
+                } else {
+                    // Store first text run position for drawing
+                    // (subsequent runs from same text node keep the first position)
+                    if (item.node->box.contentRect.width == 0) {
+                        item.node->box.contentRect.x = cursorX;
+                        item.node->box.contentRect.y = cursorY;
+                        item.node->box.contentRect.width = item.width;
+                        item.node->box.contentRect.height = item.height;
+                    }
+                }
             }
             cursorX += item.width;
             lineMaxH = std::max(lineMaxH, item.height);
@@ -226,10 +237,61 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         return {leftEdge, rightEdge};
     };
 
-    for (auto* child : node->children()) {
-        if (child->isTextNode()) continue; // text nodes handled by inline layout
+    // Helper: flush accumulated inline children as an anonymous line box
+    std::vector<LayoutNode*> pendingInline;
+    auto flushInlineRun = [&]() {
+        if (pendingInline.empty()) return;
 
+        // Lay out each inline/inline-block child, then position horizontally
+        float inlineX = 0, lineMaxH = 0;
+        for (auto* inl : pendingInline) {
+            if (inl->isTextNode()) {
+                // Measure text run
+                float tw = 0, th = 0;
+                auto runs = breakTextIntoRuns(inl->textContent(), childAvailable,
+                    styleVal(style, "font-family"), fontSize, styleVal(style, "font-weight"),
+                    styleVal(style, "white-space"), metrics);
+                for (auto& run : runs) {
+                    tw += run.width;
+                    th = std::max(th, run.height);
+                }
+                float lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize);
+                th = std::max(th, lineHeight);
+                inl->box.contentRect.x = inlineX;
+                inl->box.contentRect.y = cursorY;
+                inl->box.contentRect.width = tw;
+                inl->box.contentRect.height = th;
+                inlineX += tw;
+                lineMaxH = std::max(lineMaxH, th);
+            } else {
+                layoutNode(inl, childAvailable, metrics);
+                float cw = inl->box.fullWidth() + inl->box.margin.left + inl->box.margin.right;
+                float ch = inl->box.fullHeight() + inl->box.margin.top + inl->box.margin.bottom;
+                if (inlineX > 0 && inlineX + cw > childAvailable) {
+                    cursorY += lineMaxH;
+                    inlineX = 0;
+                    lineMaxH = 0;
+                }
+                inl->box.contentRect.x = inlineX + inl->box.margin.left +
+                    inl->box.padding.left + inl->box.border.left;
+                inl->box.contentRect.y = cursorY + inl->box.margin.top +
+                    inl->box.padding.top + inl->box.border.top;
+                inlineX += cw;
+                lineMaxH = std::max(lineMaxH, ch);
+            }
+        }
+        if (inlineX > 0) cursorY += lineMaxH;
+        pendingInline.clear();
+    };
+
+    for (auto* child : node->children()) {
         auto& childStyle = child->computedStyle();
+
+        if (child->isTextNode()) {
+            pendingInline.push_back(child);
+            continue;
+        }
+
         const std::string& childDisplay = styleVal(childStyle, "display");
         if (childDisplay == "none") {
             child->box = LayoutBox{};
@@ -243,6 +305,15 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             absChildren.push_back(child);
             continue;
         }
+
+        // Collect inline/inline-block children for horizontal layout
+        if (childDisplay == "inline" || childDisplay == "inline-block") {
+            pendingInline.push_back(child);
+            continue;
+        }
+
+        // Block child encountered — flush any pending inline items first
+        flushInlineRun();
 
         const std::string& childFloat = styleVal(childStyle, "float");
         const std::string& childClear = styleVal(childStyle, "clear");
@@ -370,6 +441,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         prevMarginBottom = childMarginBottom;
     }
+
+    // Flush any remaining inline items at end of BFC
+    flushInlineRun();
 
     // Add the last child's bottom margin
     if (!firstChild) {
