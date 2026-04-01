@@ -277,11 +277,13 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
             } else {
                 childMax = computeMaxContentWidth(child, metrics) + ph + bh + mh;
             }
-            // Apply min-width
+            // Apply min-width (specifies minimum content width)
             const std::string& minWVal = styleVal(cs, "min-width");
             if (!minWVal.empty() && minWVal != "auto") {
                 float minW = resolveLength(minWVal, 0, childFontSize);
-                if (childMax < minW + mh) childMax = minW + mh;
+                float minTotal = (styleVal(cs, "box-sizing") == "border-box")
+                    ? minW + mh : minW + ph + bh + mh;
+                if (childMax < minTotal) childMax = minTotal;
             }
             maxChildMax = std::max(maxChildMax, childMax);
             sumChildMax += childMax;
