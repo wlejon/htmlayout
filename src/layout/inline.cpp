@@ -195,6 +195,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 if (child->isTextNode()) {
                     auto runs = breakTextIntoRuns(child->textContent(), contentAvail,
                         fontFamily, fontSize, fontWeight, whiteSpace, metrics);
+                    bool firstRun = true;
                     for (auto& run : runs) {
                         if (run.text.empty() && run.width == 0) continue;
                         float h = std::max(run.height, ibLineHeight);
@@ -203,6 +204,14 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                             cursorY += lineMaxH;
                             cursorX = 0;
                             lineMaxH = 0;
+                        }
+                        // Store text node position for draw traversal
+                        if (firstRun) {
+                            child->box.contentRect.x = cursorX;
+                            child->box.contentRect.y = cursorY;
+                            child->box.contentRect.width = run.width;
+                            child->box.contentRect.height = h;
+                            firstRun = false;
                         }
                         cursorX += run.width;
                         lineMaxH = std::max(lineMaxH, h);
@@ -463,6 +472,13 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     item.node->box.padding.left + item.node->box.border.left;
                 item.node->box.contentRect.y = yPos + item.node->box.margin.top +
                     item.node->box.padding.top + item.node->box.border.top;
+            } else if (item.node && item.node->isTextNode()) {
+                // Position text run so the draw traversal knows where to draw it
+                float yPos = cursorY + (line.maxBaseline - item.baseline);
+                item.node->box.contentRect.x = cursorX;
+                item.node->box.contentRect.y = yPos;
+                item.node->box.contentRect.width = item.width;
+                item.node->box.contentRect.height = item.height;
             }
             cursorX += item.width + gap;
         }
