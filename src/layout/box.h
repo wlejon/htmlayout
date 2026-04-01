@@ -62,6 +62,10 @@ struct LayoutNode {
     // Computed style (from the CSS cascade)
     virtual const css::ComputedStyle& computedStyle() const = 0;
 
+    // Replaced element intrinsic size (e.g. <input>, <textarea>, <select>).
+    // Returns true if this node has an intrinsic size, false otherwise.
+    virtual bool intrinsicSize(float& w, float& h, float maxWidth) const { return false; }
+
     // Output: layout writes the positioned box here
     LayoutBox box;
 };

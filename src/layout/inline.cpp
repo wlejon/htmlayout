@@ -130,6 +130,10 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
 
         float contentAvail = availableWidth - paddingH - borderH;
 
+        // Check for intrinsic size (replaced elements like <input>)
+        float intrW = 0, intrH = 0;
+        bool hasIntrinsic = node->intrinsicSize(intrW, intrH, contentAvail);
+
         if (widthVal != "auto" && !widthVal.empty()) {
             const std::string& boxSizing = styleVal(style, "box-sizing");
             if (boxSizing == "border-box") {
@@ -139,6 +143,20 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 node->box.contentRect.width = specW;
             }
             contentAvail = node->box.contentRect.width;
+        } else if (hasIntrinsic) {
+            node->box.contentRect.width = intrW;
+            contentAvail = intrW;
+        }
+
+        if (heightVal != "auto" && !heightVal.empty()) {
+            // handled below
+        } else if (hasIntrinsic) {
+            node->box.contentRect.height = intrH;
+        }
+
+        // Replaced elements with intrinsic size don't need child layout
+        if (hasIntrinsic) {
+            return;
         }
 
         // Layout children inside inline-block
