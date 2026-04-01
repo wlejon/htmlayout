@@ -13,6 +13,7 @@
 #include "test_remaining.h"
 #include "test_final.h"
 #include "test_webcomponents.h"
+#include "test_coverage.h"
 #include <cstdio>
 
 int g_passed = 0;
@@ -64,6 +65,9 @@ int main() {
     printf("\n");
 
     testWebComponents();
+    printf("\n");
+
+    testCoverage();
     printf("\n");
 
     printf("=== Results: %d passed, %d failed ===\n", g_passed, g_failed);
