@@ -181,4 +181,4 @@ See [`docs/architecture.md`](docs/architecture.md) for the full design document 
 
 ## License
 
-See the project's license file for terms.
+This project is licensed under the [MIT License](LICENSE).
