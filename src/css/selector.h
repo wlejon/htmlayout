@@ -28,6 +28,22 @@ struct ElementRef {
     virtual bool isFocused() const { return false; }
     virtual bool isActive() const { return false; }
 
+    // Selectors L4: additional interactive/form state
+    virtual bool isLink() const { return false; }      // :link (unvisited hyperlink)
+    virtual bool isVisited() const { return false; }    // :visited
+    virtual bool isFocusWithin() const { return false; } // :focus-within (self or descendant focused)
+    virtual bool isFocusVisible() const { return false; } // :focus-visible (visible focus indicator)
+    virtual bool isChecked() const { return false; }    // :checked (checkbox/radio/option)
+    virtual bool isDisabled() const { return false; }   // :disabled
+    virtual bool isEnabled() const { return true; }     // :enabled
+    virtual bool isRequired() const { return false; }   // :required
+    virtual bool isOptional() const { return true; }    // :optional
+    virtual bool isReadOnly() const { return false; }   // :read-only
+    virtual bool isReadWrite() const { return true; }   // :read-write
+    virtual bool isPlaceholderShown() const { return false; } // :placeholder-shown
+    virtual bool isIndeterminate() const { return false; } // :indeterminate
+    virtual bool isTarget() const { return false; }     // :target (URL fragment match)
+
     // Shadow DOM: which scope does this element belong to?
     // nullptr = document scope. Non-null = shadow root scope.
     virtual void* scope() const { return nullptr; }

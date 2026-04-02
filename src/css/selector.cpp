@@ -643,6 +643,51 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
             if (name == "defined") {
                 return elem.isDefined();
             }
+            // Selectors L4: link pseudo-classes
+            if (name == "any-link" || name == "link") {
+                return elem.isLink();
+            }
+            if (name == "visited") {
+                return elem.isVisited();
+            }
+            // Selectors L4: focus pseudo-classes
+            if (name == "focus-within") {
+                return elem.isFocusWithin();
+            }
+            if (name == "focus-visible") {
+                return elem.isFocusVisible();
+            }
+            // Selectors L4: form state pseudo-classes
+            if (name == "checked") {
+                return elem.isChecked();
+            }
+            if (name == "disabled") {
+                return elem.isDisabled();
+            }
+            if (name == "enabled") {
+                return elem.isEnabled();
+            }
+            if (name == "required") {
+                return elem.isRequired();
+            }
+            if (name == "optional") {
+                return elem.isOptional();
+            }
+            if (name == "read-only") {
+                return elem.isReadOnly();
+            }
+            if (name == "read-write") {
+                return elem.isReadWrite();
+            }
+            if (name == "placeholder-shown") {
+                return elem.isPlaceholderShown();
+            }
+            if (name == "indeterminate") {
+                return elem.isIndeterminate();
+            }
+            if (name == "target") {
+                return elem.isTarget();
+            }
             if (name == "not") {
                 // :not() matches if NONE of the argument simple selectors match
                 for (auto& inner : ss.notArg) {

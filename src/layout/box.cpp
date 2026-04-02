@@ -267,7 +267,15 @@ void applyOverflowClippingRecursive(LayoutNode* node, bool parentClips, const La
 
     // Check if this node clips its children
     const std::string& overflow = styleVal(style, "overflow");
-    bool thisClips = (overflow == "hidden" || overflow == "scroll" || overflow == "auto");
+    bool thisClips = (overflow == "hidden" || overflow == "scroll" || overflow == "auto" || overflow == "clip");
+    // CSS Containment L2: contain: paint clips children to padding box
+    if (!thisClips) {
+        const std::string& contain = styleVal(style, "contain");
+        if (!contain.empty() && contain != "none") {
+            thisClips = (contain == "strict" || contain == "content" ||
+                         contain.find("paint") != std::string::npos);
+        }
+    }
 
     for (auto* child : node->children()) {
         applyOverflowClippingRecursive(child, thisClips, thisClips ? &node->box : nullptr);

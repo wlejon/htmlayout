@@ -90,15 +90,35 @@ TrackSize parseTrackSize(const std::string& token, float available, float fontSi
     return ts;
 }
 
-// Tokenize a track list, handling repeat(), minmax(), and simple tokens.
-// Splits on whitespace while respecting parentheses.
+// Named grid lines: maps line name to 1-based line indices.
+// Multiple lines can share a name (e.g., from repeat()).
+using NamedLines = std::unordered_map<std::string, std::vector<int>>;
+
+// Tokenize a track list, handling repeat(), minmax(), [name], and simple tokens.
+// Splits on whitespace while respecting parentheses and brackets.
 std::vector<std::string> tokenizeTrackList(const std::string& value) {
     std::vector<std::string> tokens;
     std::string current;
     int parenDepth = 0;
+    bool inBracket = false;
 
     for (size_t i = 0; i < value.size(); i++) {
         char c = value[i];
+        if (c == '[' && parenDepth == 0) {
+            // Start of named line — collect until ']'
+            if (!current.empty()) { tokens.push_back(current); current.clear(); }
+            current += c;
+            inBracket = true;
+            continue;
+        }
+        if (c == ']' && inBracket) {
+            current += c;
+            tokens.push_back(current);
+            current.clear();
+            inBracket = false;
+            continue;
+        }
+        if (inBracket) { current += c; continue; }
         if (c == '(') { parenDepth++; current += c; continue; }
         if (c == ')') { parenDepth--; current += c; continue; }
         if (parenDepth > 0) { current += c; continue; }
@@ -115,42 +135,129 @@ std::vector<std::string> tokenizeTrackList(const std::string& value) {
     return tokens;
 }
 
+// Compute the fixed-size sum of a set of track tokens (for auto-fill/auto-fit calculation).
+// Returns the total fixed space consumed by one repetition of the pattern.
+float computeRepeatPatternSize(const std::vector<std::string>& subTokens, float available, float fontSize) {
+    float total = 0;
+    for (auto& st : subTokens) {
+        if (st.front() == '[') continue; // skip named lines
+        auto ts = parseTrackSize(st, available, fontSize);
+        if (ts.kind == TrackSize::Fixed) {
+            total += ts.value;
+        } else if (ts.isMinmax && ts.minValue > 0) {
+            total += ts.minValue; // use minimum for auto-fill calculation
+        }
+        // auto/fr/min-content/max-content contribute 0 for auto-fill count calc
+    }
+    return total;
+}
+
 // Parse a grid-template-columns/rows value into track sizes.
-// Supports: fixed lengths, fr, auto, repeat(N, track), minmax()
-std::vector<TrackSize> parseTrackList(const std::string& value, float available, float fontSize) {
+// Supports: fixed lengths, fr, auto, repeat(N|auto-fill|auto-fit, track),
+// minmax(), named lines [name].
+struct ParsedTrackList {
     std::vector<TrackSize> tracks;
-    if (value.empty() || value == "none") return tracks;
+    NamedLines lineNames;
+    bool hasAutoFit = false;  // if auto-fit was used, empty tracks should collapse
+};
+
+ParsedTrackList parseTrackListWithNames(const std::string& value, float available, float fontSize) {
+    ParsedTrackList result;
+    if (value.empty() || value == "none") return result;
 
     auto tokens = tokenizeTrackList(value);
 
-    for (auto& token : tokens) {
-        // Handle repeat(count, track-size)
+    // Track the current line index (1-based: line 1 is before track 0)
+    int lineIndex = 1;
+
+    for (size_t ti = 0; ti < tokens.size(); ti++) {
+        auto& token = tokens[ti];
+
+        // Handle named lines: [name1 name2]
+        if (!token.empty() && token.front() == '[' && token.back() == ']') {
+            std::string names = token.substr(1, token.size() - 2);
+            // Split names by whitespace
+            std::istringstream iss(names);
+            std::string n;
+            while (iss >> n) {
+                result.lineNames[n].push_back(lineIndex);
+            }
+            continue;
+        }
+
+        // Handle repeat(count|auto-fill|auto-fit, track-size...)
         if (token.size() > 7 && token.substr(0, 7) == "repeat(") {
             std::string inner = token.substr(7);
             if (!inner.empty() && inner.back() == ')') inner.pop_back();
-            auto comma = inner.find(',');
+            // Find first comma (not inside parens)
+            int pd = 0;
+            size_t comma = std::string::npos;
+            for (size_t j = 0; j < inner.size(); j++) {
+                if (inner[j] == '(') pd++;
+                else if (inner[j] == ')') pd--;
+                else if (inner[j] == ',' && pd == 0) { comma = j; break; }
+            }
             if (comma != std::string::npos) {
-                int count = 1;
-                try { count = std::stoi(inner.substr(0, comma)); } catch (...) {}
+                std::string countStr = inner.substr(0, comma);
+                // Trim
+                while (!countStr.empty() && countStr.front() == ' ') countStr.erase(0, 1);
+                while (!countStr.empty() && countStr.back() == ' ') countStr.pop_back();
+
                 std::string trackStr = inner.substr(comma + 1);
                 while (!trackStr.empty() && trackStr.front() == ' ') trackStr.erase(0, 1);
                 while (!trackStr.empty() && trackStr.back() == ' ') trackStr.pop_back();
 
-                // Parse the repeated track sizes
                 auto subTokens = tokenizeTrackList(trackStr);
+
+                int count = 0;
+                bool isAutoFill = (countStr == "auto-fill");
+                bool isAutoFit = (countStr == "auto-fit");
+
+                if (isAutoFill || isAutoFit) {
+                    if (isAutoFit) result.hasAutoFit = true;
+                    // Compute how many repetitions fit in the available space.
+                    // Count only the track-size tokens (skip named lines).
+                    float patternSize = computeRepeatPatternSize(subTokens, available, fontSize);
+                    if (patternSize > 0) {
+                        count = static_cast<int>(std::floor(available / patternSize));
+                        if (count < 1) count = 1;
+                    } else {
+                        count = 1; // fallback: at least one repetition
+                    }
+                } else {
+                    try { count = std::stoi(countStr); } catch (...) { count = 1; }
+                }
+
                 for (int r = 0; r < count; r++) {
                     for (auto& st : subTokens) {
-                        tracks.push_back(parseTrackSize(st, available, fontSize));
+                        if (!st.empty() && st.front() == '[' && st.back() == ']') {
+                            // Named line inside repeat
+                            std::string names = st.substr(1, st.size() - 2);
+                            std::istringstream iss(names);
+                            std::string n;
+                            while (iss >> n) {
+                                result.lineNames[n].push_back(lineIndex);
+                            }
+                        } else {
+                            result.tracks.push_back(parseTrackSize(st, available, fontSize));
+                            lineIndex++;
+                        }
                     }
                 }
             }
             continue;
         }
 
-        tracks.push_back(parseTrackSize(token, available, fontSize));
+        result.tracks.push_back(parseTrackSize(token, available, fontSize));
+        lineIndex++;
     }
 
-    return tracks;
+    return result;
+}
+
+// Legacy wrapper that returns just the track sizes
+std::vector<TrackSize> parseTrackList(const std::string& value, float available, float fontSize) {
+    return parseTrackListWithNames(value, available, fontSize).tracks;
 }
 
 // Resolve track sizes to actual pixel widths/heights.
@@ -270,26 +377,60 @@ struct GridPlacement {
     int colEnd = 0;
 };
 
+// Special sentinel for named line references (stored in GridPlacement).
+// Named lines are resolved later when we have the NamedLines map.
+constexpr int GRID_LINE_NAMED = -1000;
+
+struct GridLineRef {
+    int value = 0;       // positive = line number, negative = span, 0 = auto
+    std::string name;    // non-empty if this is a named line reference
+};
+
 // Returns positive for line numbers, negative for span counts (e.g., -2 = span 2), 0 for auto.
-int parseGridLine(const std::string& val) {
-    if (val.empty() || val == "auto") return 0;
+// Named line references are stored in the name field of GridLineRef.
+GridLineRef parseGridLineRef(const std::string& val) {
+    if (val.empty() || val == "auto") return {0, ""};
     // "span" or "span N"
     if (val.size() >= 4 && val.substr(0, 4) == "span") {
         std::string rest = val.substr(4);
-        // Trim leading whitespace
         size_t s = rest.find_first_not_of(" \t");
-        if (s == std::string::npos || rest.empty()) return -1; // bare "span" = span 1
+        if (s == std::string::npos || rest.empty()) return {-1, ""}; // bare "span" = span 1
         rest = rest.substr(s);
         int n = 1;
-        try { n = std::stoi(rest); } catch (...) {}
+        try { n = std::stoi(rest); } catch (...) {
+            // "span name" — span to a named line (not fully supported, treat as span 1)
+            n = 1;
+        }
         if (n < 1) n = 1;
-        return -n; // negative = span count
+        return {-n, ""};
     }
-    try { return std::stoi(val); } catch (...) { return 0; }
+    // Try numeric line
+    try { return {std::stoi(val), ""}; } catch (...) {}
+    // Must be a named line reference
+    return {GRID_LINE_NAMED, val};
+}
+
+// Legacy wrapper for backward compat in parseGridPlacement
+int parseGridLine(const std::string& val) {
+    return parseGridLineRef(val).value;
+}
+
+// Resolve a named line reference to a 1-based line number using the NamedLines map.
+// Returns 0 (auto) if the name is not found.
+int resolveNamedLine(const GridLineRef& ref, const NamedLines& lineNames, int occurrence = 1) {
+    if (ref.name.empty() || ref.value != GRID_LINE_NAMED) return ref.value;
+    auto it = lineNames.find(ref.name);
+    if (it == lineNames.end() || it->second.empty()) return 0;
+    // Return the nth occurrence (1-based)
+    int idx = std::min(occurrence - 1, static_cast<int>(it->second.size()) - 1);
+    if (idx < 0) idx = 0;
+    return it->second[idx];
 }
 
 GridPlacement parseGridPlacement(const css::ComputedStyle& style,
-                                 const std::unordered_map<std::string, GridArea>& namedAreas) {
+                                 const std::unordered_map<std::string, GridArea>& namedAreas,
+                                 const NamedLines& colLines = {},
+                                 const NamedLines& rowLines = {}) {
     GridPlacement gp;
 
     // Check grid-area first (shorthand)
@@ -331,11 +472,19 @@ GridPlacement parseGridPlacement(const css::ComputedStyle& style,
         return gp;
     }
 
-    // Individual properties
-    gp.rowStart = parseGridLine(styleVal(style, "grid-row-start"));
-    gp.colStart = parseGridLine(styleVal(style, "grid-column-start"));
-    gp.rowEnd = parseGridLine(styleVal(style, "grid-row-end"));
-    gp.colEnd = parseGridLine(styleVal(style, "grid-column-end"));
+    // Individual properties — resolve named lines
+    auto resolveRow = [&](const std::string& val) {
+        auto ref = parseGridLineRef(val);
+        return resolveNamedLine(ref, rowLines);
+    };
+    auto resolveCol = [&](const std::string& val) {
+        auto ref = parseGridLineRef(val);
+        return resolveNamedLine(ref, colLines);
+    };
+    gp.rowStart = resolveRow(styleVal(style, "grid-row-start"));
+    gp.colStart = resolveCol(styleVal(style, "grid-column-start"));
+    gp.rowEnd = resolveRow(styleVal(style, "grid-row-end"));
+    gp.colEnd = resolveCol(styleVal(style, "grid-column-end"));
 
     // Handle grid-row / grid-column shorthands
     const std::string& gridRow = styleVal(style, "grid-row");
@@ -348,10 +497,10 @@ GridPlacement parseGridPlacement(const css::ComputedStyle& style,
             while (!s.empty() && s.front() == ' ') s.erase(0, 1);
             while (!e.empty() && e.back() == ' ') e.pop_back();
             while (!e.empty() && e.front() == ' ') e.erase(0, 1);
-            gp.rowStart = parseGridLine(s);
-            gp.rowEnd = parseGridLine(e);
+            gp.rowStart = resolveRow(s);
+            gp.rowEnd = resolveRow(e);
         } else {
-            gp.rowStart = parseGridLine(gridRow);
+            gp.rowStart = resolveRow(gridRow);
         }
     }
 
@@ -365,10 +514,10 @@ GridPlacement parseGridPlacement(const css::ComputedStyle& style,
             while (!s.empty() && s.front() == ' ') s.erase(0, 1);
             while (!e.empty() && e.back() == ' ') e.pop_back();
             while (!e.empty() && e.front() == ' ') e.erase(0, 1);
-            gp.colStart = parseGridLine(s);
-            gp.colEnd = parseGridLine(e);
+            gp.colStart = resolveCol(s);
+            gp.colEnd = resolveCol(e);
         } else {
-            gp.colStart = parseGridLine(gridCol);
+            gp.colStart = resolveCol(gridCol);
         }
     }
 
@@ -421,9 +570,25 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float colGap = resolveLength(styleVal(style, "column-gap"), containerWidth, fontSize);
     // gap shorthand handling (already expanded by properties.cpp)
 
-    // Parse grid template
-    auto colTracks = parseTrackList(styleVal(style, "grid-template-columns"), containerWidth, fontSize);
-    auto rowTracks = parseTrackList(styleVal(style, "grid-template-rows"), containerWidth, fontSize);
+    // Parse grid template (with named lines and auto-fill/auto-fit support)
+    auto colParsed = parseTrackListWithNames(styleVal(style, "grid-template-columns"), containerWidth, fontSize);
+    auto rowParsed = parseTrackListWithNames(styleVal(style, "grid-template-rows"), containerWidth, fontSize);
+    auto colTracks = std::move(colParsed.tracks);
+    auto rowTracks = std::move(rowParsed.tracks);
+    auto colLineNames = std::move(colParsed.lineNames);
+    auto rowLineNames = std::move(rowParsed.lineNames);
+    bool hasAutoFitCols = colParsed.hasAutoFit;
+    bool hasAutoFitRows = rowParsed.hasAutoFit;
+
+    // Parse implicit track sizing (default to Auto if not specified)
+    const std::string& autoColVal = styleVal(style, "grid-auto-columns");
+    const std::string& autoRowVal = styleVal(style, "grid-auto-rows");
+    TrackSize autoColTrack = (autoColVal.empty() || autoColVal == "auto")
+        ? TrackSize{TrackSize::Auto, 0, 0, -1, false}
+        : parseTrackSize(autoColVal, containerWidth, fontSize);
+    TrackSize autoRowTrack = (autoRowVal.empty() || autoRowVal == "auto")
+        ? TrackSize{TrackSize::Auto, 0, 0, -1, false}
+        : parseTrackSize(autoRowVal, containerWidth, fontSize);
 
     // Parse named grid areas
     auto namedAreas = parseGridTemplateAreas(styleVal(style, "grid-template-areas"));
@@ -436,10 +601,10 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             areaMaxRow = std::max(areaMaxRow, static_cast<size_t>(area.rowEnd - 1));
         }
         while (colTracks.size() < areaMaxCol) {
-            colTracks.push_back(TrackSize{TrackSize::Auto, 0, 0, -1, false});
+            colTracks.push_back(autoColTrack);
         }
         while (rowTracks.size() < areaMaxRow) {
-            rowTracks.push_back(TrackSize{TrackSize::Auto, 0, 0, -1, false});
+            rowTracks.push_back(autoRowTrack);
         }
     }
 
@@ -463,7 +628,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (childPos == "absolute" || childPos == "fixed") continue;
         GridItem item;
         item.node = child;
-        item.placement = parseGridPlacement(cs, namedAreas);
+        item.placement = parseGridPlacement(cs, namedAreas, colLineNames, rowLineNames);
         item.row = -1; item.col = -1;
         item.rowSpan = 1; item.colSpan = 1;
         items.push_back(item);
@@ -604,12 +769,12 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         numRows = std::max(numRows, static_cast<size_t>(item.row + item.rowSpan));
     }
 
-    // Ensure we have enough track definitions
+    // Ensure we have enough track definitions — use grid-auto-columns/rows for implicit tracks
     while (colTracks.size() < numCols) {
-        colTracks.push_back(TrackSize{TrackSize::Auto, 0, 0, -1, false});
+        colTracks.push_back(autoColTrack);
     }
     while (rowTracks.size() < numRows) {
-        rowTracks.push_back(TrackSize{TrackSize::Auto, 0, 0, -1, false});
+        rowTracks.push_back(autoRowTrack);
     }
 
     // Layout items to determine content sizes for auto tracks
@@ -633,6 +798,32 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Resolve track sizes
     auto colSizes = resolveTrackSizes(colTracks, containerWidth, colGap, colContentSizes);
     auto rowSizes = resolveTrackSizes(rowTracks, 0 /* no explicit height reference */, rowGap, rowContentSizes);
+
+    // auto-fit: collapse empty tracks to 0
+    if (hasAutoFitCols) {
+        for (size_t c = 0; c < numCols; c++) {
+            bool hasItem = false;
+            for (auto& item : items) {
+                if (item.col <= static_cast<int>(c) && static_cast<int>(c) < item.col + item.colSpan) {
+                    hasItem = true;
+                    break;
+                }
+            }
+            if (!hasItem) colSizes[c] = 0;
+        }
+    }
+    if (hasAutoFitRows) {
+        for (size_t r = 0; r < numRows; r++) {
+            bool hasItem = false;
+            for (auto& item : items) {
+                if (item.row <= static_cast<int>(r) && static_cast<int>(r) < item.row + item.rowSpan) {
+                    hasItem = true;
+                    break;
+                }
+            }
+            if (!hasItem) rowSizes[r] = 0;
+        }
+    }
 
     // Re-layout items with resolved column widths
     for (auto& item : items) {

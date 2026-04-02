@@ -2,6 +2,7 @@
 #include "css/properties.h"
 #include <algorithm>
 #include <sstream>
+#include <unordered_set>
 
 namespace htmlayout::css {
 
@@ -15,12 +16,12 @@ bool isCustomProperty(const std::string& name) {
 // Resolve var() references in a value string, using the current style and parent.
 // Supports var(--name) and var(--name, fallback).
 // Resolves nested var() in fallbacks.
+// Uses a visited set to detect cycles per CSS Variables L1 spec —
+// a cyclic reference produces the guaranteed-invalid value (empty string).
 std::string resolveVarReferences(const std::string& value,
                                   const ComputedStyle& style,
                                   const ComputedStyle* parentStyle,
-                                  int depth = 0) {
-    if (depth > 10) return value; // prevent infinite recursion
-
+                                  std::unordered_set<std::string>& visiting) {
     std::string result;
     size_t i = 0;
     while (i < value.size()) {
@@ -63,6 +64,17 @@ std::string resolveVarReferences(const std::string& value,
             }
             while (!varName.empty() && varName.front() == ' ') varName.erase(varName.begin());
 
+            // Cycle detection: if we're already resolving this variable, it's a cycle
+            if (visiting.count(varName)) {
+                // Guaranteed-invalid value per CSS Variables L1 spec
+                // Try fallback if available, otherwise empty
+                if (!fallback.empty()) {
+                    result += resolveVarReferences(fallback, style, parentStyle, visiting);
+                }
+                // else: empty string (guaranteed-invalid)
+                continue;
+            }
+
             // Look up the variable
             std::string resolved;
             auto it = style.find(varName);
@@ -79,13 +91,23 @@ std::string resolveVarReferences(const std::string& value,
                 resolved = fallback;
             }
 
-            // Recursively resolve any var() in the resolved value
-            result += resolveVarReferences(resolved, style, parentStyle, depth + 1);
+            // Recursively resolve any var() in the resolved value, tracking this variable
+            visiting.insert(varName);
+            result += resolveVarReferences(resolved, style, parentStyle, visiting);
+            visiting.erase(varName);
         } else {
             result += value[i++];
         }
     }
     return result;
+}
+
+// Convenience overload that creates a fresh visited set
+std::string resolveVarReferences(const std::string& value,
+                                  const ComputedStyle& style,
+                                  const ComputedStyle* parentStyle) {
+    std::unordered_set<std::string> visiting;
+    return resolveVarReferences(value, style, parentStyle, visiting);
 }
 
 } // anonymous namespace

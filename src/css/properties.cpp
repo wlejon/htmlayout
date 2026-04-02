@@ -41,6 +41,8 @@ const std::vector<PropertyDef>& knownProperties() {
         {"border-bottom-color","currentcolor",false},
         {"border-left-color", "currentcolor", false},
         {"overflow",          "visible",false},
+        {"overflow-x",        "visible",false},
+        {"overflow-y",        "visible",false},
         {"box-sizing",        "content-box", false},
 
         // Flexbox
@@ -197,10 +199,45 @@ const std::vector<PropertyDef>& knownProperties() {
         {"user-select",       "auto",       false},
         {"will-change",       "auto",       false},
         {"contain",           "none",       false},
+        {"content-visibility", "visible",   false},
 
         // Container queries
         {"container-type",    "normal",     false},
         {"container-name",    "none",       false},
+
+        // CSS Logical Properties L1 — these are resolved to physical properties
+        // during shorthand expansion based on writing-mode/direction.
+        // Registered here so they are recognized as valid properties.
+        {"inline-size",       "auto",       false},
+        {"block-size",        "auto",       false},
+        {"min-inline-size",   "0",          false},
+        {"min-block-size",    "0",          false},
+        {"max-inline-size",   "none",       false},
+        {"max-block-size",    "none",       false},
+        {"margin-inline-start",  "0",       false},
+        {"margin-inline-end",    "0",       false},
+        {"margin-block-start",   "0",       false},
+        {"margin-block-end",     "0",       false},
+        {"padding-inline-start", "0",       false},
+        {"padding-inline-end",   "0",       false},
+        {"padding-block-start",  "0",       false},
+        {"padding-block-end",    "0",       false},
+        {"border-inline-start-width", "medium", false},
+        {"border-inline-end-width",   "medium", false},
+        {"border-block-start-width",  "medium", false},
+        {"border-block-end-width",    "medium", false},
+        {"border-inline-start-style", "none",   false},
+        {"border-inline-end-style",   "none",   false},
+        {"border-block-start-style",  "none",   false},
+        {"border-block-end-style",    "none",   false},
+        {"border-inline-start-color", "currentcolor", false},
+        {"border-inline-end-color",   "currentcolor", false},
+        {"border-block-start-color",  "currentcolor", false},
+        {"border-block-end-color",    "currentcolor", false},
+        {"inset-inline-start", "auto",      false},
+        {"inset-inline-end",   "auto",      false},
+        {"inset-block-start",  "auto",      false},
+        {"inset-block-end",    "auto",      false},
     };
     return props;
 }
@@ -584,7 +621,10 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
     }
 
     if (property == "overflow") {
-        return {{property, parts[0]}};
+        // overflow shorthand: 1 value = both axes; 2 values = x y
+        std::string x = parts[0];
+        std::string y = parts.size() > 1 ? parts[1] : parts[0];
+        return {{"overflow", x}, {"overflow-x", x}, {"overflow-y", y}};
     }
 
     // border-radius shorthand: 1-4 values -> individual corners
@@ -731,6 +771,135 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
             out.push_back({"container-name", "none"});
         }
         return out;
+    }
+
+    // CSS Logical Properties L1 — map to physical properties.
+    // For horizontal-tb writing mode (the only one fully supported):
+    //   inline axis = horizontal (start=left, end=right for ltr)
+    //   block axis = vertical (start=top, end=bottom)
+
+    // Logical sizing properties
+    if (property == "inline-size") return {{"width", value}};
+    if (property == "block-size") return {{"height", value}};
+    if (property == "min-inline-size") return {{"min-width", value}};
+    if (property == "min-block-size") return {{"min-height", value}};
+    if (property == "max-inline-size") return {{"max-width", value}};
+    if (property == "max-block-size") return {{"max-height", value}};
+
+    // Logical margin longhands
+    if (property == "margin-inline-start") return {{"margin-left", value}};
+    if (property == "margin-inline-end") return {{"margin-right", value}};
+    if (property == "margin-block-start") return {{"margin-top", value}};
+    if (property == "margin-block-end") return {{"margin-bottom", value}};
+
+    // Logical margin shorthands
+    if (property == "margin-inline") {
+        return {{"margin-left", parts[0]},
+                {"margin-right", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+    if (property == "margin-block") {
+        return {{"margin-top", parts[0]},
+                {"margin-bottom", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+
+    // Logical padding longhands
+    if (property == "padding-inline-start") return {{"padding-left", value}};
+    if (property == "padding-inline-end") return {{"padding-right", value}};
+    if (property == "padding-block-start") return {{"padding-top", value}};
+    if (property == "padding-block-end") return {{"padding-bottom", value}};
+
+    // Logical padding shorthands
+    if (property == "padding-inline") {
+        return {{"padding-left", parts[0]},
+                {"padding-right", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+    if (property == "padding-block") {
+        return {{"padding-top", parts[0]},
+                {"padding-bottom", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+
+    // Logical border longhands
+    if (property == "border-inline-start-width") return {{"border-left-width", value}};
+    if (property == "border-inline-end-width") return {{"border-right-width", value}};
+    if (property == "border-block-start-width") return {{"border-top-width", value}};
+    if (property == "border-block-end-width") return {{"border-bottom-width", value}};
+    if (property == "border-inline-start-style") return {{"border-left-style", value}};
+    if (property == "border-inline-end-style") return {{"border-right-style", value}};
+    if (property == "border-block-start-style") return {{"border-top-style", value}};
+    if (property == "border-block-end-style") return {{"border-bottom-style", value}};
+    if (property == "border-inline-start-color") return {{"border-left-color", value}};
+    if (property == "border-inline-end-color") return {{"border-right-color", value}};
+    if (property == "border-block-start-color") return {{"border-top-color", value}};
+    if (property == "border-block-end-color") return {{"border-bottom-color", value}};
+
+    // Logical border shorthands (border-inline-start, border-block-end, etc.)
+    if (property == "border-inline-start") {
+        auto bc = parseBorderTokens(parts);
+        return {{"border-left-width", bc.width}, {"border-left-style", bc.style}, {"border-left-color", bc.color}};
+    }
+    if (property == "border-inline-end") {
+        auto bc = parseBorderTokens(parts);
+        return {{"border-right-width", bc.width}, {"border-right-style", bc.style}, {"border-right-color", bc.color}};
+    }
+    if (property == "border-block-start") {
+        auto bc = parseBorderTokens(parts);
+        return {{"border-top-width", bc.width}, {"border-top-style", bc.style}, {"border-top-color", bc.color}};
+    }
+    if (property == "border-block-end") {
+        auto bc = parseBorderTokens(parts);
+        return {{"border-bottom-width", bc.width}, {"border-bottom-style", bc.style}, {"border-bottom-color", bc.color}};
+    }
+
+    // border-inline / border-block (apply same to both sides)
+    if (property == "border-inline") {
+        auto bc = parseBorderTokens(parts);
+        return {{"border-left-width", bc.width}, {"border-left-style", bc.style}, {"border-left-color", bc.color},
+                {"border-right-width", bc.width}, {"border-right-style", bc.style}, {"border-right-color", bc.color}};
+    }
+    if (property == "border-block") {
+        auto bc = parseBorderTokens(parts);
+        return {{"border-top-width", bc.width}, {"border-top-style", bc.style}, {"border-top-color", bc.color},
+                {"border-bottom-width", bc.width}, {"border-bottom-style", bc.style}, {"border-bottom-color", bc.color}};
+    }
+
+    // border-inline-width / border-block-width (1 or 2 values)
+    if (property == "border-inline-width") {
+        return {{"border-left-width", parts[0]},
+                {"border-right-width", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+    if (property == "border-block-width") {
+        return {{"border-top-width", parts[0]},
+                {"border-bottom-width", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+    if (property == "border-inline-style") {
+        return {{"border-left-style", parts[0]},
+                {"border-right-style", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+    if (property == "border-block-style") {
+        return {{"border-top-style", parts[0]},
+                {"border-bottom-style", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+    if (property == "border-inline-color") {
+        return {{"border-left-color", parts[0]},
+                {"border-right-color", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+    if (property == "border-block-color") {
+        return {{"border-top-color", parts[0]},
+                {"border-bottom-color", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+
+    // Logical inset longhands
+    if (property == "inset-inline-start") return {{"left", value}};
+    if (property == "inset-inline-end") return {{"right", value}};
+    if (property == "inset-block-start") return {{"top", value}};
+    if (property == "inset-block-end") return {{"bottom", value}};
+
+    // Logical inset shorthands
+    if (property == "inset-inline") {
+        return {{"left", parts[0]}, {"right", parts.size() > 1 ? parts[1] : parts[0]}};
+    }
+    if (property == "inset-block") {
+        return {{"top", parts[0]}, {"bottom", parts.size() > 1 ? parts[1] : parts[0]}};
     }
 
     return {{property, value}};

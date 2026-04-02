@@ -95,7 +95,7 @@ Parses and matches CSS selectors. This is the critical piece for shadow DOM supp
 1. **Simple selectors**: `div`, `.class`, `#id`, `*`, `[attr]`, `[attr=value]`, `[attr^=val]`, `[attr$=val]`, `[attr*=val]`, `[attr~=val]`, `[attr|=val]`
 2. **Compound selectors**: `div.class#id`, `.a.b`
 3. **Combinators**: descendant (` `), child (`>`), adjacent sibling (`+`), general sibling (`~`)
-4. **Pseudo-classes**: `:first-child`, `:last-child`, `:nth-child(n)`, `:not(sel)`, `:is(sel)`, `:where(sel)`, `:has(sel)`, `:hover`, `:focus`, `:active`, `:host`, `:host(sel)`, `:host-context(sel)`, `:defined`
+4. **Pseudo-classes**: `:first-child`, `:last-child`, `:nth-child(n)`, `:nth-last-child(n)`, `:nth-of-type(n)`, `:nth-last-of-type(n)`, `:only-child`, `:first-of-type`, `:last-of-type`, `:only-of-type`, `:root`, `:empty`, `:not(sel)`, `:is(sel)`, `:where(sel)`, `:has(sel)`, `:hover`, `:focus`, `:active`, `:focus-within`, `:focus-visible`, `:any-link`, `:link`, `:visited`, `:checked`, `:disabled`, `:enabled`, `:required`, `:optional`, `:read-only`, `:read-write`, `:placeholder-shown`, `:indeterminate`, `:target`, `:host`, `:host(sel)`, `:host-context(sel)`, `:defined`
 5. **Pseudo-elements**: `::before`, `::after`, `::slotted(sel)`, `::part(name)`
 6. **Comma-separated lists**: `h1, h2, h3`
 
@@ -220,12 +220,16 @@ Implements CSS Flexible Box Layout:
 
 ### Grid Layout (`grid.h`)
 
-Implements CSS Grid:
+Implements CSS Grid (L1 + L2 features):
 1. Parse track lists: handles `repeat()`, `minmax()`, `fr` units.
-2. Resolve track sizes: distributes available space to fractional tracks.
-3. Item placement: 1-based line indices, `grid-area`, and `grid-template-areas`.
-4. Auto-placement: fills available cells following `grid-auto-flow`.
-5. Gap support between tracks.
+2. `repeat(auto-fill, ...)` and `repeat(auto-fit, ...)` for responsive layouts.
+3. Named grid lines: `[name]` syntax with resolution in placement properties.
+4. Resolve track sizes: distributes available space to fractional tracks.
+5. Implicit track sizing via `grid-auto-rows` and `grid-auto-columns`.
+6. Item placement: 1-based line indices, named lines, `grid-area`, and `grid-template-areas`.
+7. Auto-placement: fills available cells following `grid-auto-flow`.
+8. auto-fit empty track collapsing.
+9. Gap support between tracks.
 
 ### Table Layout (`table.h`)
 
@@ -263,6 +267,8 @@ Finds the deepest node whose layout box contains the point (x, y). Respects z-or
 - **Positioning**: `position: sticky` applies a static offset only; scroll-based clamping is not performed (layout-time only).
 - **At-rules**: `@font-face` and `@keyframes` are parsed but discarded (no font loading or animation).
 - **Bidirectional text**: `direction: rtl` affects text alignment but does not reorder inline content. No Unicode bidi algorithm.
+- **Logical properties**: Map to physical properties assuming `writing-mode: horizontal-tb` and `direction: ltr`. Vertical writing modes are not fully supported.
+- **Grid subgrid**: `subgrid` keyword is not implemented.
 
 ---
 

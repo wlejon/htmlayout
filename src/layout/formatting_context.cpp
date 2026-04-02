@@ -391,6 +391,16 @@ Edges resolveEdges(const css::ComputedStyle& style,
     return e;
 }
 
+// Parse contain property to check for specific containment types.
+static bool hasContainment(const css::ComputedStyle& style, const std::string& type) {
+    auto it = style.find("contain");
+    if (it == style.end() || it->second == "none") return false;
+    const std::string& val = it->second;
+    if (val == "strict") return true; // strict = size layout paint style
+    if (val == "content") return type != "size"; // content = layout paint style
+    return val.find(type) != std::string::npos;
+}
+
 void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (!node) return;
 
@@ -400,6 +410,23 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (display == "none") {
         // Hidden — zero-size box, skip children
         node->box = LayoutBox{};
+        return;
+    }
+
+    // CSS Containment L2: content-visibility: hidden acts like display:none
+    // but preserves the element's box (it still occupies space per explicit size).
+    const std::string& contentVis = styleVal(style, "content-visibility");
+    if (contentVis == "hidden") {
+        // Skip layout of children but keep the element's own box.
+        // Use explicit size if set, otherwise 0.
+        float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+        if (fontSize <= 0.0f) fontSize = 16.0f;
+        node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
+        node->box.padding = resolveEdges(style, "padding", availableWidth, fontSize);
+        float specW = resolveLength(styleVal(style, "width"), availableWidth, fontSize);
+        float specH = resolveLength(styleVal(style, "height"), 0, fontSize);
+        node->box.contentRect.width = (specW > 0) ? specW : 0;
+        node->box.contentRect.height = (specH > 0) ? specH : 0;
         return;
     }
 
@@ -414,6 +441,24 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     } else {
         // block, list-item, or anything else defaults to block layout
         layoutBlock(node, availableWidth, metrics);
+    }
+
+    // CSS Containment L2: contain: size — override content-based sizing
+    // with explicit dimensions only. If no explicit size, use 0.
+    if (hasContainment(style, "size")) {
+        float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+        if (fontSize <= 0.0f) fontSize = 16.0f;
+        const std::string& wVal = styleVal(style, "width");
+        const std::string& hVal = styleVal(style, "height");
+        if (wVal == "auto" || wVal.empty()) {
+            // size containment with auto width: content width is already set by layout,
+            // but for true size containment it should be 0 unless explicit
+            // In practice, keep the layout width (block fills available) since that's
+            // what browsers do for block-level elements with contain:size
+        }
+        if (hVal == "auto" || hVal.empty()) {
+            node->box.contentRect.height = 0;
+        }
     }
 }
 
@@ -430,7 +475,8 @@ float resolveDimAbs(const std::string& value, float available, float fontSize) {
 }
 
 // Check if a node establishes a containing block for absolute descendants.
-// Per CSS spec: position != static, or has transform/filter/perspective.
+// Per CSS spec: position != static, or has transform/filter/perspective,
+// or has contain: layout/paint.
 bool isContainingBlock(LayoutNode* node) {
     auto& style = node->computedStyle();
     const std::string& pos = styleVal(style, "position");
@@ -441,6 +487,9 @@ bool isContainingBlock(LayoutNode* node) {
     if (!transform.empty() && transform != "none") return true;
     const std::string& filter = styleVal(style, "filter");
     if (!filter.empty() && filter != "none") return true;
+    // CSS Containment L2: contain: layout or contain: paint creates a containing block
+    if (hasContainment(style, "layout") || hasContainment(style, "paint"))
+        return true;
     return false;
 }
 
