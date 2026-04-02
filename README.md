@@ -47,9 +47,8 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 
 ## Requirements
 
-- MSVC 2022 (C++20)
+- C++20 compiler (MSVC 2022, GCC 11+, or Clang 14+)
 - CMake 3.24+
-- Vcpkg (optional, auto-detected at `D:/vcpkg`)
 
 ## Building
 
@@ -61,7 +60,11 @@ cmake --build build --config Debug
 Run tests:
 
 ```bash
+# Windows
 ./build/tests/Debug/htmlayout_test.exe
+
+# Linux
+./build/tests/htmlayout_test
 ```
 
 ## Usage

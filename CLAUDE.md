@@ -18,11 +18,14 @@ cmake --build build --config Debug
 # Build (release)
 cmake --build build --config Release
 
-# Run tests
+# Run tests (Windows)
 ./build/tests/Debug/htmlayout_test.exe
+
+# Run tests (Linux)
+./build/tests/htmlayout_test
 ```
 
-Uses the Visual Studio generator (multi-config). MSVC 2022, C++20.
+Builds with MSVC 2022 (Windows) and GCC/Clang (Linux). C++20 required.
 
 ## Project Structure
 

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <charconv>
+#include <vector>
 
 namespace htmlayout::css {
 
