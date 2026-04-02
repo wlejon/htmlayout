@@ -376,8 +376,11 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     for (size_t lineIdx = 0; lineIdx < lineBoxes.size(); lineIdx++) {
         auto& line = lineBoxes[lineIdx];
         bool isLastLine = (lineIdx == lineBoxes.size() - 1);
-        float xOffset = alignLine(line, contentAvail, resolvedAlign, isLastLine);
-        float gap = (resolvedAlign == "justify") ? justifyGap(line, contentAvail, isLastLine) : 0;
+        // text-align only applies to block containers, not inline elements.
+        // When layoutInline is called recursively for a <span> (display:inline),
+        // skip alignment — the parent block handles positioning.
+        float xOffset = (display != "inline") ? alignLine(line, contentAvail, resolvedAlign, isLastLine) : 0;
+        float gap = (display != "inline" && resolvedAlign == "justify") ? justifyGap(line, contentAvail, isLastLine) : 0;
         float cursorX = xOffset;
         if (lineIdx == 0) cursorX += textIndent;
 
