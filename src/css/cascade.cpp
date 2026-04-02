@@ -325,7 +325,14 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             // :host rules are scoped to a shadow root. They match the host element
             // whose shadowRoot() equals the rule's scope.
             if (rule.scope == nullptr) continue;  // :host must be in a shadow stylesheet
-            if (elem.shadowRoot() != rule.scope) continue;
+            // Simple :host (no descendants): elem IS the host
+            // :host with descendants (e.g. :host([attr]) .child): elem is inside the shadow tree
+            bool hasDescendant = rule.selector.chain.entries.size() > 1;
+            if (hasDescendant) {
+                if (elem.scope() != rule.scope) continue;
+            } else {
+                if (elem.shadowRoot() != rule.scope) continue;
+            }
         } else if (isSlottedSelector) {
             // ::slotted rules are in the shadow scope. They match light DOM children
             // that are distributed into a slot inside that shadow tree.

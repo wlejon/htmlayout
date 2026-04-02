@@ -98,7 +98,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     bool isWrap = (flexWrap == "wrap" || flexWrap == "wrap-reverse");
 
     float mainAvailable = isRow ? containerMain : resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
-    if (mainAvailable < 0) mainAvailable = containerMain; // fallback for column with auto height
+    bool columnAutoHeight = (!isRow && mainAvailable < 0);
+    if (mainAvailable < 0) mainAvailable = containerMain; // initial fallback for column with auto height
 
     float gapMain = resolveLength(styleVal(style, isRow ? "column-gap" : "row-gap"), mainAvailable, fontSize);
     float gapCross = resolveLength(styleVal(style, isRow ? "row-gap" : "column-gap"), mainAvailable, fontSize);
@@ -265,6 +266,18 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             currentLine.mainSize = lineMain;
         }
         if (!currentLine.items.empty()) lines.push_back(std::move(currentLine));
+    }
+
+    // For column flex with auto height, ensure mainAvailable is at least the total
+    // hypothetical size so items are never shrunk (the container grows to fit).
+    if (columnAutoHeight) {
+        float totalNeeded = 0;
+        float totalGapsAll = (items.size() > 1) ? gapMain * (items.size() - 1) : 0;
+        for (auto& item : items) {
+            totalNeeded += item.hypotheticalMain + itemMarginMain(item);
+        }
+        totalNeeded += totalGapsAll;
+        if (totalNeeded > mainAvailable) mainAvailable = totalNeeded;
     }
 
     // Resolve flexible lengths per line
