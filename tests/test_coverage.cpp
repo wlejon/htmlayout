@@ -1069,7 +1069,7 @@ static void testInlineVerticalAlignTop() {
 
 static void testInlineTextAlignStartEnd() {
     printf("--- Inline: text-align start/end with direction ---\n");
-    CovNode root; root.initInline();
+    CovNode root; root.initBlock();
     root.style_["text-align"] = "start";
     root.style_["direction"] = "rtl";
 

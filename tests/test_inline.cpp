@@ -211,26 +211,20 @@ static void testInlineBlockChild() {
 static void testInlineTextAlignCenter() {
     printf("--- Inline: text-align center ---\n");
     InlineMockNode root;
-    initBlock(root); // block parent with text-align
+    initBlock(root); // block container — text-align applies here
     root.style["text-align"] = "center";
-
-    InlineMockNode wrapper;
-    initInline(wrapper);
-    wrapper.style["text-align"] = "center";
 
     InlineMockNode textNode;
     textNode.isText = true;
     textNode.text = "hi";  // 20px wide
-    wrapper.addChild(&textNode);
+    root.addChild(&textNode);
 
     InlineMockNode inlineBlock;
     initInline(inlineBlock);
     inlineBlock.style["display"] = "inline-block";
     inlineBlock.style["width"] = "20px";
     inlineBlock.style["height"] = "20px";
-    wrapper.addChild(&inlineBlock);
-
-    root.addChild(&wrapper);
+    root.addChild(&inlineBlock);
 
     FixedTextMetrics metrics;
     layoutTree(&root, 200, metrics);
@@ -244,7 +238,7 @@ static void testInlineTextAlignCenter() {
 static void testInlineTextAlignRight() {
     printf("--- Inline: text-align right ---\n");
     InlineMockNode root;
-    initInline(root);
+    initBlock(root); // block container — text-align applies here
     root.style["text-align"] = "right";
 
     InlineMockNode inlineBlock;
@@ -323,8 +317,7 @@ static void testInlineTextAlignJustify() {
     // Use 350px container with 100px items: 3 fit on line 1 (300px), 1 wraps.
     // Extra space on line 1 = 350 - 300 = 50px, distributed across 2 gaps = 25px each.
     InlineMockNode root;
-    initInline(root, "div");
-    root.style["display"] = "inline";
+    initBlock(root, "div"); // block container — text-align applies here
     root.style["text-align"] = "justify";
 
     InlineMockNode ib1, ib2, ib3, ib4;

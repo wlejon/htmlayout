@@ -248,11 +248,18 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // Position items per line with text-align offset
         for (size_t lineIdx = 0; lineIdx < lines.size(); lineIdx++) {
             auto& line = lines[lineIdx];
+            bool isLastLine = (lineIdx == lines.size() - 1);
             float extraSpace = childAvailable - line.totalWidth;
             float xOffset = 0;
+            float gap = 0;
             if (extraSpace > 0) {
                 if (resolvedAlign == "center") xOffset = extraSpace / 2.0f;
                 else if (resolvedAlign == "right" || resolvedAlign == "end") xOffset = extraSpace;
+                else if (resolvedAlign == "justify" && !isLastLine) {
+                    size_t itemCount = line.end - line.start;
+                    if (itemCount > 1)
+                        gap = extraSpace / static_cast<float>(itemCount - 1);
+                }
             }
             float cursorX = xOffset;
             if (lineIdx == 0) cursorX += textIndent;
@@ -276,7 +283,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         }
                     }
                 }
-                cursorX += item.width;
+                cursorX += item.width + gap;
             }
             cursorY += line.maxHeight;
         }
