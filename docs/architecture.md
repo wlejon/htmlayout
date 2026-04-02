@@ -33,6 +33,7 @@ src/
     selector.h/cpp     — CSS selector parser + matcher
     cascade.h/cpp      — Style cascade with scope support (shadow DOM)
     properties.h/cpp   — CSS property registry (defaults, inheritance, shorthands)
+    color.h/cpp        — Color parsing (named, hex, rgb, hsl)
     ua_stylesheet.h/cpp — Built-in default styles
   layout/
     box.h/cpp          — Core types (Rect, Edges, LayoutBox) + tree entry point
@@ -42,6 +43,7 @@ src/
     grid.h/cpp         — CSS Grid layout
     table.h/cpp        — Table layout
     text.h/cpp         — Text measurement and line breaking
+    multicol.h/cpp     — Multi-column container detection
     formatting_context.h/cpp — Dispatch + length resolution + calc()
 third_party/
   gumbo/               — HTML5 parser (C library)
@@ -76,7 +78,7 @@ Consumes tokens and produces structured CSS data:
 - `Rule` — a selector string + a list of `Declaration`s.
 - `Declaration` — a property name + value string + important flag.
 
-Supports `@media`, `@supports`, `@layer`, and `@container` rules.
+Supports `@media`, `@supports`, `@layer`, `@container`, and `@import` rules.
 
 Reference: https://www.w3.org/TR/css-syntax-3/#parsing
 
@@ -93,7 +95,7 @@ Parses and matches CSS selectors. This is the critical piece for shadow DOM supp
 1. **Simple selectors**: `div`, `.class`, `#id`, `*`, `[attr]`, `[attr=value]`, `[attr^=val]`, `[attr$=val]`, `[attr*=val]`, `[attr~=val]`, `[attr|=val]`
 2. **Compound selectors**: `div.class#id`, `.a.b`
 3. **Combinators**: descendant (` `), child (`>`), adjacent sibling (`+`), general sibling (`~`)
-4. **Pseudo-classes**: `:first-child`, `:last-child`, `:nth-child(n)`, `:not(sel)`, `:is(sel)`, `:where(sel)`, `:hover`, `:focus`, `:active`, `:host`, `:host(sel)`, `:host-context(sel)`, `:defined`
+4. **Pseudo-classes**: `:first-child`, `:last-child`, `:nth-child(n)`, `:not(sel)`, `:is(sel)`, `:where(sel)`, `:has(sel)`, `:hover`, `:focus`, `:active`, `:host`, `:host(sel)`, `:host-context(sel)`, `:defined`
 5. **Pseudo-elements**: `::before`, `::after`, `::slotted(sel)`, `::part(name)`
 6. **Comma-separated lists**: `h1, h2, h3`
 
@@ -107,9 +109,10 @@ Reference: https://www.w3.org/TR/selectors-4/
 
 Resolves the final computed style for each element. This is the "C" in CSS.
 
-**`Cascade::addStylesheet(sheet, scope, mediaContext)`** — Adds rules to the cascade.
+**`Cascade::addStylesheet(sheet, scope, mediaContext, origin)`** — Adds rules to the cascade.
 - `scope`: `nullptr` for document-level styles, or a shadow root pointer for shadow-scoped styles.
 - `mediaContext`: Optional viewport dimensions to filter `@media` rules at addition time.
+- `origin`: `Origin::Author` (default) or `Origin::UserAgent` — used by the `revert` keyword.
 
 **`Cascade::resolve(elem, inlineStyle, parentStyle)`** — Computes the final style for an element:
 
@@ -187,7 +190,7 @@ Implements Block Formatting Context (BFC):
 4. Floats: `float: left/right` items are pulled out of flow; subsequent content wraps around them.
 5. `clear: left/right/both` moves content past preceding floats.
 6. Intrinsic sizing: `min-content`, `max-content`, `fit-content` width resolution.
-7. Multi-column: Basic redistribution into columns if `column-count` or `column-width` is set.
+7. Multi-column: `column-count`, `column-width`, `column-gap`, `column-span: all`, `break-before`/`break-after` column breaks.
 
 ### Inline Layout (`inline.h`)
 
@@ -220,16 +223,19 @@ Implements CSS Flexible Box Layout:
 Implements CSS Grid:
 1. Parse track lists: handles `repeat()`, `minmax()`, `fr` units.
 2. Resolve track sizes: distributes available space to fractional tracks.
-3. Item placement: 1-based line indices and `grid-area`.
-4. Auto-placement: basic algorithm to fill available cells.
+3. Item placement: 1-based line indices, `grid-area`, and `grid-template-areas`.
+4. Auto-placement: fills available cells following `grid-auto-flow`.
+5. Gap support between tracks.
 
 ### Table Layout (`table.h`)
 
-Implements a simplified Table layout:
+Implements Table layout:
 1. Collect rows, cells, and captions.
 2. Generate anonymous rows/cells for missing table structure.
-3. Distribute column widths proportionally based on content.
-4. Align cells in rows and stretch heights to match.
+3. Handle `rowspan` and `colspan` spanning.
+4. Distribute column widths proportionally based on content.
+5. Align cells in rows and stretch heights to match.
+6. Support `border-spacing`, `border-collapse`, `caption-side`, and `vertical-align`.
 
 ### Text Layout (`text.h`)
 
@@ -252,15 +258,11 @@ Finds the deepest node whose layout box contains the point (x, y). Respects z-or
 
 ---
 
-## Missing & Incomplete Features
+## Known Limitations
 
-- **Flexbox**: `align-content` is parsed but not currently used for distributing flex lines.
-- **CSS Range Queries**: range syntax like `@media (width > 500px)` is not supported.
-- **Query Logic**: Only `and` and `not` are supported in queries; `or` is missing.
-- **Table Details**: No support for `rowspan` or `colspan`; simplified width distribution.
-- **Grid Areas**: `grid-template-areas` names are parsed but not used for placement.
-- **Multi-column**: Basic redistribution; no column-span or advanced break controls.
-- **Revert**: `revert` keyword is currently treated as `unset`.
+- **Positioning**: `position: sticky` applies a static offset only; scroll-based clamping is not performed (layout-time only).
+- **At-rules**: `@font-face` and `@keyframes` are parsed but discarded (no font loading or animation).
+- **Bidirectional text**: `direction: rtl` affects text alignment but does not reorder inline content. No Unicode bidi algorithm.
 
 ---
 

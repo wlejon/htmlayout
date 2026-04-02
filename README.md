@@ -16,6 +16,8 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - Shorthand expansion for ~150 properties (`margin`, `padding`, `border`, `flex`, `grid`, `font`, `container`, etc.)
 - Color parsing (named, hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`)
 - `@media` query evaluation (`min/max-width`, `min/max-height`, `orientation`, range syntax, logical `or`)
+- `@supports` feature queries
+- `@import` resolution with consumer-provided callback (with media/layer qualifiers)
 - CSS Variables (`var()`) with fallback and inheritance
 - Built-in user-agent stylesheet
 - Shadow DOM and web component support: `:host`, `:host()`, `:host-context()`, `::slotted()`, `::part()`, scoped stylesheets
@@ -40,7 +42,7 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 ## Current Limitations
 
 - **Positioning**: `position: sticky` applies a static offset only; scroll-based clamping is not performed (layout-time only).
-- **At-rules**: `@font-face`, `@keyframes`, and `@import` are parsed but discarded (no font loading, animation, or import resolution).
+- **At-rules**: `@font-face` and `@keyframes` are parsed but discarded (no font loading or animation).
 - **Bidirectional text**: `direction: rtl` affects text alignment but does not reorder inline content. No Unicode bidi algorithm.
 
 ## Requirements
