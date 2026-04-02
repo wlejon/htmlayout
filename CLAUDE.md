@@ -22,7 +22,7 @@ cmake --build build --config Release
 ./build/tests/Debug/htmlayout_test.exe
 ```
 
-Uses the Visual Studio generator (multi-config). Vcpkg at D:/vcpkg is auto-detected. MSVC 2022, C++20. Do not use MinGW.
+Uses the Visual Studio generator (multi-config). MSVC 2022, C++20.
 
 ## Project Structure
 

@@ -1,11 +1,4 @@
 cmake_minimum_required(VERSION 3.24)
-
-# Auto-detect vcpkg
-if(NOT DEFINED CMAKE_TOOLCHAIN_FILE AND EXISTS "D:/vcpkg/scripts/buildsystems/vcpkg.cmake")
-    set(CMAKE_TOOLCHAIN_FILE "D:/vcpkg/scripts/buildsystems/vcpkg.cmake"
-        CACHE STRING "Vcpkg toolchain file")
-endif()
-
 project(htmlayout LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
