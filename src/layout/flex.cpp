@@ -599,6 +599,16 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         node->box.contentRect.height = crossCursor > 0 ? crossCursor - crossGapAdjusted : 0;
     }
 
+    // Store natural height before clamping (for scroll extent calculation)
+    float naturalCross = crossCursor > 0 ? crossCursor - crossGapAdjusted : 0;
+    node->box.naturalHeight = std::max(naturalCross, node->box.contentRect.height);
+
+    // Apply min/max-height constraints (same as block layout)
+    float minH = resolveDim(styleVal(style, "min-height"), node->availableHeight, fontSize);
+    float maxH = resolveDim(styleVal(style, "max-height"), node->availableHeight, fontSize);
+    if (minH >= 0.0f && node->box.contentRect.height < minH) node->box.contentRect.height = minH;
+    if (maxH >= 0.0f && node->box.contentRect.height > maxH) node->box.contentRect.height = maxH;
+
 }
 
 } // namespace htmlayout::layout

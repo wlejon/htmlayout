@@ -24,6 +24,10 @@ struct LayoutBox {
     Edges padding;
     Edges border;
 
+    // Natural content height before min/max-height clamping (for scroll extent).
+    // For overflow:auto/scroll elements, scrollHeight = naturalHeight.
+    float naturalHeight = 0;
+
     // Whether text content was truncated by overflow (for text-overflow: ellipsis)
     bool textTruncated = false;
 

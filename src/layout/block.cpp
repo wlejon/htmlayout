@@ -599,6 +599,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         node->box.contentRect.height = cursorY;
     }
 
+    // Store natural height before clamping (for scroll extent calculation)
+    node->box.naturalHeight = std::max(cursorY, node->box.contentRect.height);
+
     // Apply min/max-height constraints
     float minH = resolveDimension(styleVal(style, "min-height"), heightRef, fontSize);
     float maxH = resolveDimension(styleVal(style, "max-height"), heightRef, fontSize);
