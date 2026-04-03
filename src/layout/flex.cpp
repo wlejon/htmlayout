@@ -447,22 +447,64 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float freeMain = mainAvailable - totalMain - totalMainMargins - totalGaps;
         if (freeMain < 0) freeMain = 0;
 
+        // Auto margins on main axis: count how many auto margins exist on the main axis.
+        // If any exist, they absorb all free space (overriding justify-content).
+        int autoMainMargins = 0;
+        for (auto* item : line.items) {
+            if (item->node->isTextNode()) continue;
+            auto& cs = item->node->computedStyle();
+            if (isRow) {
+                if (styleVal(cs, "margin-left") == "auto") autoMainMargins++;
+                if (styleVal(cs, "margin-right") == "auto") autoMainMargins++;
+            } else {
+                if (styleVal(cs, "margin-top") == "auto") autoMainMargins++;
+                if (styleVal(cs, "margin-bottom") == "auto") autoMainMargins++;
+            }
+        }
+
+        // Distribute free space to auto margins (resolve them from 0 to computed value)
+        if (autoMainMargins > 0 && freeMain > 0) {
+            float perAutoMargin = freeMain / autoMainMargins;
+            for (auto* item : line.items) {
+                if (item->node->isTextNode()) continue;
+                auto& cs = item->node->computedStyle();
+                if (isRow) {
+                    if (styleVal(cs, "margin-left") == "auto")
+                        item->node->box.margin.left = perAutoMargin;
+                    if (styleVal(cs, "margin-right") == "auto")
+                        item->node->box.margin.right = perAutoMargin;
+                } else {
+                    if (styleVal(cs, "margin-top") == "auto")
+                        item->node->box.margin.top = perAutoMargin;
+                    if (styleVal(cs, "margin-bottom") == "auto")
+                        item->node->box.margin.bottom = perAutoMargin;
+                }
+            }
+            // Recalculate totalMainMargins with resolved auto margins
+            totalMainMargins = 0;
+            for (auto* item : line.items) totalMainMargins += itemMarginMain(*item);
+            freeMain = 0; // all free space consumed by auto margins
+        }
+
         float mainCursor = 0;
         float gap = gapMain;
-        if (justifyContent == "center") {
-            mainCursor = freeMain / 2.0f;
-        } else if (justifyContent == "flex-end") {
-            mainCursor = freeMain;
-        } else if (justifyContent == "space-between" && line.items.size() > 1) {
-            gap = gapMain + freeMain / (line.items.size() - 1);
-        } else if (justifyContent == "space-around" && !line.items.empty()) {
-            float itemGap = freeMain / line.items.size();
-            mainCursor = itemGap / 2.0f;
-            gap = gapMain + itemGap;
-        } else if (justifyContent == "space-evenly" && !line.items.empty()) {
-            float itemGap = freeMain / (line.items.size() + 1);
-            mainCursor = itemGap;
-            gap = gapMain + itemGap;
+        if (autoMainMargins == 0) {
+            // Only apply justify-content when there are no auto margins
+            if (justifyContent == "center") {
+                mainCursor = freeMain / 2.0f;
+            } else if (justifyContent == "flex-end") {
+                mainCursor = freeMain;
+            } else if (justifyContent == "space-between" && line.items.size() > 1) {
+                gap = gapMain + freeMain / (line.items.size() - 1);
+            } else if (justifyContent == "space-around" && !line.items.empty()) {
+                float itemGap = freeMain / line.items.size();
+                mainCursor = itemGap / 2.0f;
+                gap = gapMain + itemGap;
+            } else if (justifyContent == "space-evenly" && !line.items.empty()) {
+                float itemGap = freeMain / (line.items.size() + 1);
+                mainCursor = itemGap;
+                gap = gapMain + itemGap;
+            }
         }
         // else flex-start: mainCursor = 0
 
@@ -475,12 +517,65 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             auto* item = line.items[i];
             auto& cs = item->node->computedStyle();
 
+            // Cross-axis auto margins: if auto margins exist on the cross axis,
+            // they absorb free space (overriding align-items/align-self).
+            bool hasCrossAutoMargin = false;
+            if (!item->node->isTextNode()) {
+                if (isRow) {
+                    hasCrossAutoMargin = (styleVal(cs, "margin-top") == "auto" ||
+                                          styleVal(cs, "margin-bottom") == "auto");
+                } else {
+                    hasCrossAutoMargin = (styleVal(cs, "margin-left") == "auto" ||
+                                          styleVal(cs, "margin-right") == "auto");
+                }
+            }
+
             // Cross-axis alignment
             const std::string& selfAlign = styleVal(cs, "align-self");
             const std::string& align = (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign;
 
             float crossPos = crossCursor;
-            if (align == "baseline" && isRow) {
+            if (hasCrossAutoMargin) {
+                // Cross-axis auto margins absorb free space (override align-items/align-self)
+                float freeCross = line.crossSize - item->crossSize;
+                if (freeCross < 0) freeCross = 0;
+                if (isRow) {
+                    bool topAuto = (styleVal(cs, "margin-top") == "auto");
+                    bool bottomAuto = (styleVal(cs, "margin-bottom") == "auto");
+                    if (topAuto && bottomAuto) {
+                        item->node->box.margin.top = freeCross / 2.0f;
+                        item->node->box.margin.bottom = freeCross / 2.0f;
+                    } else if (topAuto) {
+                        item->node->box.margin.top = freeCross;
+                    } else {
+                        item->node->box.margin.bottom = freeCross;
+                    }
+                } else {
+                    bool leftAuto = (styleVal(cs, "margin-left") == "auto");
+                    bool rightAuto = (styleVal(cs, "margin-right") == "auto");
+                    if (leftAuto && rightAuto) {
+                        item->node->box.margin.left = freeCross / 2.0f;
+                        item->node->box.margin.right = freeCross / 2.0f;
+                    } else if (leftAuto) {
+                        item->node->box.margin.left = freeCross;
+                    } else {
+                        item->node->box.margin.right = freeCross;
+                    }
+                }
+                // Recalculate crossSize with resolved margins
+                if (isRow) {
+                    item->crossSize = item->node->box.contentRect.height +
+                        item->node->box.padding.top + item->node->box.padding.bottom +
+                        item->node->box.border.top + item->node->box.border.bottom +
+                        item->node->box.margin.top + item->node->box.margin.bottom;
+                } else {
+                    item->crossSize = item->node->box.contentRect.width +
+                        item->node->box.padding.left + item->node->box.padding.right +
+                        item->node->box.border.left + item->node->box.border.right +
+                        item->node->box.margin.left + item->node->box.margin.right;
+                }
+                crossPos = crossCursor;
+            } else if (align == "baseline" && isRow) {
                 // Baseline alignment: compute item baseline as distance from
                 // outer top edge to the first text baseline (font-size from content top)
                 float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);

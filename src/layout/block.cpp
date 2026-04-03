@@ -291,6 +291,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Block formatting context: layout children vertically
     float prevMarginBottom = 0.0f;
     bool firstChild = true;
+    float firstBlockChildMarginTop = 0.0f;
+    bool hadFirstBlockChild = false;
 
     // Float tracking: left and right float edges
     struct FloatRect {
@@ -525,6 +527,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float collapsedMargin;
         if (firstChild) {
             collapsedMargin = childMarginTop;
+            firstBlockChildMarginTop = childMarginTop;
+            hadFirstBlockChild = true;
             firstChild = false;
         } else {
             collapsedMargin = std::max(prevMarginBottom, childMarginTop);
@@ -579,6 +583,61 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto& f : floats) {
         cursorY = std::max(cursorY, f.y + f.height);
     }
+
+    // Parent-child margin collapsing (CSS 2.1 §8.3.1):
+    // A parent's top/bottom margin collapses with its first/last in-flow block child's
+    // margin if:
+    //   - No top/bottom padding or border separating them
+    //   - The parent doesn't establish a new BFC
+    //   - For bottom: parent has auto height
+    bool establishesBFC = false;
+    {
+        // Root element always establishes the initial BFC
+        if (!node->parent()) establishesBFC = true;
+        const std::string& ov = styleVal(style, "overflow");
+        const std::string& ovx = styleVal(style, "overflow-x");
+        const std::string& ovy = styleVal(style, "overflow-y");
+        if ((ov != "visible" && !ov.empty()) ||
+            (ovx != "visible" && !ovx.empty()) ||
+            (ovy != "visible" && !ovy.empty()))
+            establishesBFC = true;
+        const std::string& disp = styleVal(style, "display");
+        if (disp == "inline-block" || disp == "flex" || disp == "inline-flex" ||
+            disp == "grid" || disp == "inline-grid" || disp == "flow-root" ||
+            disp == "table-cell" || disp == "table-caption")
+            establishesBFC = true;
+        if (position == "absolute" || position == "fixed")
+            establishesBFC = true;
+        const std::string& flt = styleVal(style, "float");
+        if (flt == "left" || flt == "right")
+            establishesBFC = true;
+    }
+
+    if (!establishesBFC && hadFirstBlockChild) {
+        // Top margin collapsing: first child's top margin escapes through the parent
+        if (node->box.padding.top == 0 && node->box.border.top == 0 &&
+            firstBlockChildMarginTop > 0) {
+            float collapsed = std::max(node->box.margin.top, firstBlockChildMarginTop);
+            node->box.margin.top = collapsed;
+            // Shift all children up by the first child's margin that was applied to cursorY
+            for (auto* child : getLayoutChildren(node)) {
+                child->box.contentRect.y -= firstBlockChildMarginTop;
+            }
+            cursorY -= firstBlockChildMarginTop;
+        }
+
+        // Bottom margin collapsing: last child's bottom margin escapes through the parent
+        // (only for auto height)
+        float heightRef0 = node->availableHeight;
+        float specH0 = resolveDimension(styleVal(style, "height"), heightRef0, fontSize);
+        if (node->box.padding.bottom == 0 && node->box.border.bottom == 0 &&
+            specH0 < 0 && prevMarginBottom > 0) {
+            float collapsed = std::max(node->box.margin.bottom, prevMarginBottom);
+            node->box.margin.bottom = collapsed;
+            cursorY -= prevMarginBottom;
+        }
+    }
+
     } // end BFC else block
 
     // Resolve height using available height from containing block

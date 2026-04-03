@@ -457,6 +457,19 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             // Important declarations come after normal ones (applied last = wins)
             if (a.important != b.important) return !a.important;
 
+            // Origin ordering (CSS Cascade L5):
+            //   Normal:    UA < Author  (author wins)
+            //   Important: Author !important < UA !important  (UA wins)
+            if (a.origin != b.origin) {
+                if (a.important) {
+                    // For !important: UA beats Author — UA comes later (wins)
+                    return a.origin == Origin::Author;
+                } else {
+                    // For normal: Author beats UA — UA comes earlier (loses)
+                    return a.origin == Origin::UserAgent;
+                }
+            }
+
             // Layer ordering
             if (a.layerOrder != b.layerOrder) {
                 if (a.important) {

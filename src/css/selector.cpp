@@ -311,7 +311,7 @@ private:
             advance(); // skip '('
             skipWS();
             if (ss.value == "not") {
-                // Parse the argument as simple selectors
+                // :not() with CSS Selectors L4 comma-separated selector list
                 std::string arg;
                 int depth = 1;
                 size_t argStart = m_pos;
@@ -323,10 +323,28 @@ private:
                 arg = m_text.substr(argStart, m_pos - argStart);
                 if (peek() == ')') advance();
 
-                // Parse the :not() argument as a compound selector
-                SelectorParser subParser(arg);
-                auto compound = subParser.parseCompound();
-                ss.notArg = std::move(compound.simples);
+                // Parse as comma-separated compound selectors (like :is()/:where())
+                std::string current;
+                int pd = 0;
+                for (size_t j = 0; j < arg.size(); j++) {
+                    if (arg[j] == '(') pd++;
+                    else if (arg[j] == ')') pd--;
+                    else if (arg[j] == ',' && pd == 0) {
+                        std::string part = trim(current);
+                        if (!part.empty()) {
+                            SelectorParser subParser(part);
+                            ss.selectorListArg.push_back(subParser.parseCompound());
+                        }
+                        current.clear();
+                        continue;
+                    }
+                    current += arg[j];
+                }
+                std::string part = trim(current);
+                if (!part.empty()) {
+                    SelectorParser subParser(part);
+                    ss.selectorListArg.push_back(subParser.parseCompound());
+                }
             } else if (ss.value == "nth-child" || ss.value == "nth-last-child" ||
                        ss.value == "nth-of-type" || ss.value == "nth-last-of-type") {
                 parseNth(ss);
@@ -444,19 +462,7 @@ uint32_t computeSpecificity(const SelectorChain& chain) {
                 case SimpleSelectorType::Class:
                 case SimpleSelectorType::Attribute:
                 case SimpleSelectorType::PseudoClass:
-                    if (s.value == "not") {
-                        // :not() specificity comes from its argument
-                        for (auto& inner : s.notArg) {
-                            switch (inner.type) {
-                                case SimpleSelectorType::Id: ids++; break;
-                                case SimpleSelectorType::Class:
-                                case SimpleSelectorType::Attribute:
-                                case SimpleSelectorType::PseudoClass: classes++; break;
-                                case SimpleSelectorType::Tag: types++; break;
-                                default: break;
-                            }
-                        }
-                    } else if (s.value == "is" || s.value == "has") {
+                    if (s.value == "not" || s.value == "is" || s.value == "has") {
                         // :is()/:has() specificity = most specific argument
                         int maxIds = 0, maxClasses = 0, maxTypes = 0;
                         for (auto& compound : s.selectorListArg) {
@@ -689,9 +695,9 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
                 return elem.isTarget();
             }
             if (name == "not") {
-                // :not() matches if NONE of the argument simple selectors match
-                for (auto& inner : ss.notArg) {
-                    if (matchSimple(inner, elem)) return false;
+                // :not() matches if NONE of the compound selectors in the list match
+                for (auto& compound : ss.selectorListArg) {
+                    if (matchCompound(compound, elem)) return false;
                 }
                 return true;
             }

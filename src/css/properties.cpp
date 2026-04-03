@@ -571,7 +571,64 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
     }
 
     if (property == "background") {
-        return {{"background-color", value}, {"background-image", "none"}};
+        // Reset all background sub-properties to initial values, then parse the value.
+        // CSS spec: background shorthand resets all sub-properties.
+        std::vector<ExpandedDecl> result = {
+            {"background-color", "transparent"},
+            {"background-image", "none"},
+            {"background-position", "0% 0%"},
+            {"background-size", "auto"},
+            {"background-repeat", "repeat"},
+            {"background-clip", "border-box"},
+            {"background-origin", "padding-box"},
+        };
+
+        if (value == "none" || value == "transparent" || value.empty()) {
+            if (value == "transparent") result[0].value = "transparent";
+            return result;
+        }
+
+        // Tokenize the value respecting parenthesized groups
+        std::vector<std::string> tokens;
+        std::string token;
+        int parenDepth = 0;
+        for (size_t i = 0; i <= value.size(); i++) {
+            char c = (i < value.size()) ? value[i] : ' ';
+            if (c == '(') parenDepth++;
+            if (c == ')') parenDepth--;
+            if ((c == ' ' || c == '\t' || i == value.size()) && parenDepth == 0) {
+                if (!token.empty()) { tokens.push_back(token); token.clear(); }
+            } else {
+                token += c;
+            }
+        }
+
+        // Classify each token
+        bool foundColor = false;
+        for (auto& t : tokens) {
+            std::string lower = t;
+            for (auto& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+            if (lower.substr(0, 4) == "url(" || lower.substr(0, 16) == "linear-gradient(" ||
+                lower.substr(0, 17) == "radial-gradient(" || lower.substr(0, 6) == "image(") {
+                result[1].value = t; // background-image
+            } else if (lower == "repeat" || lower == "no-repeat" || lower == "repeat-x" ||
+                       lower == "repeat-y" || lower == "space" || lower == "round") {
+                result[4].value = t; // background-repeat
+            } else if (lower == "border-box" || lower == "padding-box" || lower == "content-box") {
+                result[6].value = t; // background-origin
+                result[5].value = t; // background-clip
+            } else if (lower == "center" || lower == "top" || lower == "bottom" ||
+                       lower == "left" || lower == "right") {
+                if (result[2].value == "0% 0%") result[2].value = t;
+                else result[2].value += " " + t;
+            } else if (!foundColor) {
+                result[0].value = t;
+                foundColor = true;
+            }
+        }
+
+        return result;
     }
 
     if (property == "font") {
