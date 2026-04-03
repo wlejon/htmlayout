@@ -70,7 +70,27 @@ private:
         // Container query: if non-empty, this rule only applies when the container condition is met
         std::string containerName;     // required container name (empty = any)
         std::string containerCondition; // e.g. "(min-width: 400px)"
+        // Pre-classified selector type (avoids scanning simples per-element)
+        bool isHostSelector = false;
+        bool isSlottedSelector = false;
+        bool isPartSelector = false;
     };
+    // Classify :host/:slotted/::part flags after inserting a rule
+    void classifyLastRule() {
+        auto& rule = rules_.back();
+        if (rule.selector.chain.entries.empty()) return;
+        for (auto& s : rule.selector.chain.entries[0].compound.simples) {
+            if (s.type == SimpleSelectorType::PseudoClass &&
+                (s.value == "host" || s.value == "host-context")) {
+                rule.isHostSelector = true;
+            } else if (s.type == SimpleSelectorType::PseudoElement && s.value == "slotted") {
+                rule.isSlottedSelector = true;
+            } else if (s.type == SimpleSelectorType::PseudoElement && s.value == "part") {
+                rule.isPartSelector = true;
+            }
+        }
+    }
+
     std::vector<ScopedRule> rules_;
     size_t nextOrder_ = 0;
 

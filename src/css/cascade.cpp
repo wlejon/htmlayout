@@ -13,6 +13,7 @@ bool isCustomProperty(const std::string& name) {
     return name.size() >= 2 && name[0] == '-' && name[1] == '-';
 }
 
+
 // Resolve var() references in a value string, using the current style and parent.
 // Supports var(--name) and var(--name, fallback).
 // Resolves nested var() in fallbacks.
@@ -222,6 +223,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
         auto selectors = parseSelectorList(rule.selector);
         for (auto& sel : selectors) {
             rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, origin, {}, {}});
+            classifyLastRule();
         }
     }
 
@@ -237,6 +239,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
                 auto selectors = parseSelectorList(rule.selector);
                 for (auto& sel : selectors) {
                     rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, origin, {}, {}});
+                    classifyLastRule();
                 }
             }
         }
@@ -249,6 +252,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
             auto selectors = parseSelectorList(rule.selector);
             for (auto& sel : selectors) {
                 rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, layerIdx, origin, {}, {}});
+                classifyLastRule();
             }
         }
         // @media inside @layer
@@ -262,6 +266,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
                     auto selectors = parseSelectorList(rule.selector);
                     for (auto& sel : selectors) {
                         rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, layerIdx, origin, {}, {}});
+                        classifyLastRule();
                     }
                 }
             }
@@ -275,6 +280,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
             for (auto& sel : selectors) {
                 rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, origin,
                                   containerBlock.name, containerBlock.condition});
+                classifyLastRule();
             }
         }
     }
@@ -283,10 +289,11 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
 ComputedStyle Cascade::resolve(const ElementRef& elem,
                                 const std::string& inlineStyle,
                                 const ComputedStyle* parentStyle) const {
-    // 1. Collect all matching rules whose scope matches the element's scope
+    // 1. Collect all matching rules whose scope matches the element's scope.
+    //    Use pointers to avoid copying property/value strings from Declaration objects.
     struct MatchedDecl {
-        std::string property;
-        std::string value;
+        const std::string* property;
+        const std::string* value;
         bool important;
         uint32_t specificity;
         size_t order;
@@ -305,43 +312,10 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             }
         }
 
-        // Check if this is a :host or :host-context selector from a shadow stylesheet.
-        // :host rules live in the shadow scope but match the shadow host element (which
-        // is in the outer/document scope).
-        bool isHostSelector = false;
-        if (!rule.selector.chain.entries.empty()) {
-            for (auto& s : rule.selector.chain.entries[0].compound.simples) {
-                if (s.type == SimpleSelectorType::PseudoClass &&
-                    (s.value == "host" || s.value == "host-context")) {
-                    isHostSelector = true;
-                    break;
-                }
-            }
-        }
-
-        // Check if this is a ::slotted() selector from a shadow stylesheet.
-        // ::slotted rules live in the shadow scope but match slotted light DOM elements.
-        bool isSlottedSelector = false;
-        if (!rule.selector.chain.entries.empty()) {
-            for (auto& s : rule.selector.chain.entries[0].compound.simples) {
-                if (s.type == SimpleSelectorType::PseudoElement && s.value == "slotted") {
-                    isSlottedSelector = true;
-                    break;
-                }
-            }
-        }
-
-        // Check if this is a ::part() selector from the outer scope.
-        // ::part rules live in the outer scope but match elements inside a shadow tree.
-        bool isPartSelector = false;
-        if (!rule.selector.chain.entries.empty()) {
-            for (auto& s : rule.selector.chain.entries[0].compound.simples) {
-                if (s.type == SimpleSelectorType::PseudoElement && s.value == "part") {
-                    isPartSelector = true;
-                    break;
-                }
-            }
-        }
+        // Use pre-classified selector type flags (set at insertion time)
+        bool isHostSelector = rule.isHostSelector;
+        bool isSlottedSelector = rule.isSlottedSelector;
+        bool isPartSelector = rule.isPartSelector;
 
         if (isHostSelector) {
             // :host rules are scoped to a shadow root. They match the host element
@@ -421,10 +395,10 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             if (!rule.selector.matches(elem)) continue;
         }
 
-        // Add all declarations from this rule
+        // Add all declarations from this rule (by pointer, no string copies)
         for (auto& decl : rule.declarations) {
             matched.push_back({
-                decl.property, decl.value, decl.important,
+                &decl.property, &decl.value, decl.important,
                 rule.selector.specificity, rule.order, false, rule.layerOrder,
                 rule.origin
             });
@@ -432,11 +406,13 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     }
 
     // 2. Parse and add inline style declarations (highest author specificity)
+    //    Keep inlineDecls alive since MatchedDecl holds pointers into it.
+    std::vector<Declaration> inlineDecls;
     if (!inlineStyle.empty()) {
-        auto inlineDecls = parseInlineStyle(inlineStyle);
+        inlineDecls = parseInlineStyle(inlineStyle);
         for (auto& decl : inlineDecls) {
             matched.push_back({
-                decl.property, decl.value, decl.important,
+                &decl.property, &decl.value, decl.important,
                 0xFFFFFFFF, // inline style beats all selector specificities
                 SIZE_MAX,   // and all source orders
                 true,
@@ -493,20 +469,14 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
 
     // 4. Apply declarations in sorted order (last wins per property)
     //    Expand shorthands into longhands before applying.
+    //    Build uaStyle in the same pass to avoid double expandShorthand.
     ComputedStyle style;
-    for (auto& m : matched) {
-        auto expanded = expandShorthand(m.property, m.value);
-        for (auto& e : expanded) {
-            style[e.property] = e.value;
-        }
-    }
-
-    // Build UA-only resolved values for revert keyword support
     ComputedStyle uaStyle;
     for (auto& m : matched) {
-        if (m.origin == Origin::UserAgent) {
-            auto expanded = expandShorthand(m.property, m.value);
-            for (auto& e : expanded) {
+        auto expanded = expandShorthand(*m.property, *m.value);
+        for (auto& e : expanded) {
+            style[e.property] = e.value;
+            if (m.origin == Origin::UserAgent) {
                 uaStyle[e.property] = e.value;
             }
         }
