@@ -286,6 +286,12 @@ std::string initialValue(const std::string& property) {
     return def ? def->initialValue : std::string{};
 }
 
+const std::string& initialValueRef(const std::string& property) {
+    static const std::string empty;
+    auto* def = cache().find(property);
+    return def ? def->initialValue : empty;
+}
+
 namespace {
 
 // Split a CSS value string into whitespace-separated parts,

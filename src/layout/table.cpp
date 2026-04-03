@@ -1,18 +1,15 @@
 #include "layout/table.h"
 #include "layout/formatting_context.h"
+#include "layout/style_util.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
 
 namespace htmlayout::layout {
 
-namespace {
+using layout::styleVal;
 
-const std::string& styleVal(const css::ComputedStyle& style, const std::string& prop) {
-    static const std::string empty;
-    auto it = style.find(prop);
-    return it != style.end() ? it->second : empty;
-}
+namespace {
 
 // Determine if a display value is a table-internal display type.
 bool isTableRow(const std::string& display) {

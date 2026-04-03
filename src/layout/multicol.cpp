@@ -1,16 +1,9 @@
 #include "layout/multicol.h"
+#include "layout/style_util.h"
 
 namespace htmlayout::layout {
 
-namespace {
-
-const std::string& styleVal(const css::ComputedStyle& style, const std::string& prop) {
-    static const std::string empty;
-    auto it = style.find(prop);
-    return it != style.end() ? it->second : empty;
-}
-
-} // anonymous namespace
+using layout::styleVal;
 
 bool isMulticolContainer(const css::ComputedStyle& style) {
     const std::string& colCount = styleVal(style, "column-count");

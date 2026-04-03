@@ -1,5 +1,6 @@
 #include "layout/block.h"
 #include "layout/formatting_context.h"
+#include "layout/style_util.h"
 #include "layout/text.h"
 #include <algorithm>
 #include <cctype>
@@ -7,13 +8,9 @@
 
 namespace htmlayout::layout {
 
-namespace {
+using layout::styleVal;
 
-const std::string& styleVal(const css::ComputedStyle& style, const std::string& prop) {
-    static const std::string empty;
-    auto it = style.find(prop);
-    return it != style.end() ? it->second : empty;
-}
+namespace {
 
 float resolveDimension(const std::string& value, float available, float fontSize) {
     if (value.empty() || value == "auto" || value == "none") return -1.0f; // sentinel: auto

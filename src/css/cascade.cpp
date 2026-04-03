@@ -574,22 +574,33 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
-    // 8. For inherited properties not explicitly set, inherit from parent
-    // 9. For non-inherited properties not explicitly set, use initial value
-    for (auto& prop : knownProperties()) {
-        if (style.find(prop.name) == style.end()) {
-            if (prop.inherited && parentStyle) {
-                auto it = parentStyle->find(prop.name);
+    // 8. Inherit inherited properties from parent.
+    //    Only iterate the small set of inherited property names (~25) rather
+    //    than all ~317 known properties.  Look each one up in the parent and,
+    //    if present and not already set on this element, copy it over.
+    static const auto& inheritedProps = [] {
+        static std::vector<std::string> names;
+        for (auto& p : knownProperties()) {
+            if (p.inherited) names.push_back(p.name);
+        }
+        return names;
+    }();
+
+    if (parentStyle) {
+        for (auto& name : inheritedProps) {
+            if (style.find(name) == style.end()) {
+                auto it = parentStyle->find(name);
                 if (it != parentStyle->end()) {
-                    style[prop.name] = it->second;
-                } else {
-                    style[prop.name] = prop.initialValue;
+                    style[name] = it->second;
                 }
-            } else {
-                style[prop.name] = prop.initialValue;
             }
         }
     }
+
+    // 9. Non-inherited defaults are NOT stored in the map.  Layout's styleVal()
+    //    falls back to initialValueRef() for missing keys, so the map only
+    //    contains properties that were explicitly set or inherited — typically
+    //    ~10-30 entries instead of ~317.
 
     return style;
 }

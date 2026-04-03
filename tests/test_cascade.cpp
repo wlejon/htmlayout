@@ -2,9 +2,17 @@
 #include "test_helpers.h"
 #include "css/parser.h"
 #include "css/cascade.h"
+#include "css/properties.h"
 #include "css/ua_stylesheet.h"
 
 using namespace htmlayout::css;
+
+// Helper: look up a style value with fallback to initial value (matches layout behavior).
+static const std::string& sv(const ComputedStyle& style, const std::string& prop) {
+    auto it = style.find(prop);
+    if (it != style.end()) return it->second;
+    return initialValueRef(prop);
+}
 
 static void testBasicResolve() {
     printf("--- Cascade: basic resolve ---\n");
@@ -15,7 +23,7 @@ static void testBasicResolve() {
     auto style = cascade.resolve(div);
     check(style["color"] == "red", "cascade: color resolved to red");
     check(style["font-size"] == "20px", "cascade: font-size resolved to 20px");
-    check(style["display"] == "inline", "cascade: display gets initial value 'inline'");
+    check(sv(style, "display") == "inline", "cascade: display gets initial value 'inline'");
 }
 
 static void testSpecificityOrder() {
@@ -74,7 +82,7 @@ static void testInheritance() {
     auto childStyle = cascade.resolve(child, {}, &parentStyle);
     check(childStyle["color"] == "red", "cascade: child inherits color from parent");
     check(childStyle["font-size"] == "18px", "cascade: child inherits font-size from parent");
-    check(childStyle["margin-top"] == "0", "cascade: child gets initial margin-top, not inherited");
+    check(sv(childStyle, "margin-top") == "0", "cascade: child gets initial margin-top, not inherited");
 }
 
 static void testInitialValues() {
@@ -82,11 +90,11 @@ static void testInitialValues() {
     Cascade cascade;
     MockElement e; e.tag = "div";
     auto style = cascade.resolve(e);
-    check(style["display"] == "inline", "cascade: initial display = inline");
-    check(style["color"] == "black", "cascade: initial color = black");
-    check(style["position"] == "static", "cascade: initial position = static");
-    check(style["opacity"] == "1", "cascade: initial opacity = 1");
-    check(style["font-size"] == "16px", "cascade: initial font-size = 16px");
+    check(sv(style, "display") == "inline", "cascade: initial display = inline");
+    check(sv(style, "color") == "black", "cascade: initial color = black");
+    check(sv(style, "position") == "static", "cascade: initial position = static");
+    check(sv(style, "opacity") == "1", "cascade: initial opacity = 1");
+    check(sv(style, "font-size") == "16px", "cascade: initial font-size = 16px");
 }
 
 static void testMultipleStylesheets() {
@@ -126,7 +134,7 @@ static void testCommaSelectors() {
     check(cascade.resolve(h1)["font-weight"] == "bold", "cascade: h1 gets bold from h1,h2,h3 rule");
     check(cascade.resolve(h2)["color"] == "navy", "cascade: h2 gets navy from h1,h2,h3 rule");
     check(cascade.resolve(h3)["font-weight"] == "bold", "cascade: h3 gets bold from h1,h2,h3 rule");
-    check(cascade.resolve(p)["font-weight"] == "normal", "cascade: p doesn't match h1,h2,h3 rule");
+    check(sv(cascade.resolve(p), "font-weight") == "normal", "cascade: p doesn't match h1,h2,h3 rule");
 }
 
 static void testNoMatch() {
@@ -134,7 +142,7 @@ static void testNoMatch() {
     Cascade cascade;
     cascade.addStylesheet(parse(".special { color: red; }"));
     MockElement e; e.tag = "div";
-    check(cascade.resolve(e)["color"] == "black", "cascade: unmatched element gets initial color");
+    check(sv(cascade.resolve(e), "color") == "black", "cascade: unmatched element gets initial color");
 }
 
 static void testInheritanceChain() {
@@ -225,7 +233,7 @@ static void testMediaQueries() {
     MockElement d1; d1.tag = "div";
     auto s1 = cascadeWide.resolve(d1);
     check(s1["color"] == "blue", "@media: min-width:768px matches at 1024px");
-    check(s1["font-size"] == "16px", "@media: max-width:400px doesn't match at 1024px");
+    check(sv(s1, "font-size") == "16px", "@media: max-width:400px doesn't match at 1024px");
 
     // Narrow viewport: max-width: 400px matches, min-width: 768px doesn't
     MediaContext narrow{320, 480, "screen"};
@@ -390,7 +398,7 @@ static void testUserAgentStylesheet() {
     // span should remain inline (no UA rule)
     MockElement span; span.tag = "span";
     auto spanStyle = cascade.resolve(span);
-    check(spanStyle["display"] == "inline", "UA: span display = inline (default)");
+    check(sv(spanStyle, "display") == "inline", "UA: span display = inline (default)");
 
     // strong should be bold
     MockElement strong; strong.tag = "strong";
@@ -422,7 +430,7 @@ static void testClear() {
     MockElement e; e.tag = "div";
     check(cascade.resolve(e)["color"] == "red", "cascade: before clear, color is red");
     cascade.clear();
-    check(cascade.resolve(e)["color"] == "black", "cascade: after clear, color is initial");
+    check(sv(cascade.resolve(e), "color") == "black", "cascade: after clear, color is initial");
 }
 
 static void testRevertKeyword() {

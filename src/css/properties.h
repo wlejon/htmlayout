@@ -21,6 +21,9 @@ bool isInherited(const std::string& property);
 // Get the initial (default) value for a property
 std::string initialValue(const std::string& property);
 
+// Get the initial value by const reference (no allocation). Returns "" for unknown properties.
+const std::string& initialValueRef(const std::string& property);
+
 // Expand CSS shorthand properties into longhands.
 // e.g. "margin: 10px" -> [margin-top:10px, margin-right:10px, ...]
 struct ExpandedDecl {

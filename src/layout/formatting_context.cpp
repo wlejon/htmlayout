@@ -4,6 +4,7 @@
 #include "layout/flex.h"
 #include "layout/table.h"
 #include "layout/grid.h"
+#include "layout/style_util.h"
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -11,16 +12,7 @@
 
 namespace htmlayout::layout {
 
-namespace {
-
-// Get a style value with fallback
-const std::string& styleVal(const css::ComputedStyle& style, const std::string& prop) {
-    static const std::string empty;
-    auto it = style.find(prop);
-    return it != style.end() ? it->second : empty;
-}
-
-} // anonymous namespace
+using layout::styleVal;
 
 // Resolve a single CSS length token (number + unit) to pixels.
 static float resolveSingleLength(const std::string& value, float referenceSize, float fontSize) {

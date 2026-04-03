@@ -1,10 +1,13 @@
 #include "layout/box.h"
 #include "layout/formatting_context.h"
+#include "layout/style_util.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
 
 namespace htmlayout::layout {
+
+using layout::styleVal;
 
 void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
     layoutTree(root, Viewport{viewportWidth, 0.0f}, metrics);
@@ -23,12 +26,6 @@ void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics
 }
 
 namespace {
-
-const std::string& styleVal(const css::ComputedStyle& style, const std::string& prop) {
-    static const std::string empty;
-    auto it = style.find(prop);
-    return it != style.end() ? it->second : empty;
-}
 
 bool pointInBox(const LayoutBox& box, float x, float y) {
     // Border box = content + padding + border
