@@ -435,6 +435,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Position items
     float crossCursor = crossOffset;
+    float maxMainExtent = 0;  // track max main-axis extent across all lines
     for (auto& line : lines) {
         // Compute justify-content offsets
         float totalMain = 0;
@@ -677,6 +678,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
+        if (mainCursor > maxMainExtent) maxMainExtent = mainCursor;
         crossCursor += line.crossSize + crossGapAdjusted;
     }
 
@@ -691,12 +693,23 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             node->box.contentRect.height = specH;
         if (node->box.contentRect.height < 0) node->box.contentRect.height = 0;
     } else {
-        node->box.contentRect.height = crossCursor > 0 ? crossCursor - crossGapAdjusted : 0;
+        // For row flex, height = cross extent. For column flex, height = main extent.
+        if (isRow) {
+            node->box.contentRect.height = crossCursor > 0 ? crossCursor - crossGapAdjusted : 0;
+        } else {
+            node->box.contentRect.height = maxMainExtent;
+        }
     }
 
-    // Store natural height before clamping (for scroll extent calculation)
-    float naturalCross = crossCursor > 0 ? crossCursor - crossGapAdjusted : 0;
-    node->box.naturalHeight = std::max(naturalCross, node->box.contentRect.height);
+    // Store natural height before clamping (for scroll extent calculation).
+    // For row flex, natural height = cross extent. For column flex, natural height = main extent.
+    float naturalH;
+    if (isRow) {
+        naturalH = crossCursor > 0 ? crossCursor - crossGapAdjusted : 0;
+    } else {
+        naturalH = maxMainExtent;
+    }
+    node->box.naturalHeight = std::max(naturalH, node->box.contentRect.height);
 
     // Apply min/max-height constraints (same as block layout)
     float minH = resolveDim(styleVal(style, "min-height"), node->availableHeight, fontSize);
