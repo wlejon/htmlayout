@@ -7,7 +7,7 @@ const std::string& defaultUserAgentCSS() {
 /* Block-level elements */
 html, body, div, article, section, nav, aside, header, footer, main,
 address, blockquote, figure, figcaption, details, summary,
-hgroup, search {
+hgroup, search, canvas {
     display: block;
 }
 
