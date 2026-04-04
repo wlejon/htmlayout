@@ -95,6 +95,13 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     bool isWrap = (flexWrap == "wrap" || flexWrap == "wrap-reverse");
 
     float mainAvailable = isRow ? containerMain : resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+    // Column flex with no explicit height but a definite available height from
+    // the parent (e.g. parent flex distributed space to us): use it as the
+    // main-axis constraint so children are properly sized.
+    if (!isRow && mainAvailable < 0 && node->availableHeight > 0) {
+        mainAvailable = node->availableHeight - paddingV - borderV;
+        if (mainAvailable < 0) mainAvailable = 0;
+    }
     bool columnAutoHeight = (!isRow && mainAvailable < 0);
     if (mainAvailable < 0) mainAvailable = containerMain; // initial fallback for column with auto height
 
@@ -361,6 +368,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     item->node->box.margin.top + item->node->box.margin.bottom;
             } else {
                 // Main = height, cross = width
+                // Pass allocated height so nested column-flex children know their constraint
+                item->node->availableHeight = item->finalMain;
                 layoutNode(item->node, containerMain, metrics);
                 item->node->box.contentRect.height = item->finalMain -
                     item->node->box.padding.top - item->node->box.padding.bottom -
