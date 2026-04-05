@@ -151,7 +151,15 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         }
 
         if (heightVal != "auto" && !heightVal.empty()) {
-            // handled below
+            const std::string& boxSizing = styleVal(style, "box-sizing");
+            float paddingV = node->box.padding.top + node->box.padding.bottom;
+            float borderV = node->box.border.top + node->box.border.bottom;
+            if (boxSizing == "border-box") {
+                node->box.contentRect.height = specH - paddingV - borderV;
+                if (node->box.contentRect.height < 0) node->box.contentRect.height = 0;
+            } else {
+                node->box.contentRect.height = specH;
+            }
         } else if (hasIntrinsic) {
             node->box.contentRect.height = intrH;
         }
