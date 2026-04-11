@@ -48,17 +48,17 @@ const std::vector<PropertyDef>& knownProperties() {
         // Flexbox
         {"flex-direction",    "row",       false},
         {"flex-wrap",         "nowrap",    false},
-        {"justify-content",   "flex-start",false},
-        {"align-items",       "stretch",   false},
-        {"align-content",     "stretch",   false},
+        {"justify-content",   "normal",    false},
+        {"align-items",       "normal",    false},
+        {"align-content",     "normal",    false},
         {"align-self",        "auto",      false},
         {"flex-grow",         "0",         false},
         {"flex-shrink",       "1",         false},
         {"flex-basis",        "auto",      false},
         {"order",             "0",         false},
-        {"gap",               "0",         false},
-        {"row-gap",           "0",         false},
-        {"column-gap",        "0",         false},
+        {"gap",               "normal",    false},
+        {"row-gap",           "normal",    false},
+        {"column-gap",        "normal",    false},
 
         // Text & font (inherited)
         {"color",             "black",     true},

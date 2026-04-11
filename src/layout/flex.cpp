@@ -206,6 +206,32 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto& item : items) {
         if (item.flexBasis >= 0) {
             item.hypotheticalMain = item.flexBasis;
+            // For border-box items, a flex-basis of 0 must still reserve space for
+            // padding+border so flex-grow distributes the content area proportionally.
+            if (item.hypotheticalMain == 0 && !item.node->isTextNode()) {
+                auto& cs = item.node->computedStyle();
+                if (styleVal(cs, "box-sizing") == "border-box") {
+                    float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                    if (childFontSize <= 0) childFontSize = fontSize;
+                    float edges = 0;
+                    if (isRow) {
+                        edges += resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
+                                 resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
+                        if (styleVal(cs, "border-left-style") != "none")
+                            edges += resolveLength(styleVal(cs, "border-left-width"), mainAvailable, childFontSize);
+                        if (styleVal(cs, "border-right-style") != "none")
+                            edges += resolveLength(styleVal(cs, "border-right-width"), mainAvailable, childFontSize);
+                    } else {
+                        edges += resolveLength(styleVal(cs, "padding-top"), mainAvailable, childFontSize) +
+                                 resolveLength(styleVal(cs, "padding-bottom"), mainAvailable, childFontSize);
+                        if (styleVal(cs, "border-top-style") != "none")
+                            edges += resolveLength(styleVal(cs, "border-top-width"), mainAvailable, childFontSize);
+                        if (styleVal(cs, "border-bottom-style") != "none")
+                            edges += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, childFontSize);
+                    }
+                    item.hypotheticalMain = edges;
+                }
+            }
         } else {
             // Auto basis: use intrinsic (max-content) size so wrapping works.
             // Without this, items laid out with mainAvailable expand to fill
@@ -429,7 +455,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             float lineGap = freeCross / (lines.size() + 1);
             crossOffset = lineGap;
             crossGapAdjusted = gapCross + lineGap;
-        } else if (alignContent == "stretch" || alignContent.empty()) {
+        } else if (alignContent == "stretch" || alignContent == "normal" || alignContent.empty()) {
             // Stretch: distribute free space equally to each line's cross size
             if (!lines.empty() && freeCross > 0) {
                 float extra = freeCross / lines.size();
@@ -609,7 +635,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 crossPos = crossCursor + (line.crossSize - item->crossSize) / 2.0f;
             } else if (align == "flex-end") {
                 crossPos = crossCursor + line.crossSize - item->crossSize;
-            } else if (align == "stretch") {
+            } else if (align == "stretch" || align == "normal") {
                 // Stretch to fill line cross size (only if no explicit cross dimension)
                 if (isRow) {
                     const std::string& h = styleVal(cs, "height");
