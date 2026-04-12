@@ -42,8 +42,18 @@ public:
                     if (!importRule.url.empty()) {
                         sheet.imports.push_back(std::move(importRule));
                     }
+                } else if (peek().value == "keyframes" || peek().value == "-webkit-keyframes") {
+                    auto kf = parseKeyframesRule();
+                    if (!kf.name.empty()) {
+                        sheet.keyframes.push_back(std::move(kf));
+                    }
+                } else if (peek().value == "font-face") {
+                    auto ff = parseFontFaceRule();
+                    if (!ff.family.empty() && !ff.src.empty()) {
+                        sheet.fontFaces.push_back(std::move(ff));
+                    }
                 } else {
-                    // @font-face, @keyframes, @charset, etc. — skip gracefully
+                    // @charset, etc. — skip gracefully
                     consumeAtRule();
                 }
                 skipWhitespace();
@@ -393,6 +403,163 @@ private:
         if (!atEnd() && peek().type == TokenType::Semicolon) advance();
 
         return rule;
+    }
+
+    // Parse @font-face { font-family: ...; src: url(...); ... }
+    FontFaceRule parseFontFaceRule() {
+        FontFaceRule rule;
+        advance(); // skip @font-face
+        skipWhitespace();
+
+        if (atEnd() || peek().type != TokenType::LeftBrace) {
+            consumeAtRule();
+            return rule;
+        }
+        advance(); // skip '{'
+
+        // Collect tokens until matching '}'
+        std::vector<Token> declTokens;
+        int depth = 1;
+        while (!atEnd() && depth > 0) {
+            if (peek().type == TokenType::LeftBrace) ++depth;
+            else if (peek().type == TokenType::RightBrace) {
+                --depth;
+                if (depth <= 0) { advance(); break; }
+            }
+            declTokens.push_back(peek());
+            advance();
+        }
+        declTokens.push_back(Token{TokenType::EndOfFile, "", 0.0, ""});
+        Parser declParser(declTokens);
+        auto decls = declParser.parseDeclarationList();
+
+        for (auto& d : decls) {
+            if (d.property == "font-family") {
+                // Strip quotes
+                rule.family = d.value;
+                if (!rule.family.empty() &&
+                    (rule.family.front() == '"' || rule.family.front() == '\''))
+                    rule.family = rule.family.substr(1, rule.family.size() - 2);
+            } else if (d.property == "src") {
+                // Extract url(...) from src value
+                auto pos = d.value.find("url(");
+                if (pos != std::string::npos) {
+                    auto start = pos + 4;
+                    auto end = d.value.find(')', start);
+                    if (end != std::string::npos) {
+                        rule.src = d.value.substr(start, end - start);
+                        // Strip quotes
+                        if (!rule.src.empty() &&
+                            (rule.src.front() == '"' || rule.src.front() == '\''))
+                            rule.src = rule.src.substr(1, rule.src.size() - 2);
+                    }
+                }
+            } else if (d.property == "font-weight") {
+                if (d.value == "bold") rule.weight = 700;
+                else if (d.value == "normal") rule.weight = 400;
+                else {
+                    char* end = nullptr;
+                    int v = static_cast<int>(std::strtof(d.value.c_str(), &end));
+                    if (end != d.value.c_str() && v > 0) rule.weight = v;
+                }
+            } else if (d.property == "font-style") {
+                rule.italic = (d.value == "italic" || d.value == "oblique");
+            }
+        }
+        return rule;
+    }
+
+    // Parse @keyframes name { from/to/% { declarations } ... }
+    KeyframeBlock parseKeyframesRule() {
+        KeyframeBlock block;
+        advance(); // skip @keyframes / @-webkit-keyframes
+        skipWhitespace();
+
+        // Parse animation name (ident or string)
+        if (!atEnd()) {
+            if (peek().type == TokenType::String) {
+                block.name = peek().value;
+                advance();
+            } else if (peek().type == TokenType::Ident) {
+                block.name = peek().value;
+                advance();
+            }
+        }
+        skipWhitespace();
+
+        // Expect opening brace
+        if (atEnd() || peek().type != TokenType::LeftBrace) {
+            consumeAtRule();
+            return block;
+        }
+        advance(); // skip '{'
+        skipWhitespace();
+
+        // Parse keyframe stops
+        while (!atEnd() && peek().type != TokenType::RightBrace) {
+            skipWhitespace();
+            if (atEnd() || peek().type == TokenType::RightBrace) break;
+
+            // Parse offset(s): "from", "to", or "50%", or comma-separated list
+            std::vector<float> offsets;
+            while (!atEnd() && peek().type != TokenType::LeftBrace) {
+                skipWhitespace();
+                if (peek().type == TokenType::Ident) {
+                    if (peek().value == "from") offsets.push_back(0.0f);
+                    else if (peek().value == "to") offsets.push_back(1.0f);
+                    advance();
+                } else if (peek().type == TokenType::Percentage) {
+                    offsets.push_back(static_cast<float>(peek().numeric / 100.0));
+                    advance();
+                } else if (peek().type == TokenType::Number) {
+                    // Handle "0" without %
+                    offsets.push_back(static_cast<float>(peek().numeric / 100.0));
+                    advance();
+                } else if (peek().type == TokenType::Comma) {
+                    advance();
+                } else {
+                    advance(); // skip unexpected
+                }
+                skipWhitespace();
+            }
+
+            // Parse declarations block
+            if (!atEnd() && peek().type == TokenType::LeftBrace) {
+                advance(); // skip '{'
+                // Collect tokens until matching '}'
+                std::vector<Token> declTokens;
+                int depth = 1;
+                while (!atEnd() && depth > 0) {
+                    if (peek().type == TokenType::LeftBrace) ++depth;
+                    else if (peek().type == TokenType::RightBrace) {
+                        --depth;
+                        if (depth <= 0) { advance(); break; }
+                    }
+                    declTokens.push_back(peek());
+                    advance();
+                }
+                // Parse declarations from collected tokens
+                declTokens.push_back(Token{TokenType::EndOfFile, "", 0.0, ""});
+                Parser declParser(declTokens);
+                auto decls = declParser.parseDeclarationList();
+
+                // Create a stop for each offset
+                for (float offset : offsets) {
+                    block.stops.push_back({offset, decls});
+                }
+            }
+            skipWhitespace();
+        }
+
+        if (!atEnd() && peek().type == TokenType::RightBrace) advance();
+
+        // Sort stops by offset
+        std::sort(block.stops.begin(), block.stops.end(),
+            [](const KeyframeStop& a, const KeyframeStop& b) {
+                return a.offset < b.offset;
+            });
+
+        return block;
     }
 
     void consumeAtRule() {

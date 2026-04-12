@@ -46,6 +46,26 @@ struct ImportRule {
     std::string layer;           // e.g. "reset", or empty; "\" means anonymous layer
 };
 
+// A @keyframes rule: a single keyframe stop (e.g. "0%", "50%", "from", "to")
+struct KeyframeStop {
+    float offset;  // 0.0–1.0 (from=0, to=1)
+    std::vector<Declaration> declarations;
+};
+
+// A @keyframes block: named animation with keyframe stops
+struct KeyframeBlock {
+    std::string name;
+    std::vector<KeyframeStop> stops;
+};
+
+// A @font-face rule: declares a custom font family
+struct FontFaceRule {
+    std::string family;       // font-family name
+    std::string src;          // url(...) source
+    int weight = 400;         // font-weight (100-900)
+    bool italic = false;      // font-style: italic
+};
+
 // A parsed stylesheet
 struct Stylesheet {
     std::vector<ImportRule> imports;
@@ -53,6 +73,8 @@ struct Stylesheet {
     std::vector<MediaBlock> mediaBlocks;
     std::vector<LayerBlock> layerBlocks;
     std::vector<ContainerBlock> containerBlocks;
+    std::vector<KeyframeBlock> keyframes;
+    std::vector<FontFaceRule> fontFaces;
     std::vector<std::string> layerOrder;  // declared layer ordering from @layer statements
 };
 

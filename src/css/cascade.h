@@ -56,6 +56,12 @@ public:
                                 const std::string& pseudoName,
                                 const ComputedStyle& elemStyle) const;
 
+    // Access stored @keyframes rules (populated by addStylesheet)
+    const std::vector<KeyframeBlock>& keyframes() const { return keyframes_; }
+
+    // Access stored @font-face rules (populated by addStylesheet)
+    const std::vector<FontFaceRule>& fontFaces() const { return fontFaces_; }
+
     // Clear all stylesheets
     void clear();
 
@@ -92,6 +98,8 @@ private:
     }
 
     std::vector<ScopedRule> rules_;
+    std::vector<KeyframeBlock> keyframes_;
+    std::vector<FontFaceRule> fontFaces_;
     size_t nextOrder_ = 0;
 
     // @import resolution

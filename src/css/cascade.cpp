@@ -213,6 +213,25 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
         }
     }
 
+    // Store @font-face rules
+    for (auto& ff : sheet.fontFaces) {
+        fontFaces_.push_back(ff);
+    }
+
+    // Store @keyframes rules
+    for (auto& kf : sheet.keyframes) {
+        // Later definitions override earlier ones with the same name
+        bool found = false;
+        for (auto& existing : keyframes_) {
+            if (existing.name == kf.name) {
+                existing = kf;
+                found = true;
+                break;
+            }
+        }
+        if (!found) keyframes_.push_back(kf);
+    }
+
     // Record pre-declared layer ordering
     for (auto& name : sheet.layerOrder) {
         getOrCreateLayerIndex(name);
@@ -693,6 +712,8 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
 
 void Cascade::clear() {
     rules_.clear();
+    keyframes_.clear();
+    fontFaces_.clear();
     nextOrder_ = 0;
     layerNames_.clear();
     loadedImports_.clear();
