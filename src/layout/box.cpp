@@ -14,8 +14,20 @@ void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
     layoutTree(root, Viewport{viewportWidth, 0.0f}, metrics);
 }
 
+// Reset every box in the tree to defaults so layoutTree can be called
+// repeatedly on the same (persistent) tree without carrying stale padding/
+// border/margin/contentRect state from the previous run. A few code paths —
+// notably layoutAbsoluteChild's shrink-wrap calculation — read these fields
+// to compute available widths, which silently drifts layout if not cleared.
+static void resetBoxes(LayoutNode* node) {
+    if (!node) return;
+    node->box = LayoutBox{};
+    for (auto* child : node->children()) resetBoxes(child);
+}
+
 void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
     if (!root) return;
+    resetBoxes(root);
     root->availableHeight = viewport.height;
     root->viewportHeight = viewport.height;
     layoutNode(root, viewport.width, metrics);
