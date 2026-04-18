@@ -70,6 +70,13 @@ struct LayoutNode {
     // Returns true if this node has an intrinsic size, false otherwise.
     virtual bool intrinsicSize(float& w, float& h, float maxWidth) const { return false; }
 
+    // Scroll offsets in px. Used by hit testing to map the test point into
+    // the child coordinate space when an element scrolls its content. Default
+    // is 0 (no scrolling). Consumers that expose scrolling containers should
+    // override these.
+    virtual float scrollLeftPx() const { return 0.0f; }
+    virtual float scrollTopPx()  const { return 0.0f; }
+
     // Output: layout writes the positioned box here
     LayoutBox box;
 
@@ -112,7 +119,8 @@ void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics
 // content+padding box. Call after layoutTree().
 void applyOverflowClipping(LayoutNode* root);
 
-// Hit test: find the deepest LayoutNode at a given point
+// Hit test: find the deepest LayoutNode at a given point.
+// Returns null if the point is outside the root's box.
 LayoutNode* hitTest(LayoutNode* root, float x, float y);
 
 // Get children for layout, flattening any 'display: contents' nodes into the parent's sequence.

@@ -1,4 +1,5 @@
 #include "layout/box.h"
+#include "css/transform.h"
 #include "layout/formatting_context.h"
 #include "layout/style_util.h"
 #include <algorithm>
@@ -73,70 +74,22 @@ bool createsStackingContext(const css::ComputedStyle& style) {
     return false;
 }
 
-// Parse translate(x, y) or translate(x) from a transform string.
-// Returns {tx, ty}. Only handles translate(), translateX(), translateY() with px values.
-std::pair<float, float> parseTranslate(const std::string& transform) {
-    float tx = 0.0f, ty = 0.0f;
-    size_t pos = 0;
-
-    while (pos < transform.size()) {
-        // Find translate functions
-        size_t tpos = transform.find("translate", pos);
-        if (tpos == std::string::npos) break;
-
-        size_t nameEnd = tpos + 9; // past "translate"
-        if (nameEnd >= transform.size()) break;
-
-        bool isX = false, isY = false;
-        if (transform[nameEnd] == 'X') { isX = true; nameEnd++; }
-        else if (transform[nameEnd] == 'Y') { isY = true; nameEnd++; }
-
-        // Find '('
-        if (nameEnd >= transform.size() || transform[nameEnd] != '(') {
-            pos = nameEnd;
-            continue;
-        }
-        nameEnd++; // skip '('
-
-        // Parse first value
-        size_t closeParen = transform.find(')', nameEnd);
-        if (closeParen == std::string::npos) break;
-
-        std::string args = transform.substr(nameEnd, closeParen - nameEnd);
-
-        // Split by comma
-        auto parseVal = [](const std::string& s) -> float {
-            float val = 0.0f;
-            const char* begin = s.data();
-            const char* end = begin + s.size();
-            // Skip leading whitespace
-            while (begin < end && (*begin == ' ' || *begin == '\t')) begin++;
-            auto [ptr, ec] = std::from_chars(begin, end, val);
-            // Assume px if no unit or explicit px
-            return val;
-        };
-
-        size_t comma = args.find(',');
-        if (isX) {
-            tx += parseVal(args);
-        } else if (isY) {
-            ty += parseVal(args);
-        } else if (comma != std::string::npos) {
-            tx += parseVal(args.substr(0, comma));
-            ty += parseVal(args.substr(comma + 1));
-        } else {
-            tx += parseVal(args);
-        }
-
-        pos = closeParen + 1;
-    }
-
-    return {tx, ty};
+// Does this element clip descendants' hit testing to its border box?
+// Matches the overflow-clipping rules used at paint time.
+bool clipsHitTesting(const css::ComputedStyle& style) {
+    auto check = [](const std::string& v) {
+        return !v.empty() && v != "visible";
+    };
+    if (check(styleVal(style, "overflow"))) return true;
+    if (check(styleVal(style, "overflow-x"))) return true;
+    if (check(styleVal(style, "overflow-y"))) return true;
+    return false;
 }
 
 // Hit test with offset accumulation: positions are relative to parent content area,
 // so we track the accumulated offset from the root.
-LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y, float offsetX, float offsetY) {
+LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
+                              float offsetX, float offsetY) {
     if (!node) return nullptr;
 
     auto& style = node->computedStyle();
@@ -151,21 +104,43 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y, float offsetX, 
     float absX = node->box.contentRect.x + offsetX;
     float absY = node->box.contentRect.y + offsetY;
 
-    // Apply transform: adjust the test point by inverse translation
-    float testX = x, testY = y;
-    const std::string& transform = styleVal(style, "transform");
-    if (!transform.empty() && transform != "none") {
-        auto [tx, ty] = parseTranslate(transform);
-        testX = x - tx;
-        testY = y - ty;
-    }
-
-    // Check if point is within this node's absolute border box
+    // Border box bounds
     float bx = absX - node->box.padding.left - node->box.border.left;
     float by = absY - node->box.padding.top - node->box.border.top;
     float bw = node->box.fullWidth();
     float bh = node->box.fullHeight();
-    if (testX < bx || testX >= bx + bw || testY < by || testY >= by + bh)
+
+    // Apply CSS transform: map the test point through the inverse transform
+    // around transform-origin. Must be computed after bw/bh are known so
+    // percentage translates/origins resolve against the element's border box.
+    float testX = x, testY = y;
+    const std::string& transform = styleVal(style, "transform");
+    if (!transform.empty() && transform != "none") {
+        css::Matrix2D mat = css::parseTransform(transform, bw, bh);
+        if (!mat.isIdentity()) {
+            float ox, oy;
+            css::parseTransformOrigin(styleVal(style, "transform-origin"),
+                                       bw, bh, ox, oy);
+            // Build full transform about the origin: T(origin) * M * T(-origin)
+            css::Matrix2D toOrigin{1,0,0,1, bx+ox, by+oy};
+            css::Matrix2D fromOrigin{1,0,0,1, -(bx+ox), -(by+oy)};
+            css::Matrix2D full = toOrigin * mat * fromOrigin;
+            css::Matrix2D inv;
+            if (full.invert(inv)) {
+                testX = inv.a * x + inv.c * y + inv.e;
+                testY = inv.b * x + inv.d * y + inv.f;
+            }
+        }
+    }
+
+    bool insideBounds =
+        (testX >= bx && testX < bx + bw && testY >= by && testY < by + bh);
+
+    // If this element clips descendants and the point is outside its border
+    // box, reject entirely — neither it nor its children can be hit. With
+    // overflow:visible, we still descend in case positioned children extend
+    // past our bounds.
+    if (!insideBounds && clipsHitTesting(style))
         return nullptr;
 
     // Sort children by CSS stacking order for hit testing (topmost first).
@@ -197,14 +172,23 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y, float offsetX, 
             return a.srcIdx > b.srcIdx;                  // later source order first
         });
 
-    // Children's positions are relative to this node's content area
+    // Children's positions are relative to this node's content area, offset
+    // by this element's scroll position (scrollLeft/scrollTop shift the
+    // visible content in the opposite direction).
+    float childOffsetX = absX - node->scrollLeftPx();
+    float childOffsetY = absY - node->scrollTopPx();
     for (auto& zc : zChildren) {
-        LayoutNode* hit = hitTestRecursive(zc.node, testX, testY, absX, absY);
+        LayoutNode* hit = hitTestRecursive(zc.node, testX, testY,
+                                            childOffsetX, childOffsetY);
         if (hit) return hit;
     }
 
-    // No child hit — this node is the deepest match
-    return node;
+    // No child hit — this node is the deepest match only if the point is
+    // actually inside its bounds (overflow:visible descendants may have
+    // extended us past the border box, but the node itself is not hittable
+    // there).
+    if (insideBounds) return node;
+    return nullptr;
 }
 
 // Clip a child's content rect to a parent's padding box (content + padding).
