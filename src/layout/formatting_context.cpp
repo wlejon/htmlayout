@@ -168,6 +168,15 @@ bool isIntrinsicSizingKeyword(const std::string& value) {
 float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
     if (!node) return 0.0f;
 
+    // Replaced elements (<input>, <canvas>, <svg>, etc.) report their content
+    // size via intrinsicSize() rather than having children to measure. Without
+    // this, a childless <input type="button"> would report min-content 0 and
+    // the flex algorithm would shrink it to padding-only width.
+    {
+        float iw = 0, ih = 0;
+        if (node->intrinsicSize(iw, ih, 0.0f)) return iw;
+    }
+
     auto& style = node->computedStyle();
     float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
     if (fontSize <= 0.0f) fontSize = 16.0f;
@@ -212,6 +221,13 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
 
 float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     if (!node) return 0.0f;
+
+    // Replaced elements report their own content width via intrinsicSize().
+    // See the same note in computeMinContentWidth above.
+    {
+        float iw = 0, ih = 0;
+        if (node->intrinsicSize(iw, ih, 0.0f)) return iw;
+    }
 
     auto& style = node->computedStyle();
     float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
