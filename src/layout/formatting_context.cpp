@@ -1,4 +1,5 @@
 #include "layout/formatting_context.h"
+#include "../from_chars_compat.h"
 #include "layout/block.h"
 #include "layout/inline.h"
 #include "layout/flex.h"
@@ -24,7 +25,7 @@ static float resolveSingleLength(const std::string& value, float referenceSize, 
     const char* end = begin + value.size();
     float num = 0.0f;
 
-    auto [ptr, ec] = std::from_chars(begin, end, num);
+    auto [ptr, ec] = htmlayout::from_chars_fp(begin, end, num);
     if (ec != std::errc()) {
         if (value == "thin") return 1.0f;
         if (value == "medium") return 3.0f;
@@ -342,7 +343,7 @@ float resolveLineHeight(const std::string& value, float fontSize) {
     const char* begin = value.data();
     const char* end = begin + value.size();
     float num = 0.0f;
-    auto [ptr, ec] = std::from_chars(begin, end, num);
+    auto [ptr, ec] = htmlayout::from_chars_fp(begin, end, num);
     if (ec == std::errc()) {
         std::string unit(ptr, end);
         if (unit.empty()) {
@@ -374,7 +375,7 @@ float resolveLength(const std::string& value, float referenceSize, float fontSiz
     const char* begin = value.data();
     const char* end = begin + value.size();
     float num = 0.0f;
-    auto [ptr, ec] = std::from_chars(begin, end, num);
+    auto [ptr, ec] = htmlayout::from_chars_fp(begin, end, num);
     if (ec != std::errc()) {
         return resolveSingleLength(value, referenceSize, fontSize);
     }

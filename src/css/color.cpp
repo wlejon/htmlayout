@@ -1,4 +1,5 @@
 #include "css/color.h"
+#include "../from_chars_compat.h"
 #include <unordered_map>
 #include <algorithm>
 #include <cmath>
@@ -198,7 +199,7 @@ float parseNum(const std::string& s) {
         trimmed.pop_back();
         isPercent = true;
     }
-    auto [ptr, ec] = std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), v);
+    auto [ptr, ec] = htmlayout::from_chars_fp(trimmed.data(), trimmed.data() + trimmed.size(), v);
     if (ec != std::errc()) return 0;
     if (isPercent) v = v * 255.0f / 100.0f;
     return v;
@@ -339,7 +340,7 @@ Color parseColor(const std::string& value) {
                     float rawA = 0;
                     std::string trimA = parts[3];
                     while (!trimA.empty() && trimA.front() == ' ') trimA.erase(0, 1);
-                    auto [p, e] = std::from_chars(trimA.data(), trimA.data() + trimA.size(), rawA);
+                    auto [p, e] = htmlayout::from_chars_fp(trimA.data(), trimA.data() + trimA.size(), rawA);
                     if (e == std::errc()) {
                         if (rawA <= 1.0f) a = rawA * 255.0f;
                         else a = rawA;
@@ -367,7 +368,7 @@ Color parseColor(const std::string& value) {
                 if (hStr.size() > 3 && hStr.substr(hStr.size() - 3) == "deg") {
                     hStr = hStr.substr(0, hStr.size() - 3);
                 }
-                std::from_chars(hStr.data(), hStr.data() + hStr.size(), h);
+                htmlayout::from_chars_fp(hStr.data(), hStr.data() + hStr.size(), h);
 
                 // s and l as percentages
                 float s = 0, l = 0;
@@ -375,13 +376,13 @@ Color parseColor(const std::string& value) {
                 while (!sStr.empty() && sStr.front() == ' ') sStr.erase(0, 1);
                 while (!sStr.empty() && sStr.back() == ' ') sStr.pop_back();
                 if (!sStr.empty() && sStr.back() == '%') sStr.pop_back();
-                std::from_chars(sStr.data(), sStr.data() + sStr.size(), s);
+                htmlayout::from_chars_fp(sStr.data(), sStr.data() + sStr.size(), s);
                 s /= 100.0f;
 
                 while (!lStr.empty() && lStr.front() == ' ') lStr.erase(0, 1);
                 while (!lStr.empty() && lStr.back() == ' ') lStr.pop_back();
                 if (!lStr.empty() && lStr.back() == '%') lStr.pop_back();
-                std::from_chars(lStr.data(), lStr.data() + lStr.size(), l);
+                htmlayout::from_chars_fp(lStr.data(), lStr.data() + lStr.size(), l);
                 l /= 100.0f;
 
                 float a = 1.0f;
@@ -391,10 +392,10 @@ Color parseColor(const std::string& value) {
                     while (!aStr.empty() && aStr.back() == ' ') aStr.pop_back();
                     if (!aStr.empty() && aStr.back() == '%') {
                         aStr.pop_back();
-                        std::from_chars(aStr.data(), aStr.data() + aStr.size(), a);
+                        htmlayout::from_chars_fp(aStr.data(), aStr.data() + aStr.size(), a);
                         a /= 100.0f;
                     } else {
-                        std::from_chars(aStr.data(), aStr.data() + aStr.size(), a);
+                        htmlayout::from_chars_fp(aStr.data(), aStr.data() + aStr.size(), a);
                     }
                 }
 

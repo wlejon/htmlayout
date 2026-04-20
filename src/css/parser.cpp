@@ -1,4 +1,5 @@
 #include "css/parser.h"
+#include "../from_chars_compat.h"
 #include <algorithm>
 #include <charconv>
 #include <cctype>
@@ -779,7 +780,7 @@ float parseMediaLength(const std::string& s) {
     float num = 0;
     const char* begin = s.data();
     const char* end = begin + s.size();
-    auto [ptr, ec] = std::from_chars(begin, end, num);
+    auto [ptr, ec] = htmlayout::from_chars_fp(begin, end, num);
     if (ec != std::errc()) return 0;
     // unit is ignored for now (assume px)
     return num;

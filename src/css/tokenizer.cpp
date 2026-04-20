@@ -1,4 +1,5 @@
 #include "css/tokenizer.h"
+#include "../from_chars_compat.h"
 #include <cctype>
 #include <cmath>
 #include <charconv>
@@ -133,7 +134,7 @@ private:
             while (isDigit(peek())) repr += advance();
         }
         double val = 0.0;
-        auto [ptr, ec] = std::from_chars(repr.data(), repr.data() + repr.size(), val);
+        auto [ptr, ec] = htmlayout::from_chars_fp(repr.data(), repr.data() + repr.size(), val);
         if (ec != std::errc()) val = 0.0;
         return {val, repr};
     }
