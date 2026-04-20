@@ -15,6 +15,7 @@
 #include "test_webcomponents.h"
 #include "test_coverage.h"
 #include "test_spec_completeness.h"
+#include "test_spec_validator.h"
 #include <cstdio>
 
 int g_passed = 0;
@@ -72,6 +73,9 @@ int main() {
     printf("\n");
 
     testSpecCompleteness();
+    printf("\n");
+
+    testSpecCompliance();
     printf("\n");
 
     printf("=== Results: %d passed, %d failed ===\n", g_passed, g_failed);
