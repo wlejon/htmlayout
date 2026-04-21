@@ -26,6 +26,7 @@ struct LineItem {
     LayoutNode* node = nullptr;  // non-null for inline-block elements
     std::string text;       // non-empty for text items
     bool isInlineBlock = false;
+    bool forceBreak = false;  // true for <br>: forces a new line at this point
 };
 
 struct LineBox {
@@ -44,6 +45,17 @@ std::vector<LineBox> buildLineBoxes(
     LineBox currentLine;
 
     for (auto& item : items) {
+        if (item.forceBreak) {
+            // <br>: end current line, start a new one. If line is empty, emit an
+            // empty line of at least the break's height so the gap is visible.
+            if (currentLine.items.empty()) {
+                currentLine.maxHeight = std::max(currentLine.maxHeight, item.height);
+                currentLine.maxBaseline = std::max(currentLine.maxBaseline, item.baseline);
+            }
+            lines.push_back(std::move(currentLine));
+            currentLine = LineBox{};
+            continue;
+        }
         // Check if item fits on current line
         if (!currentLine.items.empty() &&
             currentLine.totalWidth + item.width > availableWidth) {
@@ -148,6 +160,25 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         } else if (hasIntrinsic) {
             node->box.contentRect.width = intrW;
             contentAvail = intrW;
+        } else if (display == "inline-block") {
+            // Shrink-to-fit: content width = min(max-content, available).
+            // Without this, block-level children (divs) laid out at full
+            // `contentAvail` would expand the inline-block to parent width,
+            // breaking horizontal flow of sibling inline-blocks.
+            float maxContent = computeMaxContentWidth(node, metrics);
+            float fitAvail = std::min(maxContent, contentAvail);
+            // Honor min-width so fit-content doesn't shrink below it.
+            const std::string& minWVal = styleVal(style, "min-width");
+            if (!minWVal.empty() && minWVal != "auto") {
+                float minW = resolveLength(minWVal, availableWidth, fontSize);
+                if (styleVal(style, "box-sizing") == "border-box") {
+                    minW -= paddingH + borderH;
+                }
+                if (fitAvail < minW) fitAvail = minW;
+            }
+            if (fitAvail < 0) fitAvail = 0;
+            contentAvail = fitAvail;
+            node->box.contentRect.width = fitAvail;
         }
 
         if (heightVal != "auto" && !heightVal.empty()) {
@@ -223,6 +254,16 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         cursorX += run.width;
                         lineMaxH = std::max(lineMaxH, h);
                     }
+                } else if ((child->tagName() == "br" || child->tagName() == "BR")) {
+                    // Forced line break: end current line, start a new one.
+                    float brH = std::max(ibLineHeight,
+                        metrics.lineHeight(fontFamily, fontSize, fontWeight));
+                    if (cursorX == 0 && lineMaxH == 0) lineMaxH = brH;
+                    maxContentW = std::max(maxContentW, cursorX);
+                    cursorY += lineMaxH;
+                    cursorX = 0;
+                    lineMaxH = 0;
+                    child->box.contentRect = {};
                 } else {
                     auto& cs = child->computedStyle();
                     if (styleVal(cs, "display") == "none") { child->box = LayoutBox{}; continue; }
@@ -328,6 +369,17 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             const std::string& childPos = styleVal(childStyle, "position");
             if (childPos == "absolute" || childPos == "fixed") continue;
 
+            if ((child->tagName() == "br" || child->tagName() == "BR")) {
+                // Forced line break
+                LineItem item;
+                item.forceBreak = true;
+                item.height = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+                item.baseline = item.height * 0.8f;
+                item.node = child;
+                child->box.contentRect = {};
+                allItems.push_back(std::move(item));
+                continue;
+            }
             if (childDisplay == "inline-block" || childDisplay == "inline-flex" || childDisplay == "inline-grid") {
                 // Layout as atomic inline-level box, then add to line items
                 layoutNode(child, contentAvail, metrics);

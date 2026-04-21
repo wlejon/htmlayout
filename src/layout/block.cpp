@@ -180,6 +180,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             float width = 0, height = 0;
             LayoutNode* node = nullptr;
             bool isElement = false;
+            bool forceBreak = false;
         };
         std::vector<IFCItem> items;
 
@@ -192,7 +193,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     "normal", "normal", ls, ws);
                 for (auto& run : runs) {
                     if (run.text.empty() && run.width == 0) continue;
-                    items.push_back({run.width, std::max(run.height, lineHeight), child, false});
+                    items.push_back({run.width, std::max(run.height, lineHeight), child, false, false});
                 }
             } else {
                 auto& cs = child->computedStyle();
@@ -200,11 +201,16 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 if (d == "none") { child->box = LayoutBox{}; continue; }
                 const std::string& cp = styleVal(cs, "position");
                 if (cp == "absolute" || cp == "fixed") continue;
+                if ((child->tagName() == "br" || child->tagName() == "BR")) {
+                    child->box = LayoutBox{};
+                    items.push_back({0.0f, lineHeight, child, false, true});
+                    continue;
+                }
                 layoutNode(child, childAvailable, metrics);
                 items.push_back({
                     child->box.fullWidth() + child->box.margin.left + child->box.margin.right,
                     child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom,
-                    child, true});
+                    child, true, false});
             }
         }
 
@@ -225,6 +231,16 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             size_t lineStart = 0;
             float cursorX = 0, lineMaxH = 0;
             for (size_t i = 0; i < items.size(); i++) {
+                if (items[i].forceBreak) {
+                    // <br>: terminate line after including the break marker so it
+                    // advances cursorY by lineHeight even if the line was empty.
+                    if (cursorX == 0 && lineMaxH == 0) lineMaxH = items[i].height;
+                    lines.push_back({lineStart, i + 1, cursorX, lineMaxH});
+                    lineStart = i + 1;
+                    cursorX = 0;
+                    lineMaxH = 0;
+                    continue;
+                }
                 if (cursorX > 0 && cursorX + items[i].width > childAvailable) {
                     lines.push_back({lineStart, i, cursorX, lineMaxH});
                     lineStart = i;
@@ -263,6 +279,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
             for (size_t i = line.start; i < line.end; i++) {
                 auto& item = items[i];
+                if (item.forceBreak) continue;
                 if (item.node) {
                     if (item.isElement) {
                         item.node->box.contentRect.x = cursorX + item.node->box.margin.left +
@@ -335,6 +352,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             LayoutNode* node = nullptr;
             float width = 0, height = 0;
             bool isText = false;
+            bool forceBreak = false;
         };
         std::vector<AnonItem> anonItems;
 
@@ -353,35 +371,46 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 }
                 float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize);
                 th = std::max(th, lh);
-                anonItems.push_back({inl, tw, th, true});
+                anonItems.push_back({inl, tw, th, true, false});
+            } else if (inl->tagName() == "br" || inl->tagName() == "BR") {
+                float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize);
+                inl->box = LayoutBox{};
+                anonItems.push_back({inl, 0.0f, lh, false, true});
             } else {
                 layoutNode(inl, childAvailable, metrics);
                 float cw = inl->box.fullWidth() + inl->box.margin.left + inl->box.margin.right;
                 float ch = inl->box.fullHeight() + inl->box.margin.top + inl->box.margin.bottom;
-                anonItems.push_back({inl, cw, ch, false});
+                anonItems.push_back({inl, cw, ch, false, false});
             }
         }
 
         // Build lines
-        struct AnonLine { size_t start; size_t end; float totalWidth; float maxHeight; };
+        struct AnonLine { size_t start; size_t end; float totalWidth; float maxHeight; bool endsWithBreak; };
         std::vector<AnonLine> anonLines;
         {
             size_t ls = 0;
             float cx = 0, mh = 0;
             for (size_t i = 0; i < anonItems.size(); i++) {
+                if (anonItems[i].forceBreak) {
+                    if (cx == 0 && mh == 0) mh = anonItems[i].height;
+                    anonLines.push_back({ls, i + 1, cx, mh, true});
+                    ls = i + 1; cx = 0; mh = 0;
+                    continue;
+                }
                 if (cx > 0 && cx + anonItems[i].width > childAvailable) {
-                    anonLines.push_back({ls, i, cx, mh});
+                    anonLines.push_back({ls, i, cx, mh, false});
                     ls = i; cx = 0; mh = 0;
                 }
                 cx += anonItems[i].width;
                 mh = std::max(mh, anonItems[i].height);
             }
-            if (ls < anonItems.size()) anonLines.push_back({ls, anonItems.size(), cx, mh});
+            if (ls < anonItems.size()) anonLines.push_back({ls, anonItems.size(), cx, mh, false});
         }
 
-        // Position with text-align (skip zero-width lines from whitespace)
+        // Position with text-align (skip zero-width lines from whitespace,
+        // but preserve explicit <br>-terminated lines so blank lines render)
         for (auto& line : anonLines) {
-            if (line.totalWidth <= 0) continue;
+            if (line.totalWidth <= 0 && !line.endsWithBreak) continue;
             float extra = childAvailable - line.totalWidth;
             float xOff = 0;
             if (extra > 0) {
@@ -391,6 +420,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             float cx = xOff;
             for (size_t i = line.start; i < line.end; i++) {
                 auto& ai = anonItems[i];
+                if (ai.forceBreak) continue;
                 if (ai.isText) {
                     ai.node->box.contentRect.x = cx;
                     ai.node->box.contentRect.y = cursorY;
