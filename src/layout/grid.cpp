@@ -933,6 +933,15 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Set container dimensions
     node->box.contentRect.width = containerWidth;
 
+    // Natural (unconstrained) content height = sum of tracks minus trailing gap.
+    // Computed first so it survives any explicit height or parent-imposed clamp —
+    // consumers use this for scroll extent / overflow detection.
+    float naturalH = 0;
+    if (numRows > 0) {
+        naturalH = rowPositions[numRows] - rowGap;
+        if (naturalH < 0) naturalH = 0;
+    }
+
     float specH = resolveDim(styleVal(style, "height"), 0, fontSize);
     if (specH >= 0) {
         if (styleVal(style, "box-sizing") == "border-box")
@@ -941,14 +950,10 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             node->box.contentRect.height = specH;
         if (node->box.contentRect.height < 0) node->box.contentRect.height = 0;
     } else {
-        node->box.contentRect.height = numRows > 0 ? rowPositions[numRows] : 0;
-        // Remove trailing gap
-        if (numRows > 0) {
-            node->box.contentRect.height = rowPositions[numRows] - (numRows > 0 ? rowGap : 0);
-            if (node->box.contentRect.height < 0) node->box.contentRect.height = 0;
-        }
+        node->box.contentRect.height = naturalH;
     }
 
+    node->box.naturalHeight = std::max(naturalH, node->box.contentRect.height);
 }
 
 } // namespace htmlayout::layout
