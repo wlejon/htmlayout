@@ -27,6 +27,10 @@ struct LineItem {
     std::string text;       // non-empty for text items
     bool isInlineBlock = false;
     bool forceBreak = false;  // true for <br>: forces a new line at this point
+    // Source byte range of the run within `node->textContent()` (text items
+    // only) — preserved so placed runs can be recorded for caret/selection.
+    int  srcStart = 0;
+    int  srcEnd   = 0;
 };
 
 struct LineBox {
@@ -234,6 +238,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         fontFamily, fontSize, fontWeight, whiteSpace, metrics,
                         "normal", "normal", ls, ws);
                     bool firstRun = true;
+                    child->box.textRuns.clear();
                     for (auto& run : runs) {
                         if (run.text.empty() && run.width == 0) continue;
                         float h = std::max(run.height, ibLineHeight);
@@ -243,14 +248,34 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                             cursorX = 0;
                             lineMaxH = 0;
                         }
-                        // Store text node position for draw traversal
+                        PlacedTextRun placed;
+                        placed.x = cursorX;
+                        placed.y = cursorY;
+                        placed.width = run.width;
+                        placed.height = h;
+                        placed.text = run.text;
+                        placed.srcStart = run.srcStart;
+                        placed.srcEnd   = run.srcEnd;
+                        // Record first run's position on contentRect so the
+                        // draw traversal knows the text node's origin.
                         if (firstRun) {
                             child->box.contentRect.x = cursorX;
                             child->box.contentRect.y = cursorY;
                             child->box.contentRect.width = run.width;
                             child->box.contentRect.height = h;
                             firstRun = false;
+                        } else {
+                            // Extend to union of placed runs.
+                            float right = std::max(
+                                child->box.contentRect.x + child->box.contentRect.width,
+                                cursorX + run.width);
+                            float bottom = std::max(
+                                child->box.contentRect.y + child->box.contentRect.height,
+                                cursorY + h);
+                            child->box.contentRect.width  = right  - child->box.contentRect.x;
+                            child->box.contentRect.height = bottom - child->box.contentRect.y;
                         }
+                        child->box.textRuns.push_back(std::move(placed));
                         cursorX += run.width;
                         lineMaxH = std::max(lineMaxH, h);
                     }
@@ -348,6 +373,9 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 fontFamily, fontSize, fontWeight, whiteSpace, metrics,
                 owrap, wbreak, ls, ws);
 
+            // Fresh layout pass: clear any previously placed runs so we don't
+            // accumulate stale geometry from the prior layout.
+            child->box.textRuns.clear();
             for (auto& run : runs) {
                 LineItem item;
                 item.text = run.text;
@@ -355,6 +383,8 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 item.height = run.height;
                 item.baseline = run.height * 0.8f; // approximate baseline at 80% of height
                 item.node = child;
+                item.srcStart = run.srcStart;
+                item.srcEnd   = run.srcEnd;
                 allItems.push_back(std::move(item));
             }
         } else {
@@ -464,12 +494,40 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 item.node->box.contentRect.y = yPos + item.node->box.margin.top +
                     item.node->box.padding.top + item.node->box.border.top;
             } else if (item.node && item.node->isTextNode()) {
-                // Position text run so the draw traversal knows where to draw it
+                // Position text run so the draw traversal knows where to draw
+                // it and record it in the text node's placed-runs list for
+                // selection/caret geometry queries.
                 float yPos = cursorY + (line.maxBaseline - item.baseline);
-                item.node->box.contentRect.x = cursorX;
-                item.node->box.contentRect.y = yPos;
-                item.node->box.contentRect.width = item.width;
-                item.node->box.contentRect.height = item.height;
+                PlacedTextRun placed;
+                placed.x = cursorX;
+                placed.y = yPos;
+                placed.width = item.width;
+                placed.height = item.height;
+                placed.text = item.text;
+                placed.srcStart = item.srcStart;
+                placed.srcEnd   = item.srcEnd;
+                auto& runs = item.node->box.textRuns;
+                if (runs.empty()) {
+                    item.node->box.contentRect.x = cursorX;
+                    item.node->box.contentRect.y = yPos;
+                    item.node->box.contentRect.width = item.width;
+                    item.node->box.contentRect.height = item.height;
+                } else {
+                    // Extend contentRect to bound every placed run.
+                    float left = std::min(item.node->box.contentRect.x, cursorX);
+                    float top  = std::min(item.node->box.contentRect.y, yPos);
+                    float right = std::max(
+                        item.node->box.contentRect.x + item.node->box.contentRect.width,
+                        cursorX + item.width);
+                    float bottom = std::max(
+                        item.node->box.contentRect.y + item.node->box.contentRect.height,
+                        yPos + item.height);
+                    item.node->box.contentRect.x = left;
+                    item.node->box.contentRect.y = top;
+                    item.node->box.contentRect.width = right - left;
+                    item.node->box.contentRect.height = bottom - top;
+                }
+                runs.push_back(std::move(placed));
             }
             cursorX += item.width + gap;
         }

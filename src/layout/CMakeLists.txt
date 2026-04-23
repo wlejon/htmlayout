@@ -6,6 +6,7 @@ add_library(htmlayout_layout STATIC
     grid.cpp
     table.cpp
     text.cpp
+    text_geometry.cpp
     multicol.cpp
     formatting_context.cpp
 )

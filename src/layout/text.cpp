@@ -4,6 +4,44 @@
 
 namespace htmlayout::layout {
 
+namespace {
+
+// A word extracted from the source text along with its byte position in the
+// original string. Needed so caller can round-trip DOM char offsets.
+struct SourceWord {
+    std::string text;
+    int srcStart;
+    int srcEnd; // exclusive
+};
+
+// Scan a source string into words (runs of non-whitespace) with their source
+// byte ranges. Leading/trailing whitespace is discarded; only word positions
+// survive. Used by the collapsing whitespace paths ("normal", "nowrap").
+std::vector<SourceWord> scanWords(const std::string& text) {
+    std::vector<SourceWord> words;
+    std::string current;
+    int currentStart = -1;
+    for (size_t i = 0; i < text.size(); ++i) {
+        char c = text[i];
+        if (std::isspace(static_cast<unsigned char>(c))) {
+            if (!current.empty()) {
+                words.push_back({std::move(current), currentStart, static_cast<int>(i)});
+                current.clear();
+                currentStart = -1;
+            }
+        } else {
+            if (currentStart < 0) currentStart = static_cast<int>(i);
+            current += c;
+        }
+    }
+    if (!current.empty()) {
+        words.push_back({std::move(current), currentStart, static_cast<int>(text.size())});
+    }
+    return words;
+}
+
+} // namespace
+
 std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                                         float availableWidth,
                                         const std::string& fontFamily,
@@ -39,217 +77,197 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
 
     // white-space: pre-line — collapse spaces but preserve newlines, wrap at width
     if (whiteSpace == "pre-line") {
-        // Split by newlines first
-        std::istringstream stream(text);
-        std::string rawLine;
-        while (std::getline(stream, rawLine)) {
-            // Collapse whitespace within each line
-            std::vector<std::string> words;
-            {
-                std::string word;
-                for (char c : rawLine) {
-                    if (c == ' ' || c == '\t') {
-                        if (!word.empty()) {
-                            words.push_back(word);
-                            word.clear();
-                        }
-                    } else {
-                        word += c;
-                    }
-                }
-                if (!word.empty()) words.push_back(word);
-            }
+        // Track source offsets while splitting by newlines.
+        size_t cursor = 0;
+        while (cursor <= text.size()) {
+            size_t nl = text.find('\n', cursor);
+            size_t lineEnd = (nl == std::string::npos) ? text.size() : nl;
+            std::string rawLine = text.substr(cursor, lineEnd - cursor);
+            int lineBase = static_cast<int>(cursor);
+
+            // Collapse whitespace within each line, tracking source offsets
+            auto words = scanWords(rawLine);
+            // Offset words' src by lineBase so they point into the original text.
+            for (auto& w : words) { w.srcStart += lineBase; w.srcEnd += lineBase; }
 
             if (words.empty()) {
-                runs.push_back({"", 0, lineH});
+                runs.push_back({"", 0, lineH, lineBase, static_cast<int>(lineEnd)});
+                cursor = (nl == std::string::npos) ? text.size() + 1 : nl + 1;
                 continue;
             }
 
             // Greedy line packing within this source line
             std::string currentLine;
             float currentWidth = 0;
+            int runSrcStart = words.front().srcStart;
+            int runSrcEnd   = words.front().srcEnd;
             float spaceWidth = measureSpace();
             for (size_t i = 0; i < words.size(); i++) {
-                float wordWidth = measureWithSpacing(words[i]);
+                float wordWidth = measureWithSpacing(words[i].text);
                 if (currentLine.empty()) {
-                    currentLine = words[i];
+                    currentLine = words[i].text;
                     currentWidth = wordWidth;
+                    runSrcStart = words[i].srcStart;
+                    runSrcEnd   = words[i].srcEnd;
                 } else {
                     float testWidth = currentWidth + spaceWidth + wordWidth;
                     if (testWidth <= availableWidth) {
-                        currentLine += " " + words[i];
+                        currentLine += " " + words[i].text;
                         currentWidth = testWidth;
+                        runSrcEnd = words[i].srcEnd;
                     } else {
-                        runs.push_back({currentLine, currentWidth, lineH});
-                        currentLine = words[i];
+                        runs.push_back({currentLine, currentWidth, lineH, runSrcStart, runSrcEnd});
+                        currentLine = words[i].text;
                         currentWidth = wordWidth;
+                        runSrcStart = words[i].srcStart;
+                        runSrcEnd   = words[i].srcEnd;
                     }
                 }
             }
             if (!currentLine.empty()) {
-                runs.push_back({currentLine, currentWidth, lineH});
+                runs.push_back({currentLine, currentWidth, lineH, runSrcStart, runSrcEnd});
             }
+
+            cursor = (nl == std::string::npos) ? text.size() + 1 : nl + 1;
         }
         return runs;
     }
 
-    // white-space: pre — preserve all whitespace, no wrapping
+    // white-space: pre / pre-wrap — preserve all whitespace.
     if (whiteSpace == "pre" || whiteSpace == "pre-wrap") {
-        // Split by newlines, each line is a run
-        std::istringstream stream(text);
-        std::string line;
-        while (std::getline(stream, line)) {
+        size_t cursor = 0;
+        while (cursor <= text.size()) {
+            size_t nl = text.find('\n', cursor);
+            size_t lineEnd = (nl == std::string::npos) ? text.size() : nl;
+            std::string line = text.substr(cursor, lineEnd - cursor);
+            int lineBase = static_cast<int>(cursor);
+
             float w = measureWithSpacing(line);
             if (whiteSpace == "pre-wrap" && w > availableWidth && !line.empty()) {
-                // pre-wrap: preserve whitespace but wrap at available width
-                // For simplicity, wrap at word boundaries
                 std::string current;
                 float currentW = 0;
+                int segStart = lineBase;
                 for (size_t i = 0; i < line.size(); i++) {
                     char c = line[i];
                     std::string test = current + c;
                     float testW = measureWithSpacing(test);
                     if (testW > availableWidth && !current.empty()) {
-                        runs.push_back({current, currentW, lineH});
+                        runs.push_back({current, currentW, lineH,
+                                        segStart, static_cast<int>(lineBase + i)});
                         current = std::string(1, c);
                         currentW = measureWithSpacing(current);
+                        segStart = static_cast<int>(lineBase + i);
                     } else {
                         current = test;
                         currentW = testW;
                     }
                 }
                 if (!current.empty()) {
-                    runs.push_back({current, currentW, lineH});
+                    runs.push_back({current, currentW, lineH,
+                                    segStart, static_cast<int>(lineEnd)});
                 }
             } else {
-                runs.push_back({line, w, lineH});
+                runs.push_back({line, w, lineH, lineBase, static_cast<int>(lineEnd)});
             }
+
+            cursor = (nl == std::string::npos) ? text.size() + 1 : nl + 1;
         }
         return runs;
     }
 
-    // white-space: nowrap — collapse whitespace, no wrapping
+    // white-space: nowrap — collapse whitespace, no wrapping, single run.
     if (whiteSpace == "nowrap") {
-        // Collapse whitespace and emit as single run
-        std::string collapsed;
-        bool lastWasSpace = false;
-        for (char c : text) {
-            if (std::isspace(static_cast<unsigned char>(c))) {
-                if (!lastWasSpace && !collapsed.empty()) {
-                    collapsed += ' ';
-                    lastWasSpace = true;
-                }
-            } else {
-                collapsed += c;
-                lastWasSpace = false;
-            }
+        auto words = scanWords(text);
+        if (words.empty()) return runs;
+        std::string collapsed = words.front().text;
+        for (size_t i = 1; i < words.size(); ++i) {
+            collapsed += ' ';
+            collapsed += words[i].text;
         }
-        // Trim trailing space
-        if (!collapsed.empty() && collapsed.back() == ' ')
-            collapsed.pop_back();
         float w = measureWithSpacing(collapsed);
-        if (!collapsed.empty()) {
-            runs.push_back({collapsed, w, lineH});
-        }
+        runs.push_back({collapsed, w, lineH,
+                        words.front().srcStart, words.back().srcEnd});
         return runs;
     }
 
-    // white-space: normal (default) — collapse whitespace, wrap at word boundaries
-    // 1. Collapse whitespace and split into words
-    std::vector<std::string> words;
-    {
-        std::string word;
-        bool inSpace = true;
-        for (char c : text) {
-            if (std::isspace(static_cast<unsigned char>(c))) {
-                if (!word.empty()) {
-                    words.push_back(word);
-                    word.clear();
-                }
-                inSpace = true;
-            } else {
-                word += c;
-                inSpace = false;
-            }
-        }
-        if (!word.empty()) words.push_back(word);
-    }
-
+    // white-space: normal — collapse whitespace, wrap at word boundaries.
+    auto words = scanWords(text);
     if (words.empty()) return runs;
 
-    // 2. Greedy line packing
+    // Greedy line packing
     std::string currentLine;
     float currentWidth = 0;
+    int runSrcStart = words.front().srcStart;
+    int runSrcEnd   = words.front().srcEnd;
     float spaceWidth = measureSpace();
 
     bool canBreakWord = (overflowWrap == "break-word" || overflowWrap == "anywhere" ||
                          wordBreak == "break-all");
 
+    // Character-level break: called when a single word doesn't fit on the line.
+    // Emits one run per character slice, tracking source offsets by adjusting
+    // `base` as we advance through the word's source range.
+    auto breakWordByChar = [&](const SourceWord& w) {
+        std::string partial;
+        float partialW = 0;
+        int partialStart = w.srcStart;
+        for (size_t ci = 0; ci < w.text.size(); ci++) {
+            std::string test = partial + w.text[ci];
+            float testW = measureWithSpacing(test);
+            if (testW > availableWidth && !partial.empty()) {
+                runs.push_back({partial, partialW, lineH,
+                                partialStart,
+                                static_cast<int>(w.srcStart + ci)});
+                partial = std::string(1, w.text[ci]);
+                partialW = measureWithSpacing(partial);
+                partialStart = static_cast<int>(w.srcStart + ci);
+            } else {
+                partial = test;
+                partialW = testW;
+            }
+        }
+        currentLine = partial;
+        currentWidth = partialW;
+        runSrcStart = partialStart;
+        runSrcEnd   = w.srcEnd;
+    };
+
     for (size_t i = 0; i < words.size(); i++) {
-        float wordWidth = measureWithSpacing(words[i]);
+        float wordWidth = measureWithSpacing(words[i].text);
 
         if (currentLine.empty()) {
-            // First word on line
             if (canBreakWord && wordWidth > availableWidth) {
-                // Break the word character by character
-                std::string partial;
-                float partialW = 0;
-                for (size_t ci = 0; ci < words[i].size(); ci++) {
-                    std::string test = partial + words[i][ci];
-                    float testW = measureWithSpacing(test);
-                    if (testW > availableWidth && !partial.empty()) {
-                        runs.push_back({partial, partialW, lineH});
-                        partial = std::string(1, words[i][ci]);
-                        partialW = measureWithSpacing(partial);
-                    } else {
-                        partial = test;
-                        partialW = testW;
-                    }
-                }
-                currentLine = partial;
-                currentWidth = partialW;
+                breakWordByChar(words[i]);
             } else {
-                currentLine = words[i];
+                currentLine = words[i].text;
                 currentWidth = wordWidth;
+                runSrcStart = words[i].srcStart;
+                runSrcEnd   = words[i].srcEnd;
             }
         } else {
             float testWidth = currentWidth + spaceWidth + wordWidth;
             if (testWidth <= availableWidth) {
-                currentLine += " " + words[i];
+                currentLine += " " + words[i].text;
                 currentWidth = testWidth;
+                runSrcEnd = words[i].srcEnd;
             } else {
-                // Wrap: emit current line, start new one
-                runs.push_back({currentLine, currentWidth, lineH});
+                runs.push_back({currentLine, currentWidth, lineH,
+                                runSrcStart, runSrcEnd});
 
                 if (canBreakWord && wordWidth > availableWidth) {
-                    // Break the word character by character
-                    std::string partial;
-                    float partialW = 0;
-                    for (size_t ci = 0; ci < words[i].size(); ci++) {
-                        std::string test = partial + words[i][ci];
-                        float testW = measureWithSpacing(test);
-                        if (testW > availableWidth && !partial.empty()) {
-                            runs.push_back({partial, partialW, lineH});
-                            partial = std::string(1, words[i][ci]);
-                            partialW = measureWithSpacing(partial);
-                        } else {
-                            partial = test;
-                            partialW = testW;
-                        }
-                    }
-                    currentLine = partial;
-                    currentWidth = partialW;
+                    breakWordByChar(words[i]);
                 } else {
-                    currentLine = words[i];
+                    currentLine = words[i].text;
                     currentWidth = wordWidth;
+                    runSrcStart = words[i].srcStart;
+                    runSrcEnd   = words[i].srcEnd;
                 }
             }
         }
     }
 
-    // Emit final line
     if (!currentLine.empty()) {
-        runs.push_back({currentLine, currentWidth, lineH});
+        runs.push_back({currentLine, currentWidth, lineH, runSrcStart, runSrcEnd});
     }
 
     return runs;

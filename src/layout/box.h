@@ -17,6 +17,26 @@ struct Edges {
     float top = 0, right = 0, bottom = 0, left = 0;
 };
 
+// Geometry of one placed text run within a TextNode's layout box. Populated
+// by inline layout for each run returned by breakTextIntoRuns. Coordinates
+// are in the same space as LayoutBox.contentRect (relative to the containing
+// block's border box for block children; absolute after layoutTree converts).
+//
+// srcStart/srcEnd are byte offsets into the original (uncollapsed) source
+// text of the TextNode, so callers can map DOM Range endpoints to runs for
+// caret placement and selection rendering. The displayed `text` is the
+// post-processing string the renderer draws and may be shorter than
+// (srcEnd - srcStart) when whitespace was collapsed.
+struct PlacedTextRun {
+    int   srcStart  = 0;
+    int   srcEnd    = 0;
+    float x         = 0;
+    float y         = 0;
+    float width     = 0;
+    float height    = 0;
+    std::string text; // rendered substring (for prefix-width lookups)
+};
+
 // The output of layout: a positioned box with resolved geometry
 struct LayoutBox {
     Rect contentRect;       // content area position and size
@@ -33,6 +53,10 @@ struct LayoutBox {
 
     // Dirty flag for incremental relayout
     bool dirty = true;
+
+    // Placed text runs — filled for text nodes during inline layout. Empty
+    // for every other kind of node. Cleared on each relayout.
+    std::vector<PlacedTextRun> textRuns;
 
     // Full box dimensions including padding + border
     float fullWidth() const { return contentRect.width + padding.left + padding.right + border.left + border.right; }
