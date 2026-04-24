@@ -146,6 +146,31 @@ static void testHitPointerEventsNone() {
     check(hitTest(&root, 100, 25) == &root, "pointer-events:none passes through to parent");
 }
 
+static void testHitPointerEventsNoneParent() {
+    printf("--- HitTest: pointer-events none on parent, auto on child ---\n");
+    // Common overlay pattern: wrapper opts out of hit-testing so siblings
+    // underneath stay clickable, and interactive children opt back in.
+    HitMockNode root; initBlock(root);
+    HitMockNode overlay; initBlock(overlay);
+    overlay.style["height"] = "100px";
+    overlay.style["pointer-events"] = "none";
+    HitMockNode button; initBlock(button);
+    button.style["height"] = "30px";
+    button.style["pointer-events"] = "auto";
+    overlay.addChild(&button);
+    root.addChild(&overlay);
+
+    HitTextMetrics m;
+    layoutTree(&root, 400, m);
+
+    // Click on the button should reach the button, not stop at the overlay.
+    check(hitTest(&root, 100, 15) == &button,
+          "pointer-events:auto child is hittable under pointer-events:none parent");
+    // Click on the overlay outside the button should fall through to root.
+    check(hitTest(&root, 100, 60) == &root,
+          "pointer-events:none parent is not itself a hit target");
+}
+
 static void testHitWithPadding() {
     printf("--- HitTest: with padding ---\n");
     HitMockNode root; initBlock(root);
@@ -175,6 +200,7 @@ void testHitTest() {
     testHitSiblingZOrder();
     testHitDisplayNone();
     testHitPointerEventsNone();
+    testHitPointerEventsNoneParent();
     testHitWithPadding();
     testHitNull();
 }

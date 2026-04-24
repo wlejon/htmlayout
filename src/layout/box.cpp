@@ -106,11 +106,14 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
 
     auto& style = node->computedStyle();
 
-    // Skip display:none and pointer-events:none
+    // Skip display:none entirely (no layout, no descendants to test).
     if (styleVal(style, "display") == "none") return nullptr;
-    if (styleVal(style, "pointer-events") == "none") return nullptr;
     // visibility:hidden still occupies space but is not hit-testable
     if (styleVal(style, "visibility") == "hidden") return nullptr;
+    // pointer-events:none makes *this node* non-hittable, but descendants
+    // with pointer-events:auto must still be reachable. Track it and skip
+    // returning `node` below — children are still traversed normally.
+    bool pointerEventsNone = (styleVal(style, "pointer-events") == "none");
 
     // Compute this node's absolute content position
     float absX = node->box.contentRect.x + offsetX;
@@ -198,8 +201,9 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     // No child hit — this node is the deepest match only if the point is
     // actually inside its bounds (overflow:visible descendants may have
     // extended us past the border box, but the node itself is not hittable
-    // there).
-    if (insideBounds) return node;
+    // there). pointer-events:none keeps this node out of the result even
+    // when the point is inside.
+    if (insideBounds && !pointerEventsNone) return node;
     return nullptr;
 }
 
