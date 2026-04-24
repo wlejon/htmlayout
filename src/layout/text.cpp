@@ -270,6 +270,28 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
         runs.push_back({currentLine, currentWidth, lineH, runSrcStart, runSrcEnd});
     }
 
+    // Preserve leading/trailing whitespace from the source as a single space
+    // attached to the first/last run. Needed so inline boundaries ("foo "
+    // + <em>bar</em>) don't collapse into "foobar" at draw time, and so the
+    // line breaker can treat inter-item whitespace as a valid break point.
+    if (!runs.empty()) {
+        bool hasLeading  = std::isspace(static_cast<unsigned char>(text.front()));
+        bool hasTrailing = std::isspace(static_cast<unsigned char>(text.back()));
+        float spaceW = measureSpace();
+        if (hasLeading) {
+            auto& first = runs.front();
+            first.text.insert(first.text.begin(), ' ');
+            first.width += spaceW;
+            first.srcStart = 0;
+        }
+        if (hasTrailing) {
+            auto& last = runs.back();
+            last.text.push_back(' ');
+            last.width += spaceW;
+            last.srcEnd = static_cast<int>(text.size());
+        }
+    }
+
     return runs;
 }
 

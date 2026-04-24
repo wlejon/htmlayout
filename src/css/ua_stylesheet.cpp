@@ -29,6 +29,10 @@ hr {
     margin-bottom: 8px;
 }
 
+br {
+    display: inline;
+}
+
 /* Headings: sizes and margins */
 h1 {
     font-size: 32px;
