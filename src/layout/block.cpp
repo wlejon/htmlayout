@@ -187,6 +187,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             std::string text;
             int srcStart = 0;
             int srcEnd = 0;
+            // True when a soft line break is allowed on each side of this
+            // item. Text-run items inherit these from the word-boundary
+            // splitter; atomic inline elements default to false so the
+            // break decision falls back to the adjacent items' whitespace.
+            bool canBreakBefore = false;
+            bool canBreakAfter  = false;
         };
         std::vector<IFCItem> items;
 
@@ -210,6 +216,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     it.text = run.text;
                     it.srcStart = run.srcStart;
                     it.srcEnd = run.srcEnd;
+                    it.canBreakBefore = run.canBreakBefore;
+                    it.canBreakAfter  = run.canBreakAfter;
                     items.push_back(std::move(it));
                 }
             } else {
@@ -241,12 +249,46 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             resolvedAlign = (direction == "rtl") ? "left" : "right";
         }
 
-        // Build line boxes first, then position with alignment
+        // Build line boxes first, then position with alignment.
+        //
+        // Wrapping is width-driven but must only land on a real break
+        // opportunity: either whitespace on one side of the boundary
+        // or a canBreak flag from the word-boundary splitter. When a
+        // width overflow would cut an atomic unit (e.g. "Citadel" +
+        // "." across an inline boundary with no intervening space),
+        // retreat to the most recent break opportunity on the line.
+        auto itemEndsInSpace = [](const IFCItem& it) {
+            return it.canBreakAfter ||
+                   (!it.text.empty() && std::isspace(
+                        static_cast<unsigned char>(it.text.back())));
+        };
+        auto itemStartsInSpace = [](const IFCItem& it) {
+            return it.canBreakBefore ||
+                   (!it.text.empty() && std::isspace(
+                        static_cast<unsigned char>(it.text.front())));
+        };
+        auto canBreakBetween = [&](size_t prev, size_t next) {
+            if (prev >= items.size() || next >= items.size()) return true;
+            return itemEndsInSpace(items[prev]) || itemStartsInSpace(items[next]);
+        };
+
         struct LineBounds { size_t start; size_t end; float totalWidth; float maxHeight; };
         std::vector<LineBounds> lines;
         {
             size_t lineStart = 0;
             float cursorX = 0, lineMaxH = 0;
+            auto emitLine = [&](size_t endIdx) {
+                float w = 0, h = 0;
+                for (size_t k = lineStart; k < endIdx; ++k) {
+                    w += items[k].width;
+                    h = std::max(h, items[k].height);
+                }
+                if (lineStart == endIdx && h == 0) h = lineMaxH;
+                lines.push_back({lineStart, endIdx, w, h});
+                lineStart = endIdx;
+                cursorX = 0;
+                lineMaxH = 0;
+            };
             for (size_t i = 0; i < items.size(); i++) {
                 if (items[i].forceBreak) {
                     // <br>: terminate line after including the break marker so it
@@ -259,10 +301,22 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     continue;
                 }
                 if (cursorX > 0 && cursorX + items[i].width > childAvailable) {
-                    lines.push_back({lineStart, i, cursorX, lineMaxH});
-                    lineStart = i;
-                    cursorX = 0;
-                    lineMaxH = 0;
+                    // Find the latest in-range break point at or before i.
+                    size_t breakIdx = i;
+                    while (breakIdx > lineStart &&
+                           !canBreakBetween(breakIdx - 1, breakIdx)) {
+                        --breakIdx;
+                    }
+                    if (breakIdx == lineStart) {
+                        // No valid break — let the line overflow rather
+                        // than split an atomic unit.
+                        breakIdx = i;
+                    }
+                    emitLine(breakIdx);
+                    for (size_t k = breakIdx; k < i; ++k) {
+                        cursorX += items[k].width;
+                        lineMaxH = std::max(lineMaxH, items[k].height);
+                    }
                 }
                 cursorX += items[i].width;
                 lineMaxH = std::max(lineMaxH, items[i].height);

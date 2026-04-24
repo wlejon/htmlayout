@@ -31,6 +31,9 @@ struct LineItem {
     // only) — preserved so placed runs can be recorded for caret/selection.
     int  srcStart = 0;
     int  srcEnd   = 0;
+    // Break opportunity flags on each side — see TextRun::canBreakBefore.
+    bool canBreakBefore = false;
+    bool canBreakAfter  = false;
 };
 
 struct LineBox {
@@ -40,11 +43,40 @@ struct LineBox {
     float maxBaseline = 0;
 };
 
-// Distribute items into line boxes that fit within availableWidth
+// Distribute items into line boxes that fit within availableWidth.
+//
+// Width-driven wraps only land on a real break opportunity: whitespace at
+// the item boundary (either side) or a canBreak flag set by the word
+// splitter. If an overflow falls inside an atomic run (e.g. "Citadel" +
+// adjacent "." with no whitespace between them), the builder retreats to
+// the most recent break opportunity on the current line rather than
+// splitting the unit.
 std::vector<LineBox> buildLineBoxes(
     const std::vector<LineItem>& items,
     float availableWidth)
 {
+    auto endsInSpace = [](const LineItem& it) {
+        return it.canBreakAfter ||
+               (!it.text.empty() && std::isspace(
+                    static_cast<unsigned char>(it.text.back())));
+    };
+    auto startsInSpace = [](const LineItem& it) {
+        return it.canBreakBefore ||
+               (!it.text.empty() && std::isspace(
+                    static_cast<unsigned char>(it.text.front())));
+    };
+
+    auto rebuildBounds = [](LineBox& line) {
+        line.totalWidth = 0;
+        line.maxHeight = 0;
+        line.maxBaseline = 0;
+        for (auto& it : line.items) {
+            line.totalWidth += it.width;
+            line.maxHeight   = std::max(line.maxHeight, it.height);
+            line.maxBaseline = std::max(line.maxBaseline, it.baseline);
+        }
+    };
+
     std::vector<LineBox> lines;
     LineBox currentLine;
 
@@ -60,12 +92,37 @@ std::vector<LineBox> buildLineBoxes(
             currentLine = LineBox{};
             continue;
         }
-        // Check if item fits on current line
         if (!currentLine.items.empty() &&
             currentLine.totalWidth + item.width > availableWidth) {
-            // Wrap: finalize current line, start new one
-            lines.push_back(std::move(currentLine));
-            currentLine = LineBox{};
+            // Would overflow. Look for the most recent break opportunity in
+            // currentLine; if the overflowing item itself can break on its
+            // leading edge that's already valid (handled by k == size()).
+            auto& cl = currentLine.items;
+            size_t k = cl.size();
+            while (k > 0) {
+                const LineItem& prev = cl[k - 1];
+                bool boundaryOk = (k == cl.size())
+                    ? (endsInSpace(prev) || startsInSpace(item))
+                    : (endsInSpace(prev) || startsInSpace(cl[k]));
+                if (boundaryOk) break;
+                --k;
+            }
+            if (k == 0) {
+                // No valid break on the line — overflow rather than split
+                // an atomic unit.
+                lines.push_back(std::move(currentLine));
+                currentLine = LineBox{};
+            } else {
+                // Split: keep [0, k) on the current line, push [k, end) onto
+                // a new line along with the incoming item.
+                LineBox next;
+                next.items.assign(cl.begin() + k, cl.end());
+                cl.erase(cl.begin() + k, cl.end());
+                rebuildBounds(currentLine);
+                lines.push_back(std::move(currentLine));
+                currentLine = std::move(next);
+                rebuildBounds(currentLine);
+            }
         }
 
         currentLine.items.push_back(item);
@@ -385,6 +442,8 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 item.node = child;
                 item.srcStart = run.srcStart;
                 item.srcEnd   = run.srcEnd;
+                item.canBreakBefore = run.canBreakBefore;
+                item.canBreakAfter  = run.canBreakAfter;
                 allItems.push_back(std::move(item));
             }
         } else {

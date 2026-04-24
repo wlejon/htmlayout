@@ -290,6 +290,14 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
             last.width += spaceW;
             last.srcEnd = static_cast<int>(text.size());
         }
+        // Tag break opportunities. Every run boundary inside `runs` was a
+        // word-space in the source (the packer only splits at whitespace),
+        // so interior edges are always breakable. The outer edges inherit
+        // whether the source itself had leading/trailing whitespace.
+        for (size_t i = 0; i < runs.size(); ++i) {
+            runs[i].canBreakBefore = (i > 0) || hasLeading;
+            runs[i].canBreakAfter  = (i + 1 < runs.size()) || hasTrailing;
+        }
     }
 
     return runs;

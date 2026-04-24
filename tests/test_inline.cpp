@@ -149,7 +149,10 @@ static void testTextBreakWhitespaceCollapse() {
     FixedTextMetrics metrics;
     auto runs = breakTextIntoRuns("  hello   world  ", 500, "mono", 16, "normal", "normal", metrics);
     check(runs.size() == 1, "collapse: 1 run");
-    check(runs[0].text == "hello world", "collapse: extra spaces removed");
+    // Interior spaces collapse to single. Leading/trailing whitespace is
+    // preserved as a single space so inline boundaries (e.g. "foo "
+    // + <em>bar</em>) render with the expected gap.
+    check(runs[0].text == " hello world ", "collapse: extra spaces removed, edges kept");
 }
 
 // ========== Inline Layout Tests ==========

@@ -18,6 +18,14 @@ struct TextRun {
     float height;
     int srcStart = 0;
     int srcEnd   = 0;
+    // True when a soft line-break is allowed immediately before/after this
+    // run. Populated by the word-boundary splitter: intermediate runs are
+    // always breakable on the interior side, and the outer sides inherit
+    // whether the original source had collapsible whitespace at its edges.
+    // The line-box builder uses these (plus leading/trailing whitespace in
+    // .text) to decide where a width-driven wrap may actually land.
+    bool canBreakBefore = false;
+    bool canBreakAfter  = false;
 };
 
 // Break text into runs that fit within availableWidth.
