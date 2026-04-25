@@ -567,6 +567,20 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     // Determine available width for layout
     // Shrink-wrap if width:auto and not both left+right set
     bool shrinkWrap = (specW < 0 && !(left >= 0 && right >= 0));
+
+    // Pre-compute the stretched height when both top+bottom are pinned and
+    // height is auto. Setting box.contentRect.height up front lets the inner
+    // layout (e.g. flex align-items: center) treat this container as having a
+    // definite cross-axis size instead of collapsing to content height.
+    bool stretchH = (specH < 0 && top >= 0 && bottom >= 0);
+    if (stretchH) {
+        float h = cbHeight - top - bottom -
+                  child->box.margin.top - child->box.margin.bottom -
+                  child->box.padding.top - child->box.padding.bottom -
+                  child->box.border.top - child->box.border.bottom;
+        if (h > 0) child->box.contentRect.height = h;
+    }
+
     if (shrinkWrap) {
         float maxCW = computeMaxContentWidth(child, metrics);
         if (maxCW > cbWidth) maxCW = cbWidth;
@@ -586,8 +600,10 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
         if (w > 0) child->box.contentRect.width = w;
     }
 
-    // Stretch height if both top and bottom are set and height is auto
-    if (specH < 0 && top >= 0 && bottom >= 0) {
+    // Re-apply the stretched height in case layoutNode overwrote it from
+    // content size (block layout typically does); the absolute-position
+    // contract is that top+bottom together pin the box.
+    if (stretchH) {
         float h = cbHeight - top - bottom -
                   child->box.margin.top - child->box.margin.bottom -
                   child->box.padding.top - child->box.padding.bottom -

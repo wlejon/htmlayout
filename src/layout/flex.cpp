@@ -430,6 +430,12 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             else
                 crossAvailable = specH;
             if (crossAvailable < 0) crossAvailable = 0;
+        } else if (node->box.contentRect.height > 0) {
+            // Style height is auto, but the container was already sized by an
+            // outer pass (e.g. position:absolute with inset:0, or stretched by
+            // an enclosing flex). Use that resolved height so align-items can
+            // place items in the cross axis instead of collapsing to 0.
+            crossAvailable = node->box.contentRect.height;
         }
     } else {
         crossAvailable = containerMain; // for column flex, cross = width
