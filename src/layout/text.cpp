@@ -95,7 +95,9 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
             for (auto& w : words) { w.srcStart += lineBase; w.srcEnd += lineBase; }
 
             if (words.empty()) {
-                runs.push_back({"", 0, lineH, lineBase, static_cast<int>(lineEnd)});
+                TextRun r{"", 0, lineH, lineBase, static_cast<int>(lineEnd)};
+                if (nl != std::string::npos) r.forceBreakAfter = true;
+                runs.push_back(std::move(r));
                 cursor = (nl == std::string::npos) ? text.size() + 1 : nl + 1;
                 continue;
             }
@@ -130,6 +132,12 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
             }
             if (!currentLine.empty()) {
                 runs.push_back({currentLine, currentWidth, lineH, runSrcStart, runSrcEnd});
+            }
+            // Mark the last run produced for this source line as ending in
+            // a hard break so the IFC builder starts the next source line
+            // on its own line box.
+            if (nl != std::string::npos && !runs.empty()) {
+                runs.back().forceBreakAfter = true;
             }
 
             cursor = (nl == std::string::npos) ? text.size() + 1 : nl + 1;
@@ -172,6 +180,12 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                 }
             } else {
                 runs.push_back({line, w, lineH, lineBase, static_cast<int>(lineEnd)});
+            }
+
+            // Mark the last run produced for this source line as ending in
+            // a hard break (preserved literal newline).
+            if (nl != std::string::npos && !runs.empty()) {
+                runs.back().forceBreakAfter = true;
             }
 
             cursor = (nl == std::string::npos) ? text.size() + 1 : nl + 1;

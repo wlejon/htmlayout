@@ -853,6 +853,42 @@ static void testTextPreLine() {
     check(runs.size() == 3, "pre-line: 3 lines from newlines");
     check(runs[0].text == "line1", "pre-line: first line");
     check(runs[1].text == "line2", "pre-line: second line");
+    // Each preserved newline must mark a hard break on the run that
+    // ended at it; the trailing run (no following newline) must not.
+    check(runs[0].forceBreakAfter, "pre-line: run 0 ends in hard break");
+    check(runs[1].forceBreakAfter, "pre-line: run 1 ends in hard break");
+    check(!runs[2].forceBreakAfter, "pre-line: trailing run has no hard break");
+}
+
+static void testTextPreNewlineHardBreak() {
+    printf("--- Text: pre newline -> forceBreakAfter ---\n");
+    CovMetrics m;
+    auto runs = breakTextIntoRuns("a\nb\nc", 500, "mono", 16, "normal", "pre", m);
+    check(runs.size() == 3, "pre: 3 runs from newlines");
+    check(runs[0].text == "a" && runs[0].forceBreakAfter, "pre: run 0 has hard break");
+    check(runs[1].text == "b" && runs[1].forceBreakAfter, "pre: run 1 has hard break");
+    check(runs[2].text == "c" && !runs[2].forceBreakAfter, "pre: trailing run has no hard break");
+}
+
+// IFC end-to-end: a <pre>-style block containing four newline-separated
+// lines must lay out four lines tall, not collapse to one. Regressions
+// in the IFC line builder (where it ignores per-run hard breaks) would
+// pack everything onto one line.
+static void testIFCPreNewlineLines() {
+    printf("--- IFC: pre block with newlines wraps to N lines ---\n");
+    CovNode root; root.initBlock();
+    root.style_["white-space"] = "pre";
+    root.style_["line-height"] = "20px";
+
+    CovNode txt; txt.isText = true;
+    txt.text = "line1\nline2\nline3\nline4";
+    root.addChild(&txt);
+
+    CovMetrics m;
+    layoutTree(&root, 500, m);
+    // CovMetrics::lineHeight() returns 20.0f; four lines -> 80px.
+    check(approx(root.box.contentRect.height, 80.0f),
+          "pre IFC: four newline-separated lines -> 4 line-heights tall");
 }
 
 static void testTextOverflowWrapBreakWord() {
@@ -2219,6 +2255,8 @@ void testCoverage() {
     // Text breaking
     testTextPreWrap();
     testTextPreLine();
+    testTextPreNewlineHardBreak();
+    testIFCPreNewlineLines();
     testTextOverflowWrapBreakWord();
     testTextWordBreakAll();
     testTextEmptyInput();

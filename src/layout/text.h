@@ -26,6 +26,11 @@ struct TextRun {
     // .text) to decide where a width-driven wrap may actually land.
     bool canBreakBefore = false;
     bool canBreakAfter  = false;
+    // True when a hard line break (a literal newline preserved by
+    // white-space: pre/pre-wrap/pre-line) immediately follows this run.
+    // The IFC line builder treats this like a <br>: terminate the
+    // current line after this run regardless of available width.
+    bool forceBreakAfter = false;
 };
 
 // Break text into runs that fit within availableWidth.

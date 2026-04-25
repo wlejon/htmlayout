@@ -206,19 +206,35 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // Fresh layout pass — clear any previously placed runs.
                 child->box.textRuns.clear();
                 for (auto& run : runs) {
-                    if (run.text.empty() && run.width == 0) continue;
-                    IFCItem it{};
-                    it.width = run.width;
-                    it.height = std::max(run.height, lineHeight);
-                    it.node = child;
-                    it.isElement = false;
-                    it.forceBreak = false;
-                    it.text = run.text;
-                    it.srcStart = run.srcStart;
-                    it.srcEnd = run.srcEnd;
-                    it.canBreakBefore = run.canBreakBefore;
-                    it.canBreakAfter  = run.canBreakAfter;
-                    items.push_back(std::move(it));
+                    bool emitContent = !(run.text.empty() && run.width == 0);
+                    if (emitContent) {
+                        IFCItem it{};
+                        it.width = run.width;
+                        it.height = std::max(run.height, lineHeight);
+                        it.node = child;
+                        it.isElement = false;
+                        it.forceBreak = false;
+                        it.text = run.text;
+                        it.srcStart = run.srcStart;
+                        it.srcEnd = run.srcEnd;
+                        it.canBreakBefore = run.canBreakBefore;
+                        it.canBreakAfter  = run.canBreakAfter;
+                        items.push_back(std::move(it));
+                    }
+                    // A preserved newline (white-space: pre/pre-wrap/
+                    // pre-line) becomes a synthetic break-only item AFTER
+                    // the run's content, mirroring how <br> is handled.
+                    // Placement logic skips forceBreak items, so emitting
+                    // them as separate sentinels keeps the run visible.
+                    if (run.forceBreakAfter) {
+                        IFCItem brk{};
+                        brk.width = 0;
+                        brk.height = lineHeight;
+                        brk.node = child;
+                        brk.isElement = false;
+                        brk.forceBreak = true;
+                        items.push_back(std::move(brk));
+                    }
                 }
             } else {
                 auto& cs = child->computedStyle();

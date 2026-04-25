@@ -335,6 +335,14 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         child->box.textRuns.push_back(std::move(placed));
                         cursorX += run.width;
                         lineMaxH = std::max(lineMaxH, h);
+                        // Hard line break preserved by white-space: pre /
+                        // pre-wrap / pre-line — advance to the next line.
+                        if (run.forceBreakAfter) {
+                            maxContentW = std::max(maxContentW, cursorX);
+                            cursorY += lineMaxH;
+                            cursorX = 0;
+                            lineMaxH = 0;
+                        }
                     }
                 } else if ((child->tagName() == "br" || child->tagName() == "BR")) {
                     // Forced line break: end current line, start a new one.
@@ -445,6 +453,18 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 item.canBreakBefore = run.canBreakBefore;
                 item.canBreakAfter  = run.canBreakAfter;
                 allItems.push_back(std::move(item));
+                // Preserved newline (white-space: pre/pre-wrap/pre-line)
+                // becomes a synthetic break-only item after the run, the
+                // same shape <br> takes. Avoids placement skipping the
+                // text run itself when forceBreak is set on it.
+                if (run.forceBreakAfter) {
+                    LineItem brk;
+                    brk.forceBreak = true;
+                    brk.height = run.height;
+                    brk.baseline = run.height * 0.8f;
+                    brk.node = child;
+                    allItems.push_back(std::move(brk));
+                }
             }
         } else {
             auto& childStyle = child->computedStyle();
