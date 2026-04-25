@@ -101,6 +101,14 @@ struct LayoutNode {
     virtual float scrollLeftPx() const { return 0.0f; }
     virtual float scrollTopPx()  const { return 0.0f; }
 
+    // Generated content boxes for ::before / ::after. Consumers return a
+    // synthesized LayoutNode for each pseudo-element whose `content` resolves
+    // to a non-empty string, otherwise null. The pseudo is treated as an
+    // anonymous inline child prepended (before) or appended (after) to the
+    // element's child sequence by getLayoutChildren().
+    virtual LayoutNode* pseudoBefore() const { return nullptr; }
+    virtual LayoutNode* pseudoAfter()  const { return nullptr; }
+
     // Output: layout writes the positioned box here
     LayoutBox box;
 

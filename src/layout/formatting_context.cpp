@@ -183,6 +183,10 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
     if (fontSize <= 0.0f) fontSize = 16.0f;
     const std::string& fontFamily = styleVal(style, "font-family");
     const std::string& fontWeight = styleVal(style, "font-weight");
+    // letter-spacing inflates per-char width; the inline layout in text.cpp
+    // adds it once per character, so intrinsic measurement must match or
+    // parents grant too little width and force unwanted wraps.
+    float letterSpacing = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
 
     float maxChildMin = 0.0f;
 
@@ -197,6 +201,7 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
                 if (std::isspace(static_cast<unsigned char>(c))) {
                     if (!word.empty()) {
                         float w = metrics.measureWidth(word, fontFamily, fontSize, fontWeight);
+                        if (letterSpacing != 0) w += letterSpacing * static_cast<float>(word.size());
                         widestWord = std::max(widestWord, w);
                         word.clear();
                     }
@@ -235,6 +240,10 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     if (fontSize <= 0.0f) fontSize = 16.0f;
     const std::string& fontFamily = styleVal(style, "font-family");
     const std::string& fontWeight = styleVal(style, "font-weight");
+    // letter-spacing / word-spacing inflate the laid-out width; intrinsic
+    // measurement must match what text.cpp will produce or callers wrap.
+    float letterSpacing = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
+    float wordSpacing   = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
 
     // Determine if this container lays out children horizontally (sum) vs vertically (max)
     const std::string& display = styleVal(style, "display");
@@ -252,15 +261,25 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
             // Collapse whitespace
             std::string collapsed;
             bool lastSpace = false;
+            int spaceCount = 0;
             for (char c : text) {
                 if (std::isspace(static_cast<unsigned char>(c))) {
-                    if (!lastSpace && !collapsed.empty()) { collapsed += ' '; lastSpace = true; }
+                    if (!lastSpace && !collapsed.empty()) {
+                        collapsed += ' '; lastSpace = true; ++spaceCount;
+                    }
                 } else {
                     collapsed += c; lastSpace = false;
                 }
             }
-            if (!collapsed.empty() && collapsed.back() == ' ') collapsed.pop_back();
+            if (!collapsed.empty() && collapsed.back() == ' ') {
+                collapsed.pop_back();
+                --spaceCount;
+            }
             float w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
+            if (letterSpacing != 0 && !collapsed.empty())
+                w += letterSpacing * static_cast<float>(collapsed.size());
+            if (wordSpacing != 0 && spaceCount > 0)
+                w += wordSpacing * static_cast<float>(spaceCount);
             maxChildMax = std::max(maxChildMax, w);
             sumChildMax += w;
         } else {

@@ -387,6 +387,9 @@ static const std::vector<std::string>& layoutProperties() {
 
 std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node) {
     std::vector<LayoutNode*> result;
+    if (auto* before = node->pseudoBefore()) {
+        result.push_back(before);
+    }
     for (auto* child : node->children()) {
         if (!child->isTextNode()) {
             auto& cs = child->computedStyle();
@@ -398,6 +401,9 @@ std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node) {
             }
         }
         result.push_back(child);
+    }
+    if (auto* after = node->pseudoAfter()) {
+        result.push_back(after);
     }
     return result;
 }
