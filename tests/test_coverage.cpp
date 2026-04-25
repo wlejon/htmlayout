@@ -1861,10 +1861,24 @@ static void testUAStylesheetElements() {
     auto lis = cascade.resolve(li);
     check(lis["display"] == "list-item", "UA: li display = list-item");
 
-    // pre
+    // pre — both display:block (from comma-list rule) and white-space:pre
+    // (from dedicated rule) must apply together. Partial-rule application
+    // bugs would let one through but not the other.
     MockElement pre; pre.tag = "pre";
     auto pres = cascade.resolve(pre);
+    check(pres["display"] == "block", "UA: pre display = block");
     check(pres["white-space"] == "pre", "UA: pre white-space = pre");
+    check(pres["font-family"] == "monospace", "UA: pre font-family = monospace");
+
+    // Other tags listed alongside pre in the comma-list block rule — every
+    // one of them must resolve to display:block.
+    for (const char* tag : {"dl", "dt", "dd", "menu", "dir",
+                            "figure", "blockquote", "address"}) {
+        MockElement el; el.tag = tag;
+        auto s = cascade.resolve(el);
+        std::string label = std::string("UA: ") + tag + " display = block";
+        check(s["display"] == "block", label.c_str());
+    }
 
     // em, i
     MockElement em; em.tag = "em";
@@ -1875,6 +1889,107 @@ static void testUAStylesheetElements() {
     MockElement hr; hr.tag = "hr";
     auto hrs = cascade.resolve(hr);
     check(hrs["display"] == "block", "UA: hr display = block");
+}
+
+// Resolve a single rule with many declarations (display + white-space +
+// padding shorthand + margin longhands + border shorthand) and assert
+// every longhand survives. Catches regressions where some declarations
+// of a matched rule silently drop out of the cascade.
+static void testCascadeFullPreRule() {
+    printf("--- Cascade: full pre rule ---\n");
+    const char* css = R"CSS(
+        pre {
+            display: block;
+            white-space: pre;
+            background-color: #f5f5f5;
+            padding: 8px;
+            border: 1px solid #ddd;
+            overflow: auto;
+            margin-top: 1em;
+            margin-bottom: 1em;
+        }
+    )CSS";
+    Cascade cascade;
+    cascade.addStylesheet(parse(css));
+
+    MockElement pre; pre.tag = "pre";
+    auto s = cascade.resolve(pre);
+
+    check(s["display"] == "block", "full-rule: display = block");
+    check(s["white-space"] == "pre", "full-rule: white-space = pre");
+    check(s["background-color"] == "#f5f5f5", "full-rule: background-color");
+    check(s["padding-top"] == "8px", "full-rule: padding-top from shorthand");
+    check(s["padding-right"] == "8px", "full-rule: padding-right from shorthand");
+    check(s["padding-bottom"] == "8px", "full-rule: padding-bottom from shorthand");
+    check(s["padding-left"] == "8px", "full-rule: padding-left from shorthand");
+    check(s["border-top-width"] == "1px", "full-rule: border-top-width from shorthand");
+    check(s["border-right-width"] == "1px", "full-rule: border-right-width from shorthand");
+    check(s["border-bottom-width"] == "1px", "full-rule: border-bottom-width from shorthand");
+    check(s["border-left-width"] == "1px", "full-rule: border-left-width from shorthand");
+    check(s["overflow-x"] == "auto", "full-rule: overflow-x from shorthand");
+    check(s["overflow-y"] == "auto", "full-rule: overflow-y from shorthand");
+    check(s["margin-top"] == "1em", "full-rule: margin-top");
+    check(s["margin-bottom"] == "1em", "full-rule: margin-bottom");
+}
+
+// Long comma-separated tag list — the shape used by browser UA sheets to
+// declare many tags as block-level in a single rule. Each listed tag must
+// match. Regressions in selector-list parsing or per-rule classification
+// would let some tags fall through.
+static void testCascadeCommaListAllMatch() {
+    printf("--- Cascade: comma-list selector ---\n");
+    const char* css = R"CSS(
+        body, div, p, pre, section, article, nav, aside, header, footer, main,
+        figure, figcaption, blockquote, fieldset, form, details, summary,
+        address, hgroup, search, dl, dt, dd, dialog, canvas {
+            display: block;
+        }
+    )CSS";
+    Cascade cascade;
+    cascade.addStylesheet(parse(css));
+
+    const char* tags[] = {
+        "body", "div", "p", "pre", "section", "article", "nav", "aside",
+        "header", "footer", "main", "figure", "figcaption", "blockquote",
+        "fieldset", "form", "details", "summary", "address", "hgroup",
+        "search", "dl", "dt", "dd", "dialog", "canvas",
+    };
+    for (const char* tag : tags) {
+        MockElement el; el.tag = tag;
+        auto s = cascade.resolve(el);
+        std::string label = std::string("comma-list: ") + tag + " display = block";
+        check(s["display"] == "block", label.c_str());
+    }
+}
+
+// Lock down the shorthand-expansion contract for padding/margin so a
+// regression there is caught at the source rather than via downstream
+// cascade behavior.
+static void testExpandShorthandContract() {
+    printf("--- Properties: expandShorthand contract ---\n");
+
+    auto find = [](const std::vector<ExpandedDecl>& v, const std::string& p) -> std::string {
+        for (auto& d : v) if (d.property == p) return d.value;
+        return "";
+    };
+
+    auto pad = expandShorthand("padding", "8px");
+    check(find(pad, "padding-top") == "8px", "padding 8px -> padding-top");
+    check(find(pad, "padding-right") == "8px", "padding 8px -> padding-right");
+    check(find(pad, "padding-bottom") == "8px", "padding 8px -> padding-bottom");
+    check(find(pad, "padding-left") == "8px", "padding 8px -> padding-left");
+
+    auto pad2 = expandShorthand("padding", "1px 2px 3px 4px");
+    check(find(pad2, "padding-top") == "1px", "padding 4-val -> padding-top");
+    check(find(pad2, "padding-right") == "2px", "padding 4-val -> padding-right");
+    check(find(pad2, "padding-bottom") == "3px", "padding 4-val -> padding-bottom");
+    check(find(pad2, "padding-left") == "4px", "padding 4-val -> padding-left");
+
+    auto mar = expandShorthand("margin", "1em");
+    check(find(mar, "margin-top") == "1em", "margin 1em -> margin-top");
+    check(find(mar, "margin-right") == "1em", "margin 1em -> margin-right");
+    check(find(mar, "margin-bottom") == "1em", "margin 1em -> margin-bottom");
+    check(find(mar, "margin-left") == "1em", "margin 1em -> margin-left");
 }
 
 // ======================================================================
@@ -2175,6 +2290,9 @@ void testCoverage() {
 
     // UA stylesheet
     testUAStylesheetElements();
+    testCascadeFullPreRule();
+    testCascadeCommaListAllMatch();
+    testExpandShorthandContract();
 
     // Incremental & invalidation
     testMarkDirtyNull();
