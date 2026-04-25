@@ -58,11 +58,15 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
 
     float lineH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
 
-    // Helper: measure text width with letter-spacing applied
+    // Helper: measure text width with letter-spacing applied between glyphs.
+    // CSS spec adds letter-spacing as advance after every character including
+    // the last, but the trailing slot is empty space that pushes centered
+    // text visibly leftward. Apply (n - 1) so the box matches the visible
+    // glyph extent and text-align: center centers symmetrically.
     auto measureWithSpacing = [&](const std::string& s) -> float {
         float w = metrics.measureWidth(s, fontFamily, fontSize, fontWeight);
-        if (letterSpacing != 0 && !s.empty()) {
-            w += letterSpacing * static_cast<float>(s.size());
+        if (letterSpacing != 0 && s.size() > 1) {
+            w += letterSpacing * static_cast<float>(s.size() - 1);
         }
         return w;
     };

@@ -401,13 +401,14 @@ static void testInlineAbsoluteBottomRight() {
 
 static void testLetterSpacing() {
     printf("--- Inline: letter-spacing ---\n");
-    // Each char = 10px + 2px letter-spacing = 12px per char
-    // "abc" = 3 chars * 12 = 36px (vs 30px without)
+    // Letter-spacing is added BETWEEN glyphs (n - 1 times). For "abc" at
+    // 10px/char with 2px spacing, the box is 3*10 + 2*2 = 34, matching the
+    // visible glyph extent so text-align: center centers symmetrically.
     FixedTextMetrics m;
     auto runs = breakTextIntoRuns("abc", 200, "serif", 16, "normal", "normal", m,
                                   "normal", "normal", 2.0f, 0);
     check(runs.size() == 1, "letter-spacing: single run");
-    check(approx(runs[0].width, 36, 1), "letter-spacing: width includes spacing");
+    check(approx(runs[0].width, 34, 1), "letter-spacing: width includes spacing");
 }
 
 static void testWordSpacing() {

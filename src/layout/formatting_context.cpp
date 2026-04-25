@@ -201,7 +201,8 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
                 if (std::isspace(static_cast<unsigned char>(c))) {
                     if (!word.empty()) {
                         float w = metrics.measureWidth(word, fontFamily, fontSize, fontWeight);
-                        if (letterSpacing != 0) w += letterSpacing * static_cast<float>(word.size());
+                        if (letterSpacing != 0 && word.size() > 1)
+                            w += letterSpacing * static_cast<float>(word.size() - 1);
                         widestWord = std::max(widestWord, w);
                         word.clear();
                     }
@@ -276,8 +277,8 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
                 --spaceCount;
             }
             float w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
-            if (letterSpacing != 0 && !collapsed.empty())
-                w += letterSpacing * static_cast<float>(collapsed.size());
+            if (letterSpacing != 0 && collapsed.size() > 1)
+                w += letterSpacing * static_cast<float>(collapsed.size() - 1);
             if (wordSpacing != 0 && spaceCount > 0)
                 w += wordSpacing * static_cast<float>(spaceCount);
             maxChildMax = std::max(maxChildMax, w);
