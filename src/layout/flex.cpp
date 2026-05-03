@@ -185,13 +185,35 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             item.flexBasis = resolveLength(basis, mainAvailable, childFontSize);
         }
 
-        // Resolve min/max on main axis
+        // Resolve min/max on main axis.
+        // CSS Flexbox §4.5: min-width/min-height: auto on a flex item resolves to
+        // the item's min-content size on the main axis (when overflow is visible),
+        // so unbreakable content (long words) is not shrunk below its min-content.
+        const std::string& minMainProp = isRow ? "min-width" : "min-height";
+        const std::string& minMainVal = styleVal(cs, minMainProp);
+        bool minMainAuto = (minMainVal == "auto" || minMainVal.empty());
         if (isRow) {
-            item.minMain = resolveDim(styleVal(cs, "min-width"), mainAvailable, childFontSize);
+            item.minMain = minMainAuto ? -1.0f : resolveDim(minMainVal, mainAvailable, childFontSize);
             item.maxMain = resolveDim(styleVal(cs, "max-width"), mainAvailable, childFontSize);
         } else {
-            item.minMain = resolveDim(styleVal(cs, "min-height"), mainAvailable, childFontSize);
+            item.minMain = minMainAuto ? -1.0f : resolveDim(minMainVal, mainAvailable, childFontSize);
             item.maxMain = resolveDim(styleVal(cs, "max-height"), mainAvailable, childFontSize);
+        }
+        if (minMainAuto && isRow) {
+            const std::string& overflow = styleVal(cs, "overflow");
+            if (overflow == "visible" || overflow.empty()) {
+                // Auto-min = min-content on the main axis (plus border/padding edges).
+                float minContent = computeMinContentWidth(item.node, metrics);
+                float ph = resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
+                           resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
+                float bh = 0;
+                const char* sides[] = {"left", "right"};
+                for (auto* s : sides) {
+                    if (styleVal(cs, std::string("border-") + s + "-style") != "none")
+                        bh += resolveLength(styleVal(cs, std::string("border-") + s + "-width"), mainAvailable, childFontSize);
+                }
+                item.minMain = minContent + ph + bh;
+            }
         }
         if (item.minMain < 0) item.minMain = 0;
 
