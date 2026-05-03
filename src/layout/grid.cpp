@@ -973,12 +973,14 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Set container dimensions
     node->box.contentRect.width = containerWidth;
 
-    // Natural (unconstrained) content height = sum of tracks minus trailing gap.
-    // Computed first so it survives any explicit height or parent-imposed clamp —
-    // consumers use this for scroll extent / overflow detection.
+    // Natural (unconstrained) content height = sum of tracks plus inter-track gaps.
+    // rowPositions[numRows] already excludes any trailing gap (the loop only adds
+    // a gap when r+1 < numRows). Computed first so it survives any explicit height
+    // or parent-imposed clamp — consumers use this for scroll extent / overflow
+    // detection.
     float naturalH = 0;
     if (numRows > 0) {
-        naturalH = rowPositions[numRows] - rowGap;
+        naturalH = rowPositions[numRows];
         if (naturalH < 0) naturalH = 0;
     }
 
