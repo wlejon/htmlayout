@@ -194,13 +194,24 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     size_t numRows = rows.size();
     size_t numCols = 0;
 
+    // Read colspan/rowspan from either the HTML attribute (preferred) or the
+    // computed style (test-only fallback). Returns >= 1.
+    auto readSpan = [&](LayoutNode* cell, const char* name) -> int {
+        std::string a = cell->attribute(name);
+        int v = 0;
+        if (!a.empty()) v = std::atoi(a.c_str());
+        if (v <= 0) {
+            auto& cs = cell->computedStyle();
+            v = static_cast<int>(resolveLength(styleVal(cs, name), 0, fontSize));
+        }
+        return v < 1 ? 1 : v;
+    };
+
     // Pre-scan to estimate column count including colspans
     for (auto& row : rows) {
         size_t cols = 0;
         for (auto* cell : row.cells) {
-            auto& cs = cell->computedStyle();
-            int cs_val = static_cast<int>(resolveLength(styleVal(cs, "colspan"), 0, fontSize));
-            cols += (cs_val > 1) ? cs_val : 1;
+            cols += static_cast<size_t>(readSpan(cell, "colspan"));
         }
         numCols = std::max(numCols, cols);
     }
@@ -250,11 +261,8 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             while (gridCol < numCols && grid[r][gridCol] != nullptr) gridCol++;
             if (gridCol >= numCols) ensureGridCols(gridCol + 1);
 
-            auto& cs = cell->computedStyle();
-            int cspan = static_cast<int>(resolveLength(styleVal(cs, "colspan"), 0, fontSize));
-            int rspan = static_cast<int>(resolveLength(styleVal(cs, "rowspan"), 0, fontSize));
-            if (cspan < 1) cspan = 1;
-            if (rspan < 1) rspan = 1;
+            int cspan = readSpan(cell, "colspan");
+            int rspan = readSpan(cell, "rowspan");
 
             ensureGridCols(gridCol + cspan);
             ensureGridRows(r + rspan);

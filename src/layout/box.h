@@ -90,6 +90,11 @@ struct LayoutNode {
     // Computed style (from the CSS cascade)
     virtual const css::ComputedStyle& computedStyle() const = 0;
 
+    // HTML attribute lookup for layout-affecting presentational attributes
+    // (colspan, rowspan, width, height, align on table cells, etc.).
+    // Default returns empty; consumers override to bridge to their DOM.
+    virtual std::string attribute(const std::string& name) const { (void)name; return {}; }
+
     // Replaced element intrinsic size (e.g. <input>, <textarea>, <select>).
     // Returns true if this node has an intrinsic size, false otherwise.
     virtual bool intrinsicSize(float& w, float& h, float maxWidth) const { return false; }
