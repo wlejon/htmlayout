@@ -98,6 +98,14 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Column flex with no explicit height but a definite available height from
     // the parent (e.g. parent flex distributed space to us): use it as the
     // main-axis constraint so children are properly sized.
+    if (!isRow && mainAvailable < 0 && node->box.contentRect.height > 0) {
+        // An outer pass (e.g. position:absolute with top+bottom pinned) already
+        // resolved a definite content height for this container — prefer that
+        // over availableHeight, which is the *containing block's* height and
+        // would over-allocate (containing block height ≠ this container height
+        // when position:absolute uses inset to define both edges).
+        mainAvailable = node->box.contentRect.height;
+    }
     if (!isRow && mainAvailable < 0 && node->availableHeight > 0) {
         mainAvailable = node->availableHeight - paddingV - borderV;
         if (mainAvailable < 0) mainAvailable = 0;
@@ -443,12 +451,29 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     item->node->box.margin.top + item->node->box.margin.bottom;
             } else {
                 // Main = height, cross = width
-                // Pass allocated height so nested column-flex children know their constraint
+                // Pass allocated height so nested column-flex children know their constraint.
                 item->node->availableHeight = item->finalMain;
+                // Pre-resolve padding/border so we can pre-set contentRect.height —
+                // the inner layout (flex/block) needs to see the grown height for
+                // cross-axis alignment (align-items, vertical centering, etc.)
+                // when it's larger than the item's specified height.
+                auto& cs = item->node->computedStyle();
+                float ifs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                if (ifs <= 0) ifs = fontSize;
+                float padV = resolveLength(styleVal(cs, "padding-top"), mainAvailable, ifs) +
+                             resolveLength(styleVal(cs, "padding-bottom"), mainAvailable, ifs);
+                float borV = 0;
+                if (styleVal(cs, "border-top-style") != "none")
+                    borV += resolveLength(styleVal(cs, "border-top-width"), mainAvailable, ifs);
+                if (styleVal(cs, "border-bottom-style") != "none")
+                    borV += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, ifs);
+                float grownContentH = item->finalMain - padV - borV;
+                if (grownContentH < 0) grownContentH = 0;
+                item->node->box.contentRect.height = grownContentH;
                 layoutNode(item->node, containerMain, metrics);
-                item->node->box.contentRect.height = item->finalMain -
-                    item->node->box.padding.top - item->node->box.padding.bottom -
-                    item->node->box.border.top - item->node->box.border.bottom;
+                // Re-apply (block/flex inner layout may have overwritten) — the
+                // flex contract is that the item is finalMain on the main axis.
+                item->node->box.contentRect.height = grownContentH;
                 if (item->node->box.contentRect.height < 0) item->node->box.contentRect.height = 0;
 
                 item->crossSize = item->node->box.contentRect.width +
@@ -479,6 +504,12 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             else
                 crossAvailable = specH;
             if (crossAvailable < 0) crossAvailable = 0;
+            // If an outer pass grew this container's content height beyond its
+            // specified height (flex item with flex-grow or stretched abs box),
+            // honor the grown height for cross-axis alignment so children center
+            // within the actual occupied area.
+            if (node->box.contentRect.height > crossAvailable)
+                crossAvailable = node->box.contentRect.height;
         } else if (node->box.contentRect.height > 0) {
             // Style height is auto, but the container was already sized by an
             // outer pass (e.g. position:absolute with inset:0, or stretched by
