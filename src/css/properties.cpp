@@ -616,7 +616,9 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
             for (auto& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
 
             if (lower.substr(0, 4) == "url(" || lower.substr(0, 16) == "linear-gradient(" ||
-                lower.substr(0, 17) == "radial-gradient(" || lower.substr(0, 6) == "image(") {
+                lower.substr(0, 16) == "radial-gradient(" ||
+                lower.substr(0, 15) == "conic-gradient(" ||
+                lower.substr(0, 6) == "image(") {
                 result[1].value = t; // background-image
             } else if (lower == "repeat" || lower == "no-repeat" || lower == "repeat-x" ||
                        lower == "repeat-y" || lower == "space" || lower == "round") {
