@@ -577,8 +577,10 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
     }
 
     if (property == "background") {
-        // Reset all background sub-properties to initial values, then parse the value.
-        // CSS spec: background shorthand resets all sub-properties.
+        // CSS spec: 'background' shorthand resets all sub-properties.
+        // Multi-layer: comma-separated layers. Only the final layer may
+        // carry <bg-color>; earlier layers are images (or a final layer
+        // may also be color-only).
         std::vector<ExpandedDecl> result = {
             {"background-color", "transparent"},
             {"background-image", "none"},
@@ -589,52 +591,196 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
             {"background-origin", "padding-box"},
         };
 
-        if (value == "none" || value == "transparent" || value.empty()) {
-            if (value == "transparent") result[0].value = "transparent";
+        if (value.empty() || value == "none") return result;
+        if (value == "transparent") {
+            result[0].value = "transparent";
             return result;
         }
 
-        // Tokenize the value respecting parenthesized groups
-        std::vector<std::string> tokens;
-        std::string token;
-        int parenDepth = 0;
-        for (size_t i = 0; i <= value.size(); i++) {
-            char c = (i < value.size()) ? value[i] : ' ';
-            if (c == '(') parenDepth++;
-            if (c == ')') parenDepth--;
-            if ((c == ' ' || c == '\t' || i == value.size()) && parenDepth == 0) {
-                if (!token.empty()) { tokens.push_back(token); token.clear(); }
-            } else {
-                token += c;
+        // Split top-level (paren/quote-aware) commas into layers.
+        std::vector<std::string> layers;
+        {
+            std::string cur;
+            int depth = 0;
+            bool inQ = false;
+            char qc = 0;
+            for (size_t i = 0; i < value.size(); ++i) {
+                char c = value[i];
+                if (inQ) { cur += c; if (c == qc) inQ = false; continue; }
+                if (c == '"' || c == '\'') { inQ = true; qc = c; cur += c; continue; }
+                if (c == '(') { ++depth; cur += c; continue; }
+                if (c == ')') { --depth; cur += c; continue; }
+                if (c == ',' && depth == 0) {
+                    layers.push_back(cur);
+                    cur.clear();
+                    continue;
+                }
+                cur += c;
             }
+            if (!cur.empty() || !layers.empty()) layers.push_back(cur);
         }
 
-        // Classify each token
-        bool foundColor = false;
-        for (auto& t : tokens) {
-            std::string lower = t;
-            for (auto& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        auto trim = [](std::string& s) {
+            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+            while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+        };
 
-            if (lower.substr(0, 4) == "url(" || lower.substr(0, 16) == "linear-gradient(" ||
-                lower.substr(0, 16) == "radial-gradient(" ||
-                lower.substr(0, 15) == "conic-gradient(" ||
-                lower.substr(0, 6) == "image(") {
-                result[1].value = t; // background-image
-            } else if (lower == "repeat" || lower == "no-repeat" || lower == "repeat-x" ||
-                       lower == "repeat-y" || lower == "space" || lower == "round") {
-                result[4].value = t; // background-repeat
-            } else if (lower == "border-box" || lower == "padding-box" || lower == "content-box") {
-                result[6].value = t; // background-origin
-                result[5].value = t; // background-clip
-            } else if (lower == "center" || lower == "top" || lower == "bottom" ||
-                       lower == "left" || lower == "right") {
-                if (result[2].value == "0% 0%") result[2].value = t;
-                else result[2].value += " " + t;
-            } else if (!foundColor) {
-                result[0].value = t;
-                foundColor = true;
+        auto isPositionKeyword = [](const std::string& l) {
+            return l == "left" || l == "right" || l == "top" ||
+                   l == "bottom" || l == "center";
+        };
+        auto isLengthOrPercent = [](const std::string& t) {
+            if (t.empty()) return false;
+            // A length/percent/calc value (or "0", or "auto" handled separately)
+            char c0 = t[0];
+            if (c0 == '-' || c0 == '+' || c0 == '.' || std::isdigit(static_cast<unsigned char>(c0))) return true;
+            if (t.size() >= 5 && t.substr(0, 5) == "calc(") return true;
+            return false;
+        };
+
+        // Per-layer values
+        std::vector<std::string> layerImages;
+        std::vector<std::string> layerPositions;
+        std::vector<std::string> layerSizes;
+        std::vector<std::string> layerRepeats;
+        std::vector<std::string> layerClips;
+        std::vector<std::string> layerOrigins;
+
+        std::string layerColor; // only legal on the last layer
+        size_t numLayers = layers.size();
+        for (size_t li = 0; li < numLayers; ++li) {
+            std::string layer = layers[li];
+            trim(layer);
+
+            // Tokenize this layer (whitespace, paren-aware)
+            std::vector<std::string> toks;
+            {
+                std::string t;
+                int depth = 0;
+                bool inQ = false;
+                char qc = 0;
+                for (size_t i = 0; i < layer.size(); ++i) {
+                    char c = layer[i];
+                    if (inQ) { t += c; if (c == qc) inQ = false; continue; }
+                    if (c == '"' || c == '\'') { inQ = true; qc = c; t += c; continue; }
+                    if (c == '(') { ++depth; t += c; continue; }
+                    if (c == ')') { --depth; t += c; continue; }
+                    if (depth == 0 && std::isspace(static_cast<unsigned char>(c))) {
+                        if (!t.empty()) { toks.push_back(t); t.clear(); }
+                        continue;
+                    }
+                    t += c;
+                }
+                if (!t.empty()) toks.push_back(t);
             }
+
+            std::string image;
+            std::vector<std::string> positionToks;
+            std::vector<std::string> sizeToks;
+            std::string repeat;
+            std::string clip;
+            std::string origin;
+            std::string color;
+
+            // Walk tokens; '/' separates position from size.
+            bool sawSlash = false;
+            int boxKeywordCount = 0;
+            for (size_t ti = 0; ti < toks.size(); ++ti) {
+                const std::string& t = toks[ti];
+                std::string lower = t;
+                for (auto& ch : lower) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+                if (t == "/") { sawSlash = true; continue; }
+
+                if (lower.substr(0, 4) == "url(" ||
+                    lower.substr(0, 16) == "linear-gradient(" ||
+                    lower.substr(0, 16) == "radial-gradient(" ||
+                    lower.substr(0, 15) == "conic-gradient(" ||
+                    lower.substr(0, 26) == "repeating-linear-gradient(" ||
+                    lower.substr(0, 26) == "repeating-radial-gradient(" ||
+                    lower.substr(0, 6) == "image(" ||
+                    lower == "none") {
+                    image = (lower == "none") ? "none" : t;
+                    continue;
+                }
+                if (lower == "repeat" || lower == "no-repeat" || lower == "repeat-x" ||
+                    lower == "repeat-y" || lower == "space" || lower == "round") {
+                    repeat = lower;
+                    continue;
+                }
+                if (lower == "border-box" || lower == "padding-box" || lower == "content-box") {
+                    // First box keyword sets origin (and clip), second sets clip.
+                    if (boxKeywordCount == 0) { origin = lower; clip = lower; }
+                    else clip = lower;
+                    ++boxKeywordCount;
+                    continue;
+                }
+                if (lower == "fixed" || lower == "scroll" || lower == "local") {
+                    // background-attachment — not tracked separately yet, ignore.
+                    continue;
+                }
+                if (sawSlash) {
+                    if (lower == "auto" || lower == "cover" || lower == "contain" ||
+                        isLengthOrPercent(t)) {
+                        sizeToks.push_back(t);
+                        continue;
+                    }
+                }
+                if (isPositionKeyword(lower) || isLengthOrPercent(t)) {
+                    positionToks.push_back(t);
+                    continue;
+                }
+                // Anything else: candidate color (only valid on last layer).
+                if (li + 1 == numLayers) {
+                    if (color.empty()) color = t;
+                    else color += " " + t; // e.g. rgb(...) already one token
+                }
+            }
+
+            if (image.empty()) image = "none";
+            std::string position;
+            if (positionToks.empty()) position = "0% 0%";
+            else if (positionToks.size() == 1) position = positionToks[0];
+            else {
+                position = positionToks[0];
+                for (size_t k = 1; k < positionToks.size(); ++k) position += " " + positionToks[k];
+            }
+            std::string size;
+            if (sizeToks.empty()) size = "auto";
+            else if (sizeToks.size() == 1) size = sizeToks[0];
+            else {
+                size = sizeToks[0];
+                for (size_t k = 1; k < sizeToks.size(); ++k) size += " " + sizeToks[k];
+            }
+            if (repeat.empty()) repeat = "repeat";
+            if (origin.empty()) origin = "padding-box";
+            if (clip.empty()) clip = "border-box";
+
+            layerImages.push_back(image);
+            layerPositions.push_back(position);
+            layerSizes.push_back(size);
+            layerRepeats.push_back(repeat);
+            layerOrigins.push_back(origin);
+            layerClips.push_back(clip);
+            if (li + 1 == numLayers) layerColor = color;
         }
+
+        auto join = [](const std::vector<std::string>& v) {
+            std::string s;
+            for (size_t i = 0; i < v.size(); ++i) {
+                if (i) s += ", ";
+                s += v[i];
+            }
+            return s;
+        };
+
+        if (!layerColor.empty()) result[0].value = layerColor;
+        result[1].value = join(layerImages);
+        result[2].value = join(layerPositions);
+        result[3].value = join(layerSizes);
+        result[4].value = join(layerRepeats);
+        result[5].value = join(layerClips);
+        result[6].value = join(layerOrigins);
 
         return result;
     }
