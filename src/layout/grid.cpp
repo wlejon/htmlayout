@@ -858,6 +858,16 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
+    // Container-level justify-items / align-items defaults to "stretch".
+    // Per-item justify-self / align-self can override.
+    const std::string& containerJustifyItems = styleVal(style, "justify-items");
+    const std::string& containerAlignItems = styleVal(style, "align-items");
+    auto resolveAlign = [](const std::string& self, const std::string& items) {
+        if (!self.empty() && self != "auto" && self != "normal") return self;
+        if (!items.empty() && items != "normal") return items;
+        return std::string("stretch");
+    };
+
     // Re-layout items with resolved column widths
     for (auto& item : items) {
         // Calculate available width from spanned columns
@@ -869,10 +879,11 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         layoutNode(item.node, itemWidth, metrics);
 
-        // Set content width to fill the grid area
+        // Set content width to fill the grid area only if justify-self resolves to stretch
         auto& cs = item.node->computedStyle();
         const std::string& w = styleVal(cs, "width");
-        if (w == "auto" || w.empty()) {
+        std::string justifySelf = resolveAlign(styleVal(cs, "justify-self"), containerJustifyItems);
+        if ((w == "auto" || w.empty()) && justifySelf == "stretch") {
             float cw = itemWidth -
                 item.node->box.padding.left - item.node->box.padding.right -
                 item.node->box.border.left - item.node->box.border.right -
@@ -959,10 +970,12 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (rr > item.row) areaH += rowGap;
         }
 
-        // Stretch item to fill grid area (default behavior)
+        // Stretch item to fill grid area (default behavior) — only when align-self resolves to stretch
         auto& cs = item.node->computedStyle();
         const std::string& h = styleVal(cs, "height");
-        if (h == "auto" || h.empty()) {
+        std::string alignSelf = resolveAlign(styleVal(cs, "align-self"), containerAlignItems);
+        std::string justifySelfPos = resolveAlign(styleVal(cs, "justify-self"), containerJustifyItems);
+        if ((h == "auto" || h.empty()) && alignSelf == "stretch") {
             float ch = areaH -
                 item.node->box.margin.top - item.node->box.margin.bottom -
                 item.node->box.padding.top - item.node->box.padding.bottom -
@@ -990,9 +1003,32 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
-        item.node->box.contentRect.x = areaX +
+        // Compute alignment offsets within the grid area for non-stretch items.
+        float alignOffsetX = 0;
+        float alignOffsetY = 0;
+        {
+            float itemOuterW = item.node->box.contentRect.width +
+                item.node->box.padding.left + item.node->box.padding.right +
+                item.node->box.border.left + item.node->box.border.right +
+                item.node->box.margin.left + item.node->box.margin.right;
+            float itemOuterH = item.node->box.contentRect.height +
+                item.node->box.padding.top + item.node->box.padding.bottom +
+                item.node->box.border.top + item.node->box.border.bottom +
+                item.node->box.margin.top + item.node->box.margin.bottom;
+            float freeX = areaW - itemOuterW;
+            float freeY = areaH - itemOuterH;
+            if (justifySelfPos == "center") alignOffsetX = freeX * 0.5f;
+            else if (justifySelfPos == "end" || justifySelfPos == "flex-end" || justifySelfPos == "right")
+                alignOffsetX = freeX;
+            // start / stretch / flex-start / left → 0
+            if (alignSelf == "center") alignOffsetY = freeY * 0.5f;
+            else if (alignSelf == "end" || alignSelf == "flex-end")
+                alignOffsetY = freeY;
+        }
+
+        item.node->box.contentRect.x = areaX + alignOffsetX +
             item.node->box.margin.left + item.node->box.padding.left + item.node->box.border.left;
-        item.node->box.contentRect.y = areaY +
+        item.node->box.contentRect.y = areaY + alignOffsetY +
             item.node->box.margin.top + item.node->box.padding.top + item.node->box.border.top;
 
         // Apply position: relative offset
