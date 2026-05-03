@@ -75,9 +75,15 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             contentWidth = specifiedWidth;
         }
     } else {
-        // width: auto — fill available space
-        contentWidth = availableWidth - marginH - paddingH - borderH;
-        if (contentWidth < 0.0f) contentWidth = 0.0f;
+        // width: auto — for replaced elements (e.g. <img>) with an intrinsic
+        // size, use that. Otherwise fill available space.
+        float intrW = 0, intrH = 0;
+        if (node->intrinsicSize(intrW, intrH, availableWidth - paddingH - borderH)) {
+            contentWidth = intrW;
+        } else {
+            contentWidth = availableWidth - marginH - paddingH - borderH;
+            if (contentWidth < 0.0f) contentWidth = 0.0f;
+        }
     }
 
     // Apply min/max-width constraints
@@ -875,8 +881,15 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             node->box.contentRect.height = specifiedHeight;
         }
     } else {
-        // height: auto — shrink to fit content
-        node->box.contentRect.height = cursorY;
+        // height: auto — for replaced elements (e.g. <img>) with intrinsic
+        // size, use that; otherwise shrink to fit content.
+        float intrW = 0, intrH = 0;
+        float ctW = node->box.contentRect.width;
+        if (cursorY == 0.0f && node->intrinsicSize(intrW, intrH, ctW)) {
+            node->box.contentRect.height = intrH;
+        } else {
+            node->box.contentRect.height = cursorY;
+        }
     }
 
     // Store natural height before clamping (for scroll extent calculation)
