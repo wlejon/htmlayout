@@ -750,7 +750,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             continue;
         }
 
-        // Margin collapsing: adjacent vertical margins collapse to the larger value
+        // Margin collapsing: adjacent vertical margins collapse. Per CSS 2.1
+        // §8.3.1, the resulting margin is the largest of the positive
+        // operands plus the smallest (most negative) of the negatives.
+        // For two values a, b that simplifies to:
+        //   max(a, b, 0) + min(a, b, 0)
         float collapsedMargin;
         if (firstChild) {
             collapsedMargin = childMarginTop;
@@ -758,7 +762,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             hadFirstBlockChild = true;
             firstChild = false;
         } else {
-            collapsedMargin = std::max(prevMarginBottom, childMarginTop);
+            float pos = std::max({prevMarginBottom, childMarginTop, 0.0f});
+            float neg = std::min({prevMarginBottom, childMarginTop, 0.0f});
+            collapsedMargin = pos + neg;
         }
 
         cursorY += collapsedMargin;
