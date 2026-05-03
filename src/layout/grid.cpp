@@ -690,9 +690,27 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     const std::string& autoFlow = styleVal(style, "grid-auto-flow");
     bool columnFlow = (autoFlow == "column");
 
+    // Pre-pass: mark cells occupied for items with fully explicit placement
+    // BEFORE auto-placing the rest. Per spec, auto-placed items skip cells
+    // already taken by explicitly-placed items regardless of source order.
+    for (auto& item : items) {
+        if (item.col >= 0 && item.row >= 0) {
+            for (int r = item.row; r < item.row + item.rowSpan; r++) {
+                ensureRows(r);
+                for (int c = item.col; c < item.col + item.colSpan && c < static_cast<int>(numCols); c++) {
+                    if (c >= 0 && r >= 0) occupied[r][c] = true;
+                }
+            }
+        }
+    }
+
     // Auto-place items that don't have explicit positions
     size_t autoRow = 0, autoCol = 0;
     for (auto& item : items) {
+        if (item.col >= 0 && item.row >= 0) {
+            // Already marked above — skip the marking that would re-do it.
+            continue;
+        }
         if (item.col < 0 && item.row < 0) {
             // Find next available cell that fits the item's span
             ensureRows(autoRow);
