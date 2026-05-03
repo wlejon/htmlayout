@@ -190,8 +190,18 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
 
     float maxChildMin = 0.0f;
 
+    const std::string& displayMin = styleVal(style, "display");
+    bool isFlexContainerMin = (displayMin == "flex" || displayMin == "inline-flex");
+
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
+            // Flex containers discard whitespace-only text nodes (CSS Flexbox §4)
+            if (isFlexContainerMin) {
+                bool ws = true;
+                for (char c : child->textContent())
+                    if (!std::isspace(static_cast<unsigned char>(c))) { ws = false; break; }
+                if (ws) continue;
+            }
             // Min-content: each word on its own line, take the widest word
             std::string text = child->textContent();
             std::string word;
@@ -251,12 +261,22 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     const std::string& flexDir = styleVal(style, "flex-direction");
     bool isHorizontal = (display == "flex" || display == "inline-flex") &&
                         (flexDir.empty() || flexDir == "row" || flexDir == "row-reverse");
+    bool isFlexContainer = (display == "flex" || display == "inline-flex");
 
     float maxChildMax = 0.0f;
     float sumChildMax = 0.0f;
 
+    auto isWhitespaceOnly = [](const std::string& s) {
+        for (char c : s) {
+            if (!std::isspace(static_cast<unsigned char>(c))) return false;
+        }
+        return true;
+    };
+
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
+            // Flex containers discard whitespace-only text nodes (CSS Flexbox §4)
+            if (isFlexContainer && isWhitespaceOnly(child->textContent())) continue;
             // Max-content: no wrapping, measure the whole text as one line
             std::string text = child->textContent();
             // Collapse whitespace
@@ -328,7 +348,7 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
             if (!child->isTextNode()) {
                 auto& cs = child->computedStyle();
                 if (styleVal(cs, "display") != "none") childCount++;
-            } else {
+            } else if (!isFlexContainer || !isWhitespaceOnly(child->textContent())) {
                 childCount++;
             }
         }
@@ -613,9 +633,23 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     if (shrinkWrap) {
         float maxCW = computeMaxContentWidth(child, metrics);
         if (maxCW > cbWidth) maxCW = cbWidth;
-        layoutNode(child, maxCW + child->box.padding.left + child->box.padding.right +
-                   child->box.border.left + child->box.border.right +
-                   child->box.margin.left + child->box.margin.right, metrics);
+        // Resolve padding/border/margin from the child's own style here —
+        // child->box may not yet contain resolved values (the in-flow layout
+        // pass skips absolute/fixed children), so reading child->box gives 0
+        // and the inner layout would then subtract padding+border from a too-small
+        // availW and incorrectly shrink children.
+        float ph = resolveLength(styleVal(childStyle, "padding-left"), cbWidth, fontSize) +
+                   resolveLength(styleVal(childStyle, "padding-right"), cbWidth, fontSize);
+        float bh = 0.0f;
+        for (const char* side : {"left", "right"}) {
+            std::string ss = std::string("border-") + side + "-style";
+            std::string sw = std::string("border-") + side + "-width";
+            if (styleVal(childStyle, ss) != "none")
+                bh += resolveLength(styleVal(childStyle, sw), cbWidth, fontSize);
+        }
+        float mh = resolveLength(styleVal(childStyle, "margin-left"), cbWidth, fontSize) +
+                   resolveLength(styleVal(childStyle, "margin-right"), cbWidth, fontSize);
+        layoutNode(child, maxCW + ph + bh + mh, metrics);
     } else {
         layoutNode(child, availW, metrics);
     }
