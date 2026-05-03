@@ -108,6 +108,16 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     };
     std::vector<RowGroup> rowGroups;
 
+    // Column metadata from <colgroup>/<col>. Each col contributes a column
+    // (or `span` columns) with a possibly-explicit width.
+    struct ColInfo {
+        LayoutNode* colNode = nullptr;
+        LayoutNode* colGroupNode = nullptr;
+        float specWidth = -1.0f; // -1 = auto/unset
+    };
+    std::vector<ColInfo> colInfos;
+    std::vector<LayoutNode*> colGroups; // for box assignment
+
     auto collectRows = [&](LayoutNode* parent) {
         for (auto* child : getLayoutChildren(parent)) {
             if (child->isTextNode()) continue;
@@ -162,6 +172,61 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 }
                 if (added) rowGroups.push_back(rg);
                 else { child->box = LayoutBox{}; } // empty row group
+            } else if (d == "table-column-group") {
+                colGroups.push_back(child);
+                // colgroup width applies to each contained col without an
+                // explicit width, OR if no <col> children exist, expands span
+                auto& gcs = child->computedStyle();
+                std::string gWidthVal = styleVal(gcs, "width");
+                std::string gSpan = child->attribute("span");
+                bool hasColChildren = false;
+                for (auto* gc : child->children()) {
+                    if (gc->isTextNode()) continue;
+                    auto& gccs = gc->computedStyle();
+                    if (styleVal(gccs, "display") == "table-column") {
+                        hasColChildren = true;
+                        ColInfo ci;
+                        ci.colNode = gc;
+                        ci.colGroupNode = child;
+                        std::string wVal = styleVal(gccs, "width");
+                        float w = -1.0f;
+                        if (!wVal.empty() && wVal != "auto") {
+                            w = resolveLength(wVal, availableWidth, fontSize);
+                        } else if (!gWidthVal.empty() && gWidthVal != "auto") {
+                            w = resolveLength(gWidthVal, availableWidth, fontSize);
+                        }
+                        ci.specWidth = w;
+                        int span = 1;
+                        std::string colSpanAttr = gc->attribute("span");
+                        if (!colSpanAttr.empty()) span = std::max(1, std::atoi(colSpanAttr.c_str()));
+                        for (int s = 0; s < span; s++) colInfos.push_back(ci);
+                    }
+                }
+                if (!hasColChildren) {
+                    // colgroup with no <col> children: span N columns at colgroup width
+                    int span = 1;
+                    if (!gSpan.empty()) span = std::max(1, std::atoi(gSpan.c_str()));
+                    float w = -1.0f;
+                    if (!gWidthVal.empty() && gWidthVal != "auto") {
+                        w = resolveLength(gWidthVal, availableWidth, fontSize);
+                    }
+                    ColInfo ci;
+                    ci.colGroupNode = child;
+                    ci.specWidth = w;
+                    for (int s = 0; s < span; s++) colInfos.push_back(ci);
+                }
+            } else if (d == "table-column") {
+                // Stray <col> without a <colgroup>
+                ColInfo ci;
+                ci.colNode = child;
+                std::string wVal = styleVal(cs, "width");
+                if (!wVal.empty() && wVal != "auto") {
+                    ci.specWidth = resolveLength(wVal, availableWidth, fontSize);
+                }
+                int span = 1;
+                std::string colSpanAttr = child->attribute("span");
+                if (!colSpanAttr.empty()) span = std::max(1, std::atoi(colSpanAttr.c_str()));
+                for (int s = 0; s < span; s++) colInfos.push_back(ci);
             } else if (isTableCaption(d)) {
                 captions.push_back(child);
             } else if (isTableCell(d)) {
@@ -351,6 +416,19 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
+    // Apply explicit <col>/<colgroup> widths: when set, they pin both min and max.
+    for (size_t c = 0; c < numCols && c < colInfos.size(); c++) {
+        if (colInfos[c].specWidth > 0) {
+            float w = colInfos[c].specWidth;
+            // Treat col width as the column's preferred width — but never below
+            // the column's intrinsic min-content (avoid clipping inline text).
+            float floor = colMin[c];
+            float pinned = std::max(w, floor);
+            colMin[c] = pinned;
+            colMax[c] = pinned;
+        }
+    }
+
     // Compute table preferred (max-content) and minimum widths.
     float sumMin = 0, sumMax = 0;
     for (size_t c = 0; c < numCols; c++) { sumMin += colMin[c]; sumMax += colMax[c]; }
@@ -519,6 +597,64 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         for (size_t c = 0; c < numCols; c++) {
             colXPositions[c] = cx;
             cx += colWidths[c] + borderSpacing;
+        }
+    }
+
+    // Position <col> and <colgroup> boxes to span the actual cell columns.
+    // Chromium reports each <col>'s rect as the column's [x..x+colWidth] band
+    // covering the table body's vertical extent; <colgroup> spans the union
+    // of its <col>s. Match that for parity.
+    {
+        float bodyTop = 0;
+        float bodyBottom = 0;
+        if (numRows > 0) {
+            bodyTop = rowYPositions[0];
+            bodyBottom = rowYPositions[numRows - 1] + rowHeights[numRows - 1];
+        }
+        float bodyH = std::max(0.0f, bodyBottom - bodyTop);
+        // Track which column we're at as we walk colInfos.
+        size_t colIdx = 0;
+        // Group by colGroupNode, tracking each group's [firstCol..lastCol].
+        struct GroupSpan { LayoutNode* node = nullptr; size_t first = 0; size_t last = 0; };
+        std::vector<GroupSpan> groupSpans;
+        for (size_t i = 0; i < colInfos.size() && colIdx < numCols; i++) {
+            auto& ci = colInfos[i];
+            if (ci.colNode) {
+                ci.colNode->box.margin = {};
+                ci.colNode->box.padding = {};
+                ci.colNode->box.border = {};
+                ci.colNode->box.contentRect.x = colXPositions[colIdx];
+                ci.colNode->box.contentRect.y = bodyTop;
+                ci.colNode->box.contentRect.width = colWidths[colIdx];
+                ci.colNode->box.contentRect.height = bodyH;
+            }
+            if (ci.colGroupNode) {
+                if (groupSpans.empty() || groupSpans.back().node != ci.colGroupNode) {
+                    groupSpans.push_back({ci.colGroupNode, colIdx, colIdx});
+                } else {
+                    groupSpans.back().last = colIdx;
+                }
+            }
+            colIdx++;
+        }
+        for (auto& gs : groupSpans) {
+            if (!gs.node) continue;
+            float gx = colXPositions[gs.first];
+            float gw = (colXPositions[gs.last] + colWidths[gs.last]) - gx;
+            gs.node->box.margin = {};
+            gs.node->box.padding = {};
+            gs.node->box.border = {};
+            gs.node->box.contentRect.x = gx;
+            gs.node->box.contentRect.y = bodyTop;
+            gs.node->box.contentRect.width = gw;
+            gs.node->box.contentRect.height = bodyH;
+        }
+        // Any <colgroup>s with no entries (empty or all eaten by cell columns
+        // beyond colInfos): zero them out.
+        for (auto* cg : colGroups) {
+            bool found = false;
+            for (auto& gs : groupSpans) if (gs.node == cg) { found = true; break; }
+            if (!found) cg->box = LayoutBox{};
         }
     }
 
