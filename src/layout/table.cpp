@@ -63,11 +63,17 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float borderH = node->box.border.left + node->box.border.right;
     float marginH = node->box.margin.left + node->box.margin.right;
 
-    // Resolve table width
+    // Resolve table width. Note: per CSS 2.1 §17.5.2, width:auto on tables means
+    // shrink-to-fit, NOT fill-the-container. We compute a preferred (max-content)
+    // width from intrinsic column sizes after collecting cells; for now, set a
+    // tentative full-width sentinel that's clamped later.
     float specW = resolveLength(styleVal(style, "width"), availableWidth, fontSize);
     const std::string& widthVal = styleVal(style, "width");
+    float availContent = availableWidth - marginH - paddingH - borderH;
+    if (availContent < 0) availContent = 0;
+    bool widthAuto = (widthVal == "auto" || widthVal.empty());
     float tableContentWidth;
-    if (widthVal != "auto" && !widthVal.empty()) {
+    if (!widthAuto) {
         if (styleVal(style, "box-sizing") == "border-box") {
             tableContentWidth = specW - paddingH - borderH;
         } else {
@@ -75,8 +81,9 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
         if (tableContentWidth < 0) tableContentWidth = 0;
     } else {
-        tableContentWidth = availableWidth - marginH - paddingH - borderH;
-        if (tableContentWidth < 0) tableContentWidth = 0;
+        // Tentative — will be replaced by shrink-to-fit min(available, max-content)
+        // once we've computed intrinsic column widths.
+        tableContentWidth = availContent;
     }
 
     // Border spacing
@@ -264,46 +271,129 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
-    // Phase 1: Determine column widths.
-    // Only non-spanning cells (colspan=1) contribute directly.
-    std::vector<float> colWidths(numCols, 0.0f);
+    // Phase 1: intrinsic column min/max widths from cells.
+    // For each non-spanning cell, contribute its own min/max content width
+    // (plus padding+border) to its column. For spanning cells, distribute
+    // any deficit equally across the spanned columns.
+    std::vector<float> colMin(numCols, 0.0f);
+    std::vector<float> colMax(numCols, 0.0f);
     float totalSpacing = borderSpacing * (numCols + 1);
-    float cellAvailWidth = (tableContentWidth - totalSpacing) / numCols;
-    if (cellAvailWidth < 0) cellAvailWidth = 0;
+
+    auto cellEdges = [&](LayoutNode* cell, float& padBorderH) {
+        auto& cs = cell->computedStyle();
+        float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        if (cfs <= 0) cfs = fontSize;
+        float pl = resolveLength(styleVal(cs, "padding-left"), 0, cfs);
+        float pr = resolveLength(styleVal(cs, "padding-right"), 0, cfs);
+        float bl = (styleVal(cs, "border-left-style") != "none")
+                   ? resolveLength(styleVal(cs, "border-left-width"), 0, cfs) : 0;
+        float br = (styleVal(cs, "border-right-style") != "none")
+                   ? resolveLength(styleVal(cs, "border-right-width"), 0, cfs) : 0;
+        padBorderH = pl + pr + bl + br;
+    };
 
     for (auto& ci : cellInfos) {
-        float w = cellAvailWidth * ci.colspan + borderSpacing * (ci.colspan - 1);
-        layoutNode(ci.node, w, metrics);
-        float cellFullW = ci.node->box.fullWidth() + ci.node->box.margin.left + ci.node->box.margin.right;
+        float pbh = 0;
+        cellEdges(ci.node, pbh);
+        // Honor explicit cell width if specified
+        auto& cs = ci.node->computedStyle();
+        const std::string& cwVal = styleVal(cs, "width");
+        float cellMin = computeMinContentWidth(ci.node, metrics) + pbh;
+        float cellMax = computeMaxContentWidth(ci.node, metrics) + pbh;
+        if (!cwVal.empty() && cwVal != "auto") {
+            float specCellW = resolveLength(cwVal, tableContentWidth, fontSize);
+            if (styleVal(cs, "box-sizing") != "border-box") specCellW += pbh;
+            // Treat explicit width as a strong preferred for max-content,
+            // and as a floor for min-content.
+            cellMax = std::max(cellMax, specCellW);
+            cellMin = std::max(cellMin, specCellW);
+        }
         if (ci.colspan == 1) {
-            colWidths[ci.gridCol] = std::max(colWidths[ci.gridCol], cellFullW);
+            colMin[ci.gridCol] = std::max(colMin[ci.gridCol], cellMin);
+            colMax[ci.gridCol] = std::max(colMax[ci.gridCol], cellMax);
         }
     }
 
-    // Distribute spanning cell widths: if a spanning cell needs more than the sum
-    // of its columns, expand columns equally
+    // Distribute spanning cell intrinsic widths over spanned columns.
+    // A spanning cell's min/max must be at least the sum of the spanned
+    // columns' min/max plus inter-column spacing. If short, distribute
+    // the deficit equally.
     for (auto& ci : cellInfos) {
         if (ci.colspan <= 1) continue;
-        float cellFullW = ci.node->box.fullWidth() + ci.node->box.margin.left + ci.node->box.margin.right;
-        float spannedWidth = borderSpacing * (ci.colspan - 1);
-        for (size_t c = 0; c < ci.colspan; c++) spannedWidth += colWidths[ci.gridCol + c];
-        if (cellFullW > spannedWidth) {
-            float extra = (cellFullW - spannedWidth) / ci.colspan;
-            for (size_t c = 0; c < ci.colspan; c++) colWidths[ci.gridCol + c] += extra;
+        float pbh = 0;
+        cellEdges(ci.node, pbh);
+        float cellMin = computeMinContentWidth(ci.node, metrics) + pbh;
+        float cellMax = computeMaxContentWidth(ci.node, metrics) + pbh;
+        float spanSpacing = borderSpacing * (ci.colspan - 1);
+
+        float minSum = 0, maxSum = 0;
+        for (size_t c = 0; c < ci.colspan; c++) {
+            minSum += colMin[ci.gridCol + c];
+            maxSum += colMax[ci.gridCol + c];
+        }
+        float minDeficit = cellMin - spanSpacing - minSum;
+        if (minDeficit > 0) {
+            float per = minDeficit / ci.colspan;
+            for (size_t c = 0; c < ci.colspan; c++) colMin[ci.gridCol + c] += per;
+        }
+        float maxDeficit = cellMax - spanSpacing - maxSum;
+        if (maxDeficit > 0) {
+            float per = maxDeficit / ci.colspan;
+            for (size_t c = 0; c < ci.colspan; c++) colMax[ci.gridCol + c] += per;
         }
     }
 
-    // Distribute remaining space proportionally
-    float totalColWidth = 0;
-    for (float w : colWidths) totalColWidth += w;
-    float distributable = tableContentWidth - totalSpacing - totalColWidth;
-    if (distributable > 0 && totalColWidth > 0) {
-        for (size_t c = 0; c < numCols; c++) {
-            colWidths[c] += distributable * (colWidths[c] / totalColWidth);
+    // Compute table preferred (max-content) and minimum widths.
+    float sumMin = 0, sumMax = 0;
+    for (size_t c = 0; c < numCols; c++) { sumMin += colMin[c]; sumMax += colMax[c]; }
+    float prefTable = sumMax + totalSpacing;
+    float minTable  = sumMin + totalSpacing;
+
+    // If width is auto, shrink-to-fit: min(available, max-content), floored at min-content.
+    if (widthAuto) {
+        tableContentWidth = std::min(availContent, prefTable);
+        tableContentWidth = std::max(tableContentWidth, minTable);
+    } else {
+        // Honor explicit width but never less than min-content
+        tableContentWidth = std::max(tableContentWidth, minTable);
+    }
+
+    // Distribute the table content width across columns.
+    // Start each column at its min; add per-col extra weighted by (max - min)
+    // if there's slack between min and max; further extra proportional to max
+    // if any remains after every column reached its max-content.
+    std::vector<float> colWidths = colMin;
+    float available = tableContentWidth - totalSpacing;
+    float used = sumMin;
+    if (available > used) {
+        float extra = available - used;
+        float slackTotal = 0;
+        for (size_t c = 0; c < numCols; c++) slackTotal += (colMax[c] - colMin[c]);
+        if (slackTotal > 0) {
+            float take = std::min(extra, slackTotal);
+            for (size_t c = 0; c < numCols; c++) {
+                float slack = colMax[c] - colMin[c];
+                colWidths[c] += take * (slack / slackTotal);
+            }
+            extra -= take;
         }
-    } else if (distributable > 0 && totalColWidth == 0) {
-        float perCol = distributable / numCols;
-        for (size_t c = 0; c < numCols; c++) colWidths[c] = perCol;
+        if (extra > 0) {
+            // All columns at max-content; spread remaining space proportional to max-content
+            float maxTotal = sumMax;
+            if (maxTotal > 0) {
+                for (size_t c = 0; c < numCols; c++) {
+                    colWidths[c] += extra * (colMax[c] / maxTotal);
+                }
+            } else {
+                float per = extra / numCols;
+                for (size_t c = 0; c < numCols; c++) colWidths[c] += per;
+            }
+        }
+    } else if (available < used && used > 0) {
+        // Shouldn't normally happen because we floored tableContentWidth at minTable,
+        // but guard anyway: scale down proportionally to min.
+        float scale = available / used;
+        for (size_t c = 0; c < numCols; c++) colWidths[c] *= scale;
     }
 
     // Phase 2: Layout cells with final widths and determine row heights
@@ -375,6 +465,10 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Position row groups: span from first row's top to last row's bottom.
     // The row group's contentRect is in table-content coords (its parent box).
+    // Chromium hugs the row group horizontally to the cell columns (excludes the
+    // outer border-spacing on left/right), so do the same.
+    float groupInsetX = borderSpacing;
+    float groupInsetW = std::max(0.0f, tableContentWidth - 2.0f * borderSpacing);
     for (auto& rg : rowGroups) {
         if (!rg.node) continue;
         rg.node->box.margin = {};
@@ -382,9 +476,9 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         rg.node->box.border = {};
         float top = rowYPositions[rg.firstRow];
         float bottom = rowYPositions[rg.lastRow] + rowHeights[rg.lastRow];
-        rg.node->box.contentRect.x = 0;
+        rg.node->box.contentRect.x = groupInsetX;
         rg.node->box.contentRect.y = top;
-        rg.node->box.contentRect.width = tableContentWidth;
+        rg.node->box.contentRect.width = groupInsetW;
         rg.node->box.contentRect.height = std::max(0.0f, bottom - top);
     }
 
@@ -398,13 +492,15 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         rn->box.padding = {};
         rn->box.border = {};
         float ry = rowYPositions[r];
+        float rx = groupInsetX;
         if (rows[r].groupNode) {
             // subtract the group's y so we end up with row-relative-to-group
             ry -= rows[r].groupNode->box.contentRect.y;
+            rx = 0; // row's parent is the group, which is already inset
         }
-        rn->box.contentRect.x = 0;
+        rn->box.contentRect.x = rx;
         rn->box.contentRect.y = ry;
-        rn->box.contentRect.width = tableContentWidth;
+        rn->box.contentRect.width = groupInsetW;
         rn->box.contentRect.height = rowHeights[r];
     }
 
@@ -431,7 +527,12 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float cellRelX = cellX;
         float cellRelY = 0.0f;
         bool hasRowNode = (ci.gridRow < rows.size() && rows[ci.gridRow].rowNode != nullptr);
-        if (!hasRowNode) {
+        if (hasRowNode) {
+            // Row's content origin is at x=borderSpacing within the table
+            // (or x=0 within the row group, which itself is inset by borderSpacing).
+            // Cell coords are relative to that, so back out one border-spacing.
+            cellRelX -= borderSpacing;
+        } else {
             cellRelY = rowYPositions[ci.gridRow];
         }
 
