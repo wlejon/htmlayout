@@ -8,13 +8,18 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 
 **CSS Engine**
 - W3C-compliant tokenizer and parser (Syntax Module Level 3)
-- Selector matching: type, class, ID, attribute, pseudo-classes (`:nth-child`, `:not`, `:is`, `:where`, `:has`, `:hover`, `:focus`, `:defined`, etc.), pseudo-elements (`::before`, `::after`)
+- Selectors: type, class, ID, universal, attribute (`[x]`, `[x=y]`, `[x~=y]`, `[x|=y]`, `[x^=y]`, `[x$=y]`, `[x*=y]`, with `i` case-insensitive flag)
 - Combinators: descendant, child (`>`), adjacent sibling (`+`), general sibling (`~`)
+- Structural pseudo-classes: `:root`, `:empty`, `:first-child`, `:last-child`, `:only-child`, `:first-of-type`, `:last-of-type`, `:only-of-type`, `:nth-child(an+b)`, `:nth-last-child`, `:nth-of-type`, `:nth-last-of-type`
+- Logical pseudo-classes: `:not()`, `:is()`, `:where()`, `:has()`
+- UI/state pseudo-classes: `:hover`, `:focus`, `:focus-within`, `:focus-visible`, `:active`, `:link`, `:visited`, `:any-link`, `:target`, `:checked`, `:disabled`, `:enabled`, `:required`, `:optional`, `:read-only`, `:read-write`, `:placeholder-shown`, `:indeterminate`, `:defined`
+- Pseudo-elements: `::before`, `::after`, `::slotted()`, `::part()`
 - Full cascade with specificity, source order, `!important`, and inheritance (Cascade Level 5)
 - `@layer` cascade layers with spec-compliant priority ordering (including `!important` reversal)
 - `@container` queries with named containers and size containment
-- Shorthand expansion for ~150 properties (`margin`, `padding`, `border`, `flex`, `grid`, `font`, `container`, etc.)
+- Shorthand expansion for ~150 properties (`margin`, `padding`, `border`, `flex`, `grid`, `font`, `container`, `background`, etc.), including multi-layer `background` with `position / size` slash syntax
 - Color parsing (named, hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`)
+- `transform` and `transform-origin` parsing into a 2D matrix for consumer-side rendering
 - `@media` query evaluation (`min/max-width`, `min/max-height`, `orientation`, range syntax, logical `or`)
 - `@supports` feature queries
 - `@import` resolution with consumer-provided callback (with media/layer qualifiers)
@@ -26,24 +31,30 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - Block formatting context with margin collapsing and floats (`left`, `right`, `clear`)
 - Inline formatting context with line wrapping and text alignment (`left`, `right`, `center`, `justify`)
 - Flexbox (`flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-content`, baseline alignment, grow/shrink, gap, order)
-- CSS Grid (templates, `grid-template-areas`, `span N`, `grid-auto-flow`, auto-placement, 1-based line placement, gap, `fr` units)
+- CSS Grid (templates with `fr` units and `minmax()`, `grid-template-areas`, `span N`, 1-based line placement, `grid-auto-flow`, `grid-auto-columns/rows`, auto-placement, `gap`, `justify-items`, `align-items`, `justify-self`, `align-self`)
 - Table layout (`table-row`, `table-cell`, `table-caption`, `border-spacing`, `border-collapse`, `rowspan`, `colspan`, `caption-side`, `vertical-align`)
 - Multi-column layout (`column-count`, `column-width`, `column-gap`, `column-span: all`, `break-before`/`break-after`)
 - Length units: `px`, `em`, `%`, `vw`, `vh`, `vmin`, `vmax`, `rem`, `ch`, `ex`, `pt`, `cm`, `mm`, `in`, `pc`
 - `calc()` expressions with basic math (`+`, `-`, `*`, `/`) and nested parentheses
 - Intrinsic sizing (`min-content`, `max-content`, `fit-content`)
 - Hit testing with z-order, overflow clipping, and `pointer-events`
+- Text geometry queries: caret rect, selection rectangles, and text-node hit testing for editor/selection UIs
 - Incremental (dirty-flag) relayout
 - `text-overflow: ellipsis`, `overflow-wrap`, `word-break`, `white-space` handling, `text-indent`
 - `letter-spacing`, `word-spacing` applied during text measurement
 - `display: contents` (children promoted into parent formatting context)
 - `position: relative`, `absolute`, `fixed`, `sticky` (layout-time positioning)
+- Stacking context creation from `z-index`, `position`, `opacity`, `transform`, `filter`, `isolation`
 
 ## Current Limitations
 
 - **Positioning**: `position: sticky` applies a static offset only; scroll-based clamping is not performed (layout-time only).
-- **At-rules**: `@font-face` and `@keyframes` are parsed but discarded (no font loading or animation).
+- **At-rules**: `@font-face` and `@keyframes` are parsed but discarded (no font loading or animation). `@scope` is not implemented.
+- **Animations & transitions**: not run — transitions/animations are parsed but produce no time-varying values.
 - **Bidirectional text**: `direction: rtl` affects text alignment but does not reorder inline content. No Unicode bidi algorithm.
+- **Color**: only legacy color formats (named, hex, `rgb`/`rgba`, `hsl`/`hsla`). `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, and `color-mix()` are not parsed.
+- **Generated content**: `::before` / `::after` boxes participate in layout via consumer-supplied pseudo nodes; `content:` string literals, CSS counters, and list-style markers are not synthesized by the engine.
+- **Filters & effects**: `filter`, `backdrop-filter`, and `will-change` are not honored beyond stacking-context effects.
 
 ## Requirements
 
@@ -155,6 +166,19 @@ LayoutNode* hit = hitTest(rootNode, mouseX, mouseY);
 ```cpp
 markDirty(changedNode);
 layoutTreeIncremental(rootNode, viewportWidth, metrics);
+```
+
+### 6. Text geometry (caret and selection)
+
+```cpp
+#include "layout/text_geometry.h"
+
+TextHit hit = hitTestText(rootNode, mouseX, mouseY, metrics);
+
+float cx, cy, ch;
+if (getCaretRect(rootNode, textNode, srcOffset, metrics, cx, cy, ch)) { /* draw caret */ }
+
+auto rects = getSelectionRects(rootNode, startNode, startOff, endNode, endOff, metrics);
 ```
 
 ## Project Structure
