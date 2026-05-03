@@ -34,6 +34,14 @@ float resolveLength(const std::string& value, float referenceSize, float fontSiz
 // rather than 0. A unitless number (e.g. "1.5") is a multiplier of fontSize.
 float resolveLineHeight(const std::string& value, float fontSize);
 
+// Preferred overload: "normal" resolves to the font's intrinsic line height
+// (ascent + descent + leading) via TextMetrics, matching browser behavior.
+// Falls back to 1.2 * fontSize if metrics is null or returns <= 0.
+float resolveLineHeight(const std::string& value, float fontSize,
+                        const std::string& fontFamily,
+                        const std::string& fontWeight,
+                        TextMetrics* metrics);
+
 // Parse edges (margin, padding, border-width) from computed style
 Edges resolveEdges(const css::ComputedStyle& style,
                    const std::string& prefix,

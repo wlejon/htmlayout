@@ -285,7 +285,8 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
 
         if (ibHasContent && ibAllInline) {
             // Inline content in inline-block: measure text and inline children
-            float ibLineHeight = resolveLineHeight(lineHeightVal, fontSize);
+            float ibLineHeight = resolveLineHeight(lineHeightVal, fontSize,
+                fontFamily, fontWeight, &metrics);
             float cursorX = 0, lineMaxH = 0;
             for (auto* child : getLayoutChildren(node)) {
                 if (child->isTextNode()) {

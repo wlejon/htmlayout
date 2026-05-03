@@ -376,6 +376,20 @@ float resolveLineHeight(const std::string& value, float fontSize) {
     return resolveLength(value, 0, fontSize);
 }
 
+float resolveLineHeight(const std::string& value, float fontSize,
+                        const std::string& fontFamily,
+                        const std::string& fontWeight,
+                        TextMetrics* metrics) {
+    if (value.empty() || value == "normal") {
+        if (metrics) {
+            float h = metrics->lineHeight(fontFamily, fontSize, fontWeight);
+            if (h > 0) return h;
+        }
+        return fontSize * 1.2f;
+    }
+    return resolveLineHeight(value, fontSize);
+}
+
 float resolveLength(const std::string& value, float referenceSize, float fontSize,
                     float viewportWidth, float viewportHeight) {
     if (value.empty() || value == "auto" || value == "none" || value == "normal") {

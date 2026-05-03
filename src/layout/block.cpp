@@ -174,7 +174,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         const std::string& fontFamily = styleVal(style, "font-family");
         const std::string& fontWeight = styleVal(style, "font-weight");
         const std::string& whiteSpace = styleVal(style, "white-space");
-        float lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize);
+        float lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize,
+            fontFamily, fontWeight, &metrics);
 
         struct IFCItem {
             float width = 0, height = 0;
@@ -479,11 +480,13 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     tw += run.width;
                     th = std::max(th, run.height);
                 }
-                float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize);
+                float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize,
+                    styleVal(style, "font-family"), styleVal(style, "font-weight"), &metrics);
                 th = std::max(th, lh);
                 anonItems.push_back({inl, tw, th, true, false});
             } else if (inl->tagName() == "br" || inl->tagName() == "BR") {
-                float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize);
+                float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize,
+                    styleVal(style, "font-family"), styleVal(style, "font-weight"), &metrics);
                 inl->box = LayoutBox{};
                 anonItems.push_back({inl, 0.0f, lh, false, true});
             } else {
