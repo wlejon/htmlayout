@@ -245,6 +245,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 if (cp == "absolute" || cp == "fixed") continue;
                 if ((child->tagName() == "br" || child->tagName() == "BR")) {
                     child->box = LayoutBox{};
+                    // Record natural font line-height so getBoundingClientRect
+                    // returns the inline content height for the <br>, not 0.
+                    child->box.contentRect.height = metrics.lineHeight(
+                        fontFamily, fontSize, fontWeight);
                     items.push_back({0.0f, lineHeight, child, false, true});
                     continue;
                 }
@@ -367,7 +371,20 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
             for (size_t i = line.start; i < line.end; i++) {
                 auto& item = items[i];
-                if (item.forceBreak) continue;
+                if (item.forceBreak) {
+                    if (item.node) {
+                        // Position the <br> at line-end x and vertically
+                        // centered within the line box so its rect matches
+                        // Chromium's getBoundingClientRect.
+                        float brH = item.node->box.contentRect.height;
+                        float halfLeading = (line.maxHeight - brH) * 0.5f;
+                        if (halfLeading < 0) halfLeading = 0;
+                        item.node->box.contentRect.x = cursorX;
+                        item.node->box.contentRect.y = cursorY + halfLeading;
+                        item.node->box.contentRect.width = 0;
+                    }
+                    continue;
+                }
                 if (item.node) {
                     if (item.isElement) {
                         item.node->box.contentRect.x = cursorX + item.node->box.margin.left +
@@ -488,6 +505,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize,
                     styleVal(style, "font-family"), styleVal(style, "font-weight"), &metrics);
                 inl->box = LayoutBox{};
+                // Record the natural font line-height (not the CSS line-height)
+                // as the BR's bounding rect height — matches Chromium's
+                // getBoundingClientRect for forced-break inlines.
+                inl->box.contentRect.height = metrics.lineHeight(
+                    styleVal(style, "font-family"), fontSize,
+                    styleVal(style, "font-weight"));
                 anonItems.push_back({inl, 0.0f, lh, false, true});
             } else {
                 layoutNode(inl, childAvailable, metrics);
@@ -533,7 +556,18 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             float cx = xOff;
             for (size_t i = line.start; i < line.end; i++) {
                 auto& ai = anonItems[i];
-                if (ai.forceBreak) continue;
+                if (ai.forceBreak) {
+                    // Position the BR at the line's current x (post-content)
+                    // and vertically center within the line box, matching
+                    // Chromium's getBoundingClientRect for <br>.
+                    float brH = ai.node->box.contentRect.height;
+                    float halfLeading = (line.maxHeight - brH) * 0.5f;
+                    if (halfLeading < 0) halfLeading = 0;
+                    ai.node->box.contentRect.x = cx;
+                    ai.node->box.contentRect.y = cursorY + halfLeading;
+                    ai.node->box.contentRect.width = 0;
+                    continue;
+                }
                 if (ai.isText) {
                     ai.node->box.contentRect.x = cx;
                     ai.node->box.contentRect.y = cursorY;
