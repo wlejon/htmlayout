@@ -197,6 +197,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         };
         std::vector<IFCItem> items;
 
+        // Cached space width for synthetic whitespace runs between
+        // inline-level siblings (e.g. <ib> <ib> separated by " \n ").
+        float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
+
         for (auto* child : getLayoutChildren(node)) {
             if (child->isTextNode()) {
                 float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
@@ -206,6 +210,28 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     "normal", "normal", ls, ws);
                 // Fresh layout pass — clear any previously placed runs.
                 child->box.textRuns.clear();
+                // Pure-whitespace text node (scanWords returned no words):
+                // collapses to a single space contribution between inline
+                // siblings. Skip when there's no prior content so leading
+                // whitespace doesn't push the first child rightward.
+                if (runs.empty() && (whiteSpace == "normal" || whiteSpace.empty())) {
+                    bool anyWs = false;
+                    for (char c : child->textContent()) {
+                        if (std::isspace(static_cast<unsigned char>(c))) { anyWs = true; break; }
+                    }
+                    if (anyWs && !items.empty()) {
+                        IFCItem it{};
+                        it.width = spaceWidth;
+                        it.height = 0.0f; // doesn't grow line height
+                        it.node = child;
+                        it.isElement = false;
+                        it.forceBreak = false;
+                        it.text = " ";
+                        it.canBreakBefore = true;
+                        it.canBreakAfter  = true;
+                        items.push_back(std::move(it));
+                    }
+                }
                 for (auto& run : runs) {
                     bool emitContent = !(run.text.empty() && run.width == 0);
                     if (emitContent) {
@@ -257,6 +283,27 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     child->box.fullWidth() + child->box.margin.left + child->box.margin.right,
                     child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom,
                     child, true, false});
+            }
+        }
+
+        // Drop trailing collapsible whitespace synthetic items.
+        while (!items.empty()) {
+            auto& back = items.back();
+            if (!back.isElement && !back.forceBreak && back.text == " ") {
+                items.pop_back();
+                continue;
+            }
+            break;
+        }
+        // Strip leading whitespace from the first text run (collapses against
+        // the IFC's start, matching Chromium).
+        if (!items.empty()) {
+            auto& front = items.front();
+            if (!front.isElement && !front.forceBreak && !front.text.empty() &&
+                front.text.front() == ' ') {
+                float spW = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
+                front.text.erase(front.text.begin());
+                front.width = std::max(0.0f, front.width - spW);
             }
         }
 
