@@ -57,18 +57,22 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             *bw[i] = resolveLength(styleVal(style, widthProp), availableWidth, fontSize);
         }
     }
-    // In border-collapse mode, the table's own border collapses with the
-    // outermost cell borders — half lives inside each. For layout purposes
-    // we use only the inner half to inset cells; the outer half overlaps
-    // cell borders. This approximates Chromium's behaviour and matches the
-    // common case where the table border is at least as wide as cell borders.
+    // In border-collapse mode the collapsed border is rendered ON the cell
+    // edges and overlaps them — the table's own outer box reports zero border
+    // (Chromium getBoundingClientRect on a collapsed table includes only the
+    // outer half of the collapsed border inside its content width, not as a
+    // separate border edge). We retain a half-border value as a cell inset so
+    // cells still sit at the table's painted edge with room for the merged
+    // border line.
     bool collapse = (styleVal(style, "border-collapse") == "collapse");
     Edges effectiveBorder = borderWidth;
+    Edges collapseInset{};
     if (collapse) {
-        effectiveBorder.top    = borderWidth.top    * 0.5f;
-        effectiveBorder.right  = borderWidth.right  * 0.5f;
-        effectiveBorder.bottom = borderWidth.bottom * 0.5f;
-        effectiveBorder.left   = borderWidth.left   * 0.5f;
+        collapseInset.top    = borderWidth.top    * 0.5f;
+        collapseInset.right  = borderWidth.right  * 0.5f;
+        collapseInset.bottom = borderWidth.bottom * 0.5f;
+        collapseInset.left   = borderWidth.left   * 0.5f;
+        effectiveBorder = {};
     }
     node->box.border = effectiveBorder;
 
@@ -545,13 +549,18 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
-    // Layout top captions
+    // Layout top captions (sit above the collapsed half-border inset so they
+    // align with the table's outer edge, matching Chromium).
     for (auto* cap : topCaptions) {
         layoutNode(cap, tableContentWidth, metrics);
         cap->box.contentRect.x = cap->box.margin.left + cap->box.padding.left + cap->box.border.left;
         cap->box.contentRect.y = cursorY + cap->box.margin.top + cap->box.padding.top + cap->box.border.top;
         cursorY += cap->box.fullHeight() + cap->box.margin.top + cap->box.margin.bottom;
     }
+
+    // Inset rows by the collapsed top half-border so cells leave room for the
+    // painted collapse line on the table's outer edge.
+    cursorY += collapseInset.top;
 
     std::vector<float> rowYPositions(numRows); // in table-content coords
     for (size_t r = 0; r < numRows; r++) {
@@ -560,13 +569,17 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         cursorY += rowHeights[r];
     }
     cursorY += borderSpacing; // bottom spacing
+    cursorY += collapseInset.bottom;
 
     // Position row groups: span from first row's top to last row's bottom.
     // The row group's contentRect is in table-content coords (its parent box).
     // Chromium hugs the row group horizontally to the cell columns (excludes the
-    // outer border-spacing on left/right), so do the same.
-    float groupInsetX = borderSpacing;
-    float groupInsetW = std::max(0.0f, tableContentWidth - 2.0f * borderSpacing);
+    // outer border-spacing on left/right), so do the same. In collapse mode the
+    // collapsed half-border lives inside the table's contentRect and offsets
+    // cells/row-groups inward.
+    float groupInsetX = borderSpacing + collapseInset.left;
+    float groupInsetW = std::max(0.0f,
+        tableContentWidth - 2.0f * borderSpacing - collapseInset.left - collapseInset.right);
     for (auto& rg : rowGroups) {
         if (!rg.node) continue;
         rg.node->box.margin = {};
@@ -602,10 +615,11 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         rn->box.contentRect.height = rowHeights[r];
     }
 
-    // Compute column X positions
+    // Compute column X positions. In collapse mode shift the first column
+    // inward by the half-border so cells line up against the painted edge.
     std::vector<float> colXPositions(numCols);
     {
-        float cx = borderSpacing;
+        float cx = borderSpacing + collapseInset.left;
         for (size_t c = 0; c < numCols; c++) {
             colXPositions[c] = cx;
             cx += colWidths[c] + borderSpacing;
@@ -684,10 +698,10 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float cellRelY = 0.0f;
         bool hasRowNode = (ci.gridRow < rows.size() && rows[ci.gridRow].rowNode != nullptr);
         if (hasRowNode) {
-            // Row's content origin is at x=borderSpacing within the table
-            // (or x=0 within the row group, which itself is inset by borderSpacing).
-            // Cell coords are relative to that, so back out one border-spacing.
-            cellRelX -= borderSpacing;
+            // Row's content origin is at x=(borderSpacing + collapseInset.left)
+            // within the table (or x=0 within the row group, which itself is
+            // inset by that amount). Cell coords are relative to the row.
+            cellRelX -= (borderSpacing + collapseInset.left);
         } else {
             cellRelY = rowYPositions[ci.gridRow];
         }
