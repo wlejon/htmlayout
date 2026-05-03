@@ -490,6 +490,16 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         crossAvailable = containerMain; // for column flex, cross = width
     }
 
+    // CSS Flexbox §9.4: if the flex container is single-line and has a
+    // definite cross size, the cross size of the (single) flex line is the
+    // container's inner cross size. align-items must then center within that
+    // full size rather than within the largest item's outer cross size — even
+    // if that size is smaller than the largest item (items can overflow).
+    if (lines.size() == 1 && crossAvailable >= 0) {
+        lines[0].crossSize = crossAvailable;
+        totalLineCross = crossAvailable;
+    }
+
     float crossOffset = 0;
     float crossGapAdjusted = gapCross;
     if (crossAvailable >= 0 && lines.size() > 0) {
