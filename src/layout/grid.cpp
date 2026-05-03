@@ -892,6 +892,36 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // height, not just intrinsic content size).
     rowSizes = resolveTrackSizes(rowTracks, rowAvailable, rowGap, rowContentSizes);
 
+    // CSS Grid stretch step: when the container has a definite resolved size
+    // and there is leftover free space (no fr tracks consumed it), distribute
+    // it equally across all Auto tracks. Default align-content is "normal"
+    // which behaves as "stretch" for auto tracks. This matches Chromium for
+    // cases like a 200px grid with 1 implicit auto row — the row stretches
+    // to 200px instead of collapsing to content height.
+    auto stretchAuto = [](std::vector<float>& sizes,
+                          const std::vector<TrackSize>& tracks,
+                          float available, float gap) {
+        size_t n = tracks.size();
+        if (n == 0 || available <= 0) return;
+        float used = (n > 1 ? gap * (n - 1) : 0);
+        size_t autoCount = 0;
+        bool hasFr = false;
+        for (size_t i = 0; i < n; i++) {
+            used += sizes[i];
+            if (tracks[i].kind == TrackSize::Fractional) hasFr = true;
+            else if (tracks[i].kind == TrackSize::Auto) autoCount++;
+        }
+        if (hasFr) return; // fr tracks already absorbed free space
+        if (autoCount == 0) return;
+        float free = available - used;
+        if (free <= 0) return;
+        float share = free / static_cast<float>(autoCount);
+        for (size_t i = 0; i < n; i++) {
+            if (tracks[i].kind == TrackSize::Auto) sizes[i] += share;
+        }
+    };
+    stretchAuto(rowSizes, rowTracks, rowAvailable, rowGap);
+
     // Compute track positions (cumulative offsets)
     std::vector<float> colPositions(numCols + 1, 0);
     for (size_t c = 0; c < numCols; c++) {
