@@ -88,10 +88,18 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Each row is a vector of LayoutNode* cells.
     struct TableRow {
         LayoutNode* rowNode = nullptr; // the <tr> node, or nullptr for anonymous rows
+        LayoutNode* groupNode = nullptr; // the <thead>/<tbody>/<tfoot>, or nullptr if none
         std::vector<LayoutNode*> cells;
     };
     std::vector<TableRow> rows;
     std::vector<LayoutNode*> captions;
+    // Row groups, in document order, plus the [firstRow,lastRow] range they cover.
+    struct RowGroup {
+        LayoutNode* node = nullptr;
+        size_t firstRow = 0;
+        size_t lastRow = 0; // inclusive
+    };
+    std::vector<RowGroup> rowGroups;
 
     auto collectRows = [&](LayoutNode* parent) {
         for (auto* child : getLayoutChildren(parent)) {
@@ -117,6 +125,11 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 rows.push_back(std::move(row));
             } else if (isTableRowGroup(d)) {
                 // Recurse into row groups (thead, tbody, tfoot)
+                RowGroup rg;
+                rg.node = child;
+                rg.firstRow = rows.size();
+                rg.lastRow = rows.size(); // updated below
+                bool added = false;
                 for (auto* groupChild : child->children()) {
                     if (groupChild->isTextNode()) continue;
                     auto& gcs = groupChild->computedStyle();
@@ -125,6 +138,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     if (isTableRow(gd)) {
                         TableRow row;
                         row.rowNode = groupChild;
+                        row.groupNode = child;
                         for (auto* cell : getLayoutChildren(groupChild)) {
                             if (cell->isTextNode()) continue;
                             auto& cellStyle = cell->computedStyle();
@@ -134,10 +148,13 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                             }
                             row.cells.push_back(cell);
                         }
+                        rg.lastRow = rows.size();
                         rows.push_back(std::move(row));
+                        added = true;
                     }
                 }
-                // Set the row group node box later
+                if (added) rowGroups.push_back(rg);
+                else { child->box = LayoutBox{}; } // empty row group
             } else if (isTableCaption(d)) {
                 captions.push_back(child);
             } else if (isTableCell(d)) {
@@ -348,25 +365,48 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         cursorY += cap->box.fullHeight() + cap->box.margin.top + cap->box.margin.bottom;
     }
 
-    std::vector<float> rowYPositions(numRows);
+    std::vector<float> rowYPositions(numRows); // in table-content coords
     for (size_t r = 0; r < numRows; r++) {
         cursorY += borderSpacing;
         rowYPositions[r] = cursorY;
-
-        // Position the row node if it exists (only for original rows)
-        if (r < rows.size() && rows[r].rowNode) {
-            rows[r].rowNode->box.margin = {};
-            rows[r].rowNode->box.padding = {};
-            rows[r].rowNode->box.border = {};
-            rows[r].rowNode->box.contentRect.x = 0;
-            rows[r].rowNode->box.contentRect.y = cursorY;
-            rows[r].rowNode->box.contentRect.width = tableContentWidth;
-            rows[r].rowNode->box.contentRect.height = rowHeights[r];
-        }
-
         cursorY += rowHeights[r];
     }
     cursorY += borderSpacing; // bottom spacing
+
+    // Position row groups: span from first row's top to last row's bottom.
+    // The row group's contentRect is in table-content coords (its parent box).
+    for (auto& rg : rowGroups) {
+        if (!rg.node) continue;
+        rg.node->box.margin = {};
+        rg.node->box.padding = {};
+        rg.node->box.border = {};
+        float top = rowYPositions[rg.firstRow];
+        float bottom = rowYPositions[rg.lastRow] + rowHeights[rg.lastRow];
+        rg.node->box.contentRect.x = 0;
+        rg.node->box.contentRect.y = top;
+        rg.node->box.contentRect.width = tableContentWidth;
+        rg.node->box.contentRect.height = std::max(0.0f, bottom - top);
+    }
+
+    // Now set each row's box. Rows that live inside a row group are positioned
+    // relative to the row group (their DOM parent); rows that are direct table
+    // children stay in table-content coords.
+    for (size_t r = 0; r < numRows; r++) {
+        if (r >= rows.size() || !rows[r].rowNode) continue;
+        auto* rn = rows[r].rowNode;
+        rn->box.margin = {};
+        rn->box.padding = {};
+        rn->box.border = {};
+        float ry = rowYPositions[r];
+        if (rows[r].groupNode) {
+            // subtract the group's y so we end up with row-relative-to-group
+            ry -= rows[r].groupNode->box.contentRect.y;
+        }
+        rn->box.contentRect.x = 0;
+        rn->box.contentRect.y = ry;
+        rn->box.contentRect.width = tableContentWidth;
+        rn->box.contentRect.height = rowHeights[r];
+    }
 
     // Compute column X positions
     std::vector<float> colXPositions(numCols);
