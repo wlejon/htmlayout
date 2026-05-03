@@ -57,7 +57,20 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             *bw[i] = resolveLength(styleVal(style, widthProp), availableWidth, fontSize);
         }
     }
-    node->box.border = borderWidth;
+    // In border-collapse mode, the table's own border collapses with the
+    // outermost cell borders — half lives inside each. For layout purposes
+    // we use only the inner half to inset cells; the outer half overlaps
+    // cell borders. This approximates Chromium's behaviour and matches the
+    // common case where the table border is at least as wide as cell borders.
+    bool collapse = (styleVal(style, "border-collapse") == "collapse");
+    Edges effectiveBorder = borderWidth;
+    if (collapse) {
+        effectiveBorder.top    = borderWidth.top    * 0.5f;
+        effectiveBorder.right  = borderWidth.right  * 0.5f;
+        effectiveBorder.bottom = borderWidth.bottom * 0.5f;
+        effectiveBorder.left   = borderWidth.left   * 0.5f;
+    }
+    node->box.border = effectiveBorder;
 
     float paddingH = node->box.padding.left + node->box.padding.right;
     float borderH = node->box.border.left + node->box.border.right;
@@ -86,9 +99,8 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         tableContentWidth = availContent;
     }
 
-    // Border spacing
+    // Border spacing (already resolved 'collapse' above)
     float borderSpacing = resolveLength(styleVal(style, "border-spacing"), availableWidth, fontSize);
-    bool collapse = (styleVal(style, "border-collapse") == "collapse");
     if (collapse) borderSpacing = 0;
 
     // Collect rows: iterate children, handling direct cells, row groups, and rows.
