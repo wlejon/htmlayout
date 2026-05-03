@@ -794,7 +794,25 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Resolve track sizes
     auto colSizes = resolveTrackSizes(colTracks, containerWidth, colGap, colContentSizes);
-    auto rowSizes = resolveTrackSizes(rowTracks, 0 /* no explicit height reference */, rowGap, rowContentSizes);
+    // Determine the container's resolved content height for distributing 1fr
+    // rows.  Prefer (in order): an explicit CSS height, a content height
+    // pre-set by an outer pass (e.g. the parent flex container distributed
+    // space), or the parent's available height.  Without this, 1fr rows
+    // collapse to their content size since freeSpace = 0 - usedSpace = 0.
+    float rowAvailable = 0.0f;
+    {
+        float specH = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+        if (specH >= 0) {
+            if (styleVal(style, "box-sizing") == "border-box")
+                rowAvailable = specH - paddingV - borderV;
+            else
+                rowAvailable = specH;
+        } else if (node->box.contentRect.height > 0) {
+            rowAvailable = node->box.contentRect.height;
+        }
+        if (rowAvailable < 0) rowAvailable = 0;
+    }
+    auto rowSizes = resolveTrackSizes(rowTracks, rowAvailable, rowGap, rowContentSizes);
 
     // auto-fit: collapse empty tracks to 0
     if (hasAutoFitCols) {
@@ -851,8 +869,10 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
-    // Re-resolve row sizes with updated content
-    rowSizes = resolveTrackSizes(rowTracks, 0, rowGap, rowContentSizes);
+    // Re-resolve row sizes with updated content (use the same row available
+    // as the first pass so 1fr tracks distribute the container's resolved
+    // height, not just intrinsic content size).
+    rowSizes = resolveTrackSizes(rowTracks, rowAvailable, rowGap, rowContentSizes);
 
     // Compute track positions (cumulative offsets)
     std::vector<float> colPositions(numCols + 1, 0);
@@ -899,7 +919,27 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 item.node->box.margin.top - item.node->box.margin.bottom -
                 item.node->box.padding.top - item.node->box.padding.bottom -
                 item.node->box.border.top - item.node->box.border.bottom;
-            if (ch > 0) item.node->box.contentRect.height = ch;
+            if (ch > 0) {
+                bool grew = (ch > item.node->box.contentRect.height + 0.01f);
+                item.node->box.contentRect.height = ch;
+                // The earlier layoutNode pass ran without a definite height,
+                // so any flex/grid layout inside the item collapsed to content
+                // size.  Re-layout now that we have the stretched height so
+                // 1fr / flex:1 descendants can distribute the new space.
+                if (grew) {
+                    float itemWidth = item.node->box.contentRect.width +
+                        item.node->box.padding.left + item.node->box.padding.right +
+                        item.node->box.border.left + item.node->box.border.right;
+                    item.node->availableHeight = ch +
+                        item.node->box.padding.top + item.node->box.padding.bottom +
+                        item.node->box.border.top + item.node->box.border.bottom;
+                    layoutNode(item.node, itemWidth, metrics);
+                    // layoutNode may have overwritten contentRect.height with
+                    // content size; restore the stretched value.
+                    item.node->box.contentRect.height = ch;
+                    if (item.node->box.contentRect.width < 0) item.node->box.contentRect.width = 0;
+                }
+            }
         }
 
         item.node->box.contentRect.x = areaX +

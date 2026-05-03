@@ -606,14 +606,23 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
 
     // Pre-compute the stretched height when both top+bottom are pinned and
     // height is auto. Setting box.contentRect.height up front lets the inner
-    // layout (e.g. flex align-items: center) treat this container as having a
-    // definite cross-axis size instead of collapsing to content height.
+    // layout (e.g. flex align-items: center, or grid 1fr rows) treat this
+    // container as having a definite cross-axis size instead of collapsing to
+    // content height.  Resolve margin/padding/border from the child's own
+    // style — child->box may not yet contain resolved values (the in-flow
+    // layout pass skips absolute/fixed children).
     bool stretchH = (specH < 0 && top >= 0 && bottom >= 0);
     if (stretchH) {
-        float h = cbHeight - top - bottom -
-                  child->box.margin.top - child->box.margin.bottom -
-                  child->box.padding.top - child->box.padding.bottom -
-                  child->box.border.top - child->box.border.bottom;
+        float marginTop = resolveLength(styleVal(childStyle, "margin-top"), cbHeight, fontSize);
+        float marginBottom = resolveLength(styleVal(childStyle, "margin-bottom"), cbHeight, fontSize);
+        float padTop = resolveLength(styleVal(childStyle, "padding-top"), cbHeight, fontSize);
+        float padBottom = resolveLength(styleVal(childStyle, "padding-bottom"), cbHeight, fontSize);
+        float borTop = (styleVal(childStyle, "border-top-style") != "none")
+            ? resolveLength(styleVal(childStyle, "border-top-width"), cbHeight, fontSize) : 0.0f;
+        float borBottom = (styleVal(childStyle, "border-bottom-style") != "none")
+            ? resolveLength(styleVal(childStyle, "border-bottom-width"), cbHeight, fontSize) : 0.0f;
+        float h = cbHeight - top - bottom - marginTop - marginBottom -
+                  padTop - padBottom - borTop - borBottom;
         if (h > 0) child->box.contentRect.height = h;
     }
 

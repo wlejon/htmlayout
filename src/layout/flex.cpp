@@ -439,6 +439,45 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (isRow) {
                 // Main = width, cross = height
                 float contentWidth = item->finalMain;
+                // If this item has no explicit height and the container has a
+                // definite cross size, pre-set contentRect.height to the stretch
+                // height so the inner layout (e.g. a CSS Grid with 1fr rows or
+                // a nested flex column) sees a definite height up front rather
+                // than collapsing to content size.
+                {
+                    const std::string& itemHVal = styleVal(cs, "height");
+                    bool itemAutoH = (itemHVal == "auto" || itemHVal.empty());
+                    const std::string& selfAlign = styleVal(cs, "align-self");
+                    const std::string& effAlign =
+                        (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign;
+                    bool willStretch = itemAutoH &&
+                        (effAlign == "stretch" || effAlign == "normal" || effAlign.empty());
+                    if (willStretch) {
+                        // Container's resolved content height (cross axis).
+                        float specHc = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+                        float containerCrossH = -1.0f;
+                        if (specHc >= 0) {
+                            containerCrossH = (styleVal(style, "box-sizing") == "border-box")
+                                ? specHc - paddingV - borderV : specHc;
+                        } else if (node->box.contentRect.height > 0) {
+                            containerCrossH = node->box.contentRect.height;
+                        }
+                        if (containerCrossH > 0) {
+                            float pad = resolveLength(styleVal(cs, "padding-top"), mainAvailable, childFontSize) +
+                                        resolveLength(styleVal(cs, "padding-bottom"), mainAvailable, childFontSize);
+                            float bor = 0;
+                            if (styleVal(cs, "border-top-style") != "none")
+                                bor += resolveLength(styleVal(cs, "border-top-width"), mainAvailable, childFontSize);
+                            if (styleVal(cs, "border-bottom-style") != "none")
+                                bor += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, childFontSize);
+                            float stretchH = containerCrossH - pad - bor;
+                            if (stretchH > 0) {
+                                item->node->availableHeight = containerCrossH;
+                                item->node->box.contentRect.height = stretchH;
+                            }
+                        }
+                    }
+                }
                 layoutNode(item->node, contentWidth, metrics);
                 item->node->box.contentRect.width = contentWidth -
                     item->node->box.padding.left - item->node->box.padding.right -
