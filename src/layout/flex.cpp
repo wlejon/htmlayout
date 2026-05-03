@@ -174,15 +174,42 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (item.flexShrink < 0) item.flexShrink = 1.0f;
         item.order = static_cast<int>(resolveLength(styleVal(cs, "order"), 0, childFontSize));
 
-        // Resolve flex-basis
+        // Resolve flex-basis. flex-basis represents the outer (border-box) main
+        // size of the item — the rest of flex layout subtracts padding/border to
+        // recover content size. When the basis comes from a width/height (or an
+        // explicit length on flex-basis) and box-sizing is content-box, the
+        // specified value is content size, so we must add padding+border to
+        // convert to the outer main size.
         const std::string& basis = styleVal(cs, "flex-basis");
+        bool basisFromMainDim = false;
         if (basis == "auto" || basis.empty()) {
             // Use width/height as basis
             const std::string& dimProp = isRow ? "width" : "height";
             float dim = resolveDim(styleVal(cs, dimProp), mainAvailable, childFontSize);
             item.flexBasis = dim >= 0 ? dim : -1.0f;
+            basisFromMainDim = (dim >= 0);
         } else {
             item.flexBasis = resolveLength(basis, mainAvailable, childFontSize);
+            basisFromMainDim = (item.flexBasis >= 0);
+        }
+        if (basisFromMainDim && styleVal(cs, "box-sizing") != "border-box") {
+            float edges = 0;
+            if (isRow) {
+                edges += resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
+                         resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
+                if (styleVal(cs, "border-left-style") != "none")
+                    edges += resolveLength(styleVal(cs, "border-left-width"), mainAvailable, childFontSize);
+                if (styleVal(cs, "border-right-style") != "none")
+                    edges += resolveLength(styleVal(cs, "border-right-width"), mainAvailable, childFontSize);
+            } else {
+                edges += resolveLength(styleVal(cs, "padding-top"), mainAvailable, childFontSize) +
+                         resolveLength(styleVal(cs, "padding-bottom"), mainAvailable, childFontSize);
+                if (styleVal(cs, "border-top-style") != "none")
+                    edges += resolveLength(styleVal(cs, "border-top-width"), mainAvailable, childFontSize);
+                if (styleVal(cs, "border-bottom-style") != "none")
+                    edges += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, childFontSize);
+            }
+            item.flexBasis += edges;
         }
 
         // Resolve min/max on main axis.
