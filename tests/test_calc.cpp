@@ -234,11 +234,15 @@ static void testTableBasic() {
     row1.initBlock(); row1.style_["display"] = "table-row";
     row2.initBlock(); row2.style_["display"] = "table-row";
 
+    // Per CSS 2.1 §17.5.2 a width:auto table is shrink-to-fit; without any
+    // intrinsic content the table collapses to 0 width. Give cells explicit
+    // widths so the test exercises the basic side-by-side layout we care
+    // about here.
     CalcLayoutNode cell1, cell2, cell3, cell4;
-    cell1.initBlock(); cell1.style_["display"] = "table-cell"; cell1.style_["height"] = "30px";
-    cell2.initBlock(); cell2.style_["display"] = "table-cell"; cell2.style_["height"] = "30px";
-    cell3.initBlock(); cell3.style_["display"] = "table-cell"; cell3.style_["height"] = "40px";
-    cell4.initBlock(); cell4.style_["display"] = "table-cell"; cell4.style_["height"] = "40px";
+    cell1.initBlock(); cell1.style_["display"] = "table-cell"; cell1.style_["height"] = "30px"; cell1.style_["width"] = "100px";
+    cell2.initBlock(); cell2.style_["display"] = "table-cell"; cell2.style_["height"] = "30px"; cell2.style_["width"] = "100px";
+    cell3.initBlock(); cell3.style_["display"] = "table-cell"; cell3.style_["height"] = "40px"; cell3.style_["width"] = "100px";
+    cell4.initBlock(); cell4.style_["display"] = "table-cell"; cell4.style_["height"] = "40px"; cell4.style_["width"] = "100px";
 
     row1.addChild(&cell1);
     row1.addChild(&cell2);
