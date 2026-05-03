@@ -582,6 +582,7 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     // Determine available width for layout
     // Shrink-wrap if width:auto and not both left+right set
     bool shrinkWrap = (specW < 0 && !(left >= 0 && right >= 0));
+    bool stretchW = (specW < 0 && left >= 0 && right >= 0);
 
     // Pre-compute the stretched height when both top+bottom are pinned and
     // height is auto. Setting box.contentRect.height up front lets the inner
@@ -596,6 +597,19 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
         if (h > 0) child->box.contentRect.height = h;
     }
 
+    // Pre-compute stretched width when both left+right are pinned with width:auto.
+    // We must pass this as the available width to the inner layout so flex/grid
+    // children resolve cross size against the actual containing-block width
+    // (cbWidth - left - right) rather than the raw cbWidth.
+    float availW = cbWidth;
+    if (stretchW) {
+        float w = cbWidth - left - right -
+                  child->box.margin.left - child->box.margin.right;
+        // layoutNode treats availW as the parent content width including
+        // padding+border for this child; subtract only the margins here.
+        if (w > 0) availW = w;
+    }
+
     if (shrinkWrap) {
         float maxCW = computeMaxContentWidth(child, metrics);
         if (maxCW > cbWidth) maxCW = cbWidth;
@@ -603,11 +617,11 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
                    child->box.border.left + child->box.border.right +
                    child->box.margin.left + child->box.margin.right, metrics);
     } else {
-        layoutNode(child, cbWidth, metrics);
+        layoutNode(child, availW, metrics);
     }
 
     // Stretch width if both left and right are set and width is auto
-    if (specW < 0 && left >= 0 && right >= 0) {
+    if (stretchW) {
         float w = cbWidth - left - right -
                   child->box.margin.left - child->box.margin.right -
                   child->box.padding.left - child->box.padding.right -
