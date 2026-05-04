@@ -115,6 +115,10 @@ const std::vector<PropertyDef>& knownProperties() {
         // Transforms
         {"transform",         "none",       false},
         {"transform-origin",  "50% 50%",    false},
+        {"transform-style",   "flat",       false},
+        {"perspective",       "none",       false},
+        {"perspective-origin","50% 50%",    false},
+        {"backface-visibility","visible",   false},
 
         // Transitions & Animations (parsed but not executed)
         {"transition",            "none",   false},
