@@ -620,6 +620,41 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
+        // In border-collapse mode, the cell's border is shared with its
+        // neighbor (or the table's outer border on the boundary). The reported
+        // cell border-box height is content + padding + half(border) on each
+        // side, where the boundary side takes max(cellHalfBorder, tableHalfBorder).
+        // Override the cell's border edges accordingly so fullHeight() reports
+        // the Chromium-compatible value.
+        if (collapse) {
+            Edges cellHalf{
+                ci.node->box.border.top    * 0.5f,
+                ci.node->box.border.right  * 0.5f,
+                ci.node->box.border.bottom * 0.5f,
+                ci.node->box.border.left   * 0.5f,
+            };
+            Edges tableHalf{
+                borderWidth.top    * 0.5f,
+                borderWidth.right  * 0.5f,
+                borderWidth.bottom * 0.5f,
+                borderWidth.left   * 0.5f,
+            };
+            Edges outerBorder = cellHalf;
+            // Top edge is on table boundary if first row.
+            if (ci.gridRow == 0)
+                outerBorder.top = std::max(cellHalf.top, tableHalf.top);
+            // Bottom edge is on table boundary if last spanned row.
+            if (ci.gridRow + ci.rowspan >= numRows)
+                outerBorder.bottom = std::max(cellHalf.bottom, tableHalf.bottom);
+            // Left edge is on table boundary if first column.
+            if (ci.gridCol == 0)
+                outerBorder.left = std::max(cellHalf.left, tableHalf.left);
+            // Right edge is on table boundary if last spanned column.
+            if (ci.gridCol + ci.colspan >= numCols)
+                outerBorder.right = std::max(cellHalf.right, tableHalf.right);
+            ci.node->box.border = outerBorder;
+        }
+
         // The cell's rendered width is always its allocated column-track span.
         // The CSS 'width' on a cell is an input to column-width allocation,
         // not a final render width — the final cell fills its assigned tracks.
