@@ -522,10 +522,13 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // Compute table preferred (max-content) and minimum widths.
+    // In collapse mode, cells reserve collapseInset.left+right for the table's
+    // shared outer half-borders.
     float sumMin = 0, sumMax = 0;
     for (size_t c = 0; c < numCols; c++) { sumMin += colMin[c]; sumMax += colMax[c]; }
-    float prefTable = sumMax + totalSpacing;
-    float minTable  = sumMin + totalSpacing;
+    float insetExtra = collapseInset.left + collapseInset.right;
+    float prefTable = sumMax + totalSpacing + insetExtra;
+    float minTable  = sumMin + totalSpacing + insetExtra;
 
     // If width is auto, shrink-to-fit: min(available, max-content), floored at min-content.
     if (widthAuto) {
@@ -544,8 +547,8 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         } else {
             // Allow tableContentWidth below sumMin only if percent cols absorb
             // enough; floor by the sum of (max(colMin, pctTarget) for pct cols)
-            // plus colMin for auto cols, plus spacing.
-            float floor = totalSpacing;
+            // plus colMin for auto cols, plus spacing and collapse insets.
+            float floor = totalSpacing + insetExtra;
             for (size_t c = 0; c < numCols; c++) {
                 if (colPctFrac[c] >= 0) {
                     float target = colPctFrac[c] * tableContentWidth;
@@ -563,7 +566,10 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Auto columns share the remaining space, starting at colMin and growing
     // toward colMax weighted by slack.
     std::vector<float> colWidths = colMin;
-    float available = tableContentWidth - totalSpacing;
+    // In collapse mode, cells live inside [collapseInset.left, width-collapseInset.right]
+    // — cells share the table's outer half-borders, so reserve that space.
+    float available = tableContentWidth - totalSpacing
+                      - collapseInset.left - collapseInset.right;
 
     // First, satisfy percent columns.
     bool anyPct = false;
