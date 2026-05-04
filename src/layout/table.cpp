@@ -871,6 +871,9 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         std::vector<GroupSpan> groupSpans;
         for (size_t i = 0; i < colInfos.size() && colIdx < numCols; i++) {
             auto& ci = colInfos[i];
+            // col positioned relative to its colgroup (or table if no group);
+            // store table-content x temporarily, fix-up below once we know
+            // each colgroup's origin.
             if (ci.colNode) {
                 ci.colNode->box.margin = {};
                 ci.colNode->box.padding = {};
@@ -900,6 +903,13 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             gs.node->box.contentRect.y = bodyTop;
             gs.node->box.contentRect.width = gw;
             gs.node->box.contentRect.height = bodyH;
+        }
+        // Now make each col's x relative to its parent colgroup (it lives
+        // inside the colgroup, not the table directly).
+        for (auto& ci : colInfos) {
+            if (!ci.colNode || !ci.colGroupNode) continue;
+            ci.colNode->box.contentRect.x -= ci.colGroupNode->box.contentRect.x;
+            ci.colNode->box.contentRect.y -= ci.colGroupNode->box.contentRect.y;
         }
         // Any <colgroup>s with no entries (empty or all eaten by cell columns
         // beyond colInfos): zero them out.
