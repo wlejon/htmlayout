@@ -371,6 +371,52 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     std::vector<float> colPctFrac(numCols, -1.0f);
     float totalSpacing = borderSpacing * (numCols + 1);
 
+    auto cellBorderEdges = [&](LayoutNode* cell, float& bl, float& br,
+                               float& bt, float& bb) {
+        auto& cs = cell->computedStyle();
+        float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        if (cfs <= 0) cfs = fontSize;
+        bl = (styleVal(cs, "border-left-style") != "none")
+             ? resolveLength(styleVal(cs, "border-left-width"), 0, cfs) : 0;
+        br = (styleVal(cs, "border-right-style") != "none")
+             ? resolveLength(styleVal(cs, "border-right-width"), 0, cfs) : 0;
+        bt = (styleVal(cs, "border-top-style") != "none")
+             ? resolveLength(styleVal(cs, "border-top-width"), 0, cfs) : 0;
+        bb = (styleVal(cs, "border-bottom-style") != "none")
+             ? resolveLength(styleVal(cs, "border-bottom-width"), 0, cfs) : 0;
+    };
+
+    // In border-collapse mode, the table's outer edge gets a half-share of
+    // max(tableBorder, max boundary-cell border). Precompute per-row top/bottom
+    // and per-col left/right max boundary-cell borders so cellEdges() and the
+    // table outer inset can use them.
+    std::vector<float> colMaxLeft(numCols, 0.0f);
+    std::vector<float> colMaxRight(numCols, 0.0f);
+    std::vector<float> rowMaxTop(numRows, 0.0f);
+    std::vector<float> rowMaxBottom(numRows, 0.0f);
+    if (collapse) {
+        for (auto& ci : cellInfos) {
+            float bl, br, bt, bb;
+            cellBorderEdges(ci.node, bl, br, bt, bb);
+            colMaxLeft[ci.gridCol]  = std::max(colMaxLeft[ci.gridCol],  bl);
+            size_t rcol = ci.gridCol + ci.colspan - 1;
+            if (rcol < numCols) colMaxRight[rcol] = std::max(colMaxRight[rcol], br);
+            if (ci.gridRow < numRows)
+                rowMaxTop[ci.gridRow] = std::max(rowMaxTop[ci.gridRow], bt);
+            size_t rrow = ci.gridRow + ci.rowspan - 1;
+            if (rrow < numRows) rowMaxBottom[rrow] = std::max(rowMaxBottom[rrow], bb);
+        }
+        // Update collapseInset to use max(tableBorder, boundary-cell-border) / 2.
+        float topMax    = numRows > 0 ? rowMaxTop[0]              : 0;
+        float bottomMax = numRows > 0 ? rowMaxBottom[numRows - 1] : 0;
+        float leftMax   = numCols > 0 ? colMaxLeft[0]             : 0;
+        float rightMax  = numCols > 0 ? colMaxRight[numCols - 1]  : 0;
+        collapseInset.top    = std::max(borderWidth.top,    topMax)    * 0.5f;
+        collapseInset.bottom = std::max(borderWidth.bottom, bottomMax) * 0.5f;
+        collapseInset.left   = std::max(borderWidth.left,   leftMax)   * 0.5f;
+        collapseInset.right  = std::max(borderWidth.right,  rightMax)  * 0.5f;
+    }
+
     auto cellEdges = [&](LayoutNode* cell, size_t gridCol, size_t colspan,
                          float& padBorderH) {
         auto& cs = cell->computedStyle();
@@ -385,13 +431,18 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (collapse) {
             // In border-collapse mode the cell's effective horizontal border
             // is half(border) per side. The boundary side takes
-            // max(cellHalfBorder, tableHalfBorder).
+            // max(cellBorder, tableBorder, max-boundary-cell-border) * 0.5.
             float effL = bl * 0.5f;
             float effR = br * 0.5f;
-            if (gridCol == 0)
-                effL = std::max(effL, borderWidth.left * 0.5f);
-            if (gridCol + colspan >= numCols)
-                effR = std::max(effR, borderWidth.right * 0.5f);
+            if (gridCol == 0) {
+                float boundary = std::max(borderWidth.left, colMaxLeft[gridCol]);
+                effL = std::max(effL, boundary * 0.5f);
+            }
+            if (gridCol + colspan >= numCols && numCols > 0) {
+                size_t rc = numCols - 1;
+                float boundary = std::max(borderWidth.right, colMaxRight[rc]);
+                effR = std::max(effR, boundary * 0.5f);
+            }
             bl = effL;
             br = effR;
         }
@@ -654,19 +705,26 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 borderWidth.left   * 0.5f,
             };
             Edges outerBorder = cellHalf;
-            // Top edge is on table boundary if first row.
-            if (ci.gridRow == 0)
-                outerBorder.top = std::max(cellHalf.top, tableHalf.top);
-            // Bottom edge is on table boundary if last spanned row.
-            if (ci.gridRow + ci.rowspan >= numRows)
-                outerBorder.bottom = std::max(cellHalf.bottom, tableHalf.bottom);
-            // Left edge is on table boundary if first column.
-            if (ci.gridCol == 0)
-                outerBorder.left = std::max(cellHalf.left, tableHalf.left);
-            // Right edge is on table boundary if last spanned column.
-            if (ci.gridCol + ci.colspan >= numCols)
-                outerBorder.right = std::max(cellHalf.right, tableHalf.right);
+            // On the table boundary, the half-border takes
+            // max(cellBorder, tableBorder, max-boundary-cell-border) * 0.5.
+            if (ci.gridRow == 0) {
+                float boundary = std::max(borderWidth.top, rowMaxTop[0]);
+                outerBorder.top = std::max(cellHalf.top, boundary * 0.5f);
+            }
+            if (ci.gridRow + ci.rowspan >= numRows && numRows > 0) {
+                float boundary = std::max(borderWidth.bottom, rowMaxBottom[numRows - 1]);
+                outerBorder.bottom = std::max(cellHalf.bottom, boundary * 0.5f);
+            }
+            if (ci.gridCol == 0) {
+                float boundary = std::max(borderWidth.left, colMaxLeft[0]);
+                outerBorder.left = std::max(cellHalf.left, boundary * 0.5f);
+            }
+            if (ci.gridCol + ci.colspan >= numCols && numCols > 0) {
+                float boundary = std::max(borderWidth.right, colMaxRight[numCols - 1]);
+                outerBorder.right = std::max(cellHalf.right, boundary * 0.5f);
+            }
             ci.node->box.border = outerBorder;
+            (void)tableHalf;
         }
 
         // The cell's rendered width is always its allocated column-track span.
