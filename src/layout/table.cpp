@@ -737,22 +737,62 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         cell->box.contentRect.y = cellRelY + cell->box.margin.top +
             cell->box.padding.top + cell->box.border.top;
 
-        // Stretch cell height to total spanned row height and apply vertical-align
+        // Stretch cell height to total spanned row height and apply vertical-align.
+        // The cell stays anchored at its row position; only its inner content
+        // (children) is shifted to satisfy vertical-align.
         float targetH = totalH - cell->box.margin.top - cell->box.margin.bottom -
             cell->box.padding.top - cell->box.padding.bottom -
             cell->box.border.top - cell->box.border.bottom;
-        float contentH = cell->box.contentRect.height;
-        if (targetH > contentH) {
+        float cellContentH = std::max(cell->box.contentRect.height, targetH);
+
+        // Intrinsic (flowed) child height inside the cell's content box.
+        // Children's contentRect.y is in cell-content coords.
+        float intrinsicH = 0.0f;
+        for (auto* child : getLayoutChildren(cell)) {
+            if (!child) continue;
+            float ch = child->box.contentRect.y + child->box.contentRect.height
+                       + child->box.padding.bottom + child->box.border.bottom
+                       + child->box.margin.bottom;
+            if (ch > intrinsicH) intrinsicH = ch;
+        }
+        float available = cellContentH - intrinsicH;
+        if (available > 0) {
             auto& cs = cell->computedStyle();
             const std::string& valign = styleVal(cs, "vertical-align");
-            if (valign == "middle") {
-                cell->box.contentRect.y += (targetH - contentH) / 2.0f;
-            } else if (valign == "bottom") {
-                cell->box.contentRect.y += (targetH - contentH);
+            float shiftY = 0.0f;
+            if (valign == "middle") shiftY = available / 2.0f;
+            else if (valign == "bottom") shiftY = available;
+            // else top (default): no shift
+            if (shiftY > 0.0f) {
+                // Shift everything inside the cell down: child boxes and any
+                // placed text runs on TextNode descendants. Coordinates of
+                // descendant block boxes are relative to their parent so
+                // shifting the immediate child propagates them; text runs are
+                // stored on the TextNode itself in the cell's content coord
+                // space and must be shifted explicitly.
+                std::vector<LayoutNode*> walkStack;
+                for (auto* child : getLayoutChildren(cell)) {
+                    if (!child) continue;
+                    child->box.contentRect.y += shiftY;
+                    if (child->isTextNode()) {
+                        for (auto& tr : child->box.textRuns) tr.y += shiftY;
+                    }
+                    walkStack.push_back(child);
+                }
+                while (!walkStack.empty()) {
+                    auto* n = walkStack.back();
+                    walkStack.pop_back();
+                    for (auto* gc : n->children()) {
+                        if (!gc) continue;
+                        if (gc->isTextNode()) {
+                            for (auto& tr : gc->box.textRuns) tr.y += shiftY;
+                        }
+                        walkStack.push_back(gc);
+                    }
+                }
             }
-            // else top (default): no offset
-            cell->box.contentRect.height = targetH;
         }
+        cell->box.contentRect.height = cellContentH;
     }
 
     // Layout bottom captions
