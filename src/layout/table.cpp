@@ -103,9 +103,30 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         tableContentWidth = availContent;
     }
 
-    // Border spacing (already resolved 'collapse' above)
-    float borderSpacing = resolveLength(styleVal(style, "border-spacing"), availableWidth, fontSize);
-    if (collapse) borderSpacing = 0;
+    // Border spacing — accepts one or two lengths: "H" or "H V". Default V = H.
+    float borderSpacingH = 0;
+    float borderSpacingV = 0;
+    {
+        const std::string& bsVal = styleVal(style, "border-spacing");
+        if (!bsVal.empty()) {
+            // Split on whitespace.
+            size_t i = 0;
+            while (i < bsVal.size() && std::isspace(static_cast<unsigned char>(bsVal[i]))) i++;
+            size_t aStart = i;
+            while (i < bsVal.size() && !std::isspace(static_cast<unsigned char>(bsVal[i]))) i++;
+            std::string a = bsVal.substr(aStart, i - aStart);
+            while (i < bsVal.size() && std::isspace(static_cast<unsigned char>(bsVal[i]))) i++;
+            std::string b = bsVal.substr(i);
+            borderSpacingH = resolveLength(a, availableWidth, fontSize);
+            borderSpacingV = b.empty() ? borderSpacingH
+                                       : resolveLength(b, availableWidth, fontSize);
+        }
+    }
+    if (collapse) { borderSpacingH = 0; borderSpacingV = 0; }
+    // Many existing call sites use a single 'borderSpacing'. Use H for the
+    // horizontal axis (column track gaps and table contentRect width math)
+    // and V at the cursorY/spanning-height steps.
+    float borderSpacing = borderSpacingH;
 
     // Collect rows: iterate children, handling direct cells, row groups, and rows.
     // Each row is a vector of LayoutNode* cells.
@@ -818,7 +839,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto& ci : cellInfos) {
         if (ci.rowspan <= 1) continue;
         float cellFullH = ci.node->box.fullHeight() + ci.node->box.margin.top + ci.node->box.margin.bottom;
-        float spannedHeight = borderSpacing * (ci.rowspan - 1);
+        float spannedHeight = borderSpacingV * (ci.rowspan - 1);
         for (size_t r = 0; r < ci.rowspan; r++) spannedHeight += rowHeights[ci.gridRow + r];
         if (cellFullH > spannedHeight) {
             float extra = (cellFullH - spannedHeight) / ci.rowspan;
@@ -856,11 +877,11 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     std::vector<float> rowYPositions(numRows); // in table-content coords
     for (size_t r = 0; r < numRows; r++) {
-        cursorY += borderSpacing;
+        cursorY += borderSpacingV;
         rowYPositions[r] = cursorY;
         cursorY += rowHeights[r];
     }
-    cursorY += borderSpacing; // bottom spacing
+    cursorY += borderSpacingV; // bottom spacing
     cursorY += collapseInset.bottom;
 
     // Position row groups: span from first row's top to last row's bottom.
@@ -992,7 +1013,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float cellX = colXPositions[ci.gridCol];
 
         // Total spanned height for stretching
-        float totalH = borderSpacing * (ci.rowspan - 1);
+        float totalH = borderSpacingV * (ci.rowspan - 1);
         for (size_t r = 0; r < ci.rowspan; r++) totalH += rowHeights[ci.gridRow + r];
 
         // Position cells RELATIVE to their parent row (not to the table).
