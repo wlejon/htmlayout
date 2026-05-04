@@ -506,15 +506,14 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         for (size_t c = 0; c < ci.colspan; c++) cw += colWidths[ci.gridCol + c];
         layoutNode(ci.node, cw, metrics);
 
-        auto& cs = ci.node->computedStyle();
-        const std::string& cellW = styleVal(cs, "width");
-        if (cellW == "auto" || cellW.empty()) {
-            ci.node->box.contentRect.width = cw -
-                ci.node->box.padding.left - ci.node->box.padding.right -
-                ci.node->box.border.left - ci.node->box.border.right -
-                ci.node->box.margin.left - ci.node->box.margin.right;
-            if (ci.node->box.contentRect.width < 0) ci.node->box.contentRect.width = 0;
-        }
+        // The cell's rendered width is always its allocated column-track span.
+        // The CSS 'width' on a cell is an input to column-width allocation,
+        // not a final render width — the final cell fills its assigned tracks.
+        ci.node->box.contentRect.width = cw -
+            ci.node->box.padding.left - ci.node->box.padding.right -
+            ci.node->box.border.left - ci.node->box.border.right -
+            ci.node->box.margin.left - ci.node->box.margin.right;
+        if (ci.node->box.contentRect.width < 0) ci.node->box.contentRect.width = 0;
 
         float cellFullH = ci.node->box.fullHeight() + ci.node->box.margin.top + ci.node->box.margin.bottom;
         if (ci.rowspan == 1) {
