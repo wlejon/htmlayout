@@ -506,6 +506,33 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         for (size_t c = 0; c < ci.colspan; c++) cw += colWidths[ci.gridCol + c];
         layoutNode(ci.node, cw, metrics);
 
+        // Per CSS, percentage padding/margin on a table cell resolves against
+        // the table's containing block (its content width), not the cell's
+        // own width. layoutNode used 'cw' as the basis, so re-resolve any
+        // percentage-bearing edges using tableContentWidth and re-layout the
+        // cell's content if any edge changed.
+        {
+            auto& cs = ci.node->computedStyle();
+            float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+            if (cfs <= 0) cfs = fontSize;
+            Edges newPad = resolveEdges(cs, "padding", tableContentWidth, cfs);
+            Edges newMar = resolveEdges(cs, "margin",  tableContentWidth, cfs);
+            bool padChanged =
+                newPad.left  != ci.node->box.padding.left  ||
+                newPad.right != ci.node->box.padding.right ||
+                newPad.top   != ci.node->box.padding.top   ||
+                newPad.bottom!= ci.node->box.padding.bottom;
+            bool marChanged =
+                newMar.left  != ci.node->box.margin.left  ||
+                newMar.right != ci.node->box.margin.right ||
+                newMar.top   != ci.node->box.margin.top   ||
+                newMar.bottom!= ci.node->box.margin.bottom;
+            if (padChanged || marChanged) {
+                ci.node->box.padding = newPad;
+                ci.node->box.margin  = newMar;
+            }
+        }
+
         // The cell's rendered width is always its allocated column-track span.
         // The CSS 'width' on a cell is an input to column-width allocation,
         // not a final render width — the final cell fills its assigned tracks.
