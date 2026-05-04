@@ -173,9 +173,25 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
     // size via intrinsicSize() rather than having children to measure. Without
     // this, a childless <input type="button"> would report min-content 0 and
     // the flex algorithm would shrink it to padding-only width.
+    //
+    // But when the element has an explicit CSS width, that overrides the
+    // intrinsic. Per CSS Sizing 3 §5.2.1, percentage widths contribute 0 to
+    // a parent's min-content (they can't be resolved without a containing
+    // block); a length contributes that length. Without this gate, a
+    // <canvas width="N"> with CSS width:100% feeds N back as min-content,
+    // which propagates up through ancestors and (in a flex context) makes
+    // an ancestor wider than its container — and on the next frame, JS
+    // resizes the canvas to the new larger rect, growing without bound.
     {
         float iw = 0, ih = 0;
-        if (node->intrinsicSize(iw, ih, 0.0f)) return iw;
+        if (node->intrinsicSize(iw, ih, 0.0f)) {
+            const std::string& wVal = styleVal(node->computedStyle(), "width");
+            if (wVal.empty() || wVal == "auto") return iw;
+            if (wVal.find('%') != std::string::npos) return 0.0f;
+            float fs = resolveLength(styleVal(node->computedStyle(), "font-size"), 16.0f, 16.0f);
+            if (fs <= 0.0f) fs = 16.0f;
+            return resolveLength(wVal, 0.0f, fs);
+        }
     }
 
     auto& style = node->computedStyle();
@@ -243,7 +259,14 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     // See the same note in computeMinContentWidth above.
     {
         float iw = 0, ih = 0;
-        if (node->intrinsicSize(iw, ih, 0.0f)) return iw;
+        if (node->intrinsicSize(iw, ih, 0.0f)) {
+            const std::string& wVal = styleVal(node->computedStyle(), "width");
+            if (wVal.empty() || wVal == "auto") return iw;
+            if (wVal.find('%') != std::string::npos) return 0.0f;
+            float fs = resolveLength(styleVal(node->computedStyle(), "font-size"), 16.0f, 16.0f);
+            if (fs <= 0.0f) fs = 16.0f;
+            return resolveLength(wVal, 0.0f, fs);
+        }
     }
 
     auto& style = node->computedStyle();
