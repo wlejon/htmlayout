@@ -149,6 +149,7 @@ table {
     border-left-color: gray;
     border-collapse: separate;
     border-spacing: 2px;
+    box-sizing: border-box;
 }
 
 thead {
