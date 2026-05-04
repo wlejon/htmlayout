@@ -549,9 +549,11 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // enough; floor by the sum of (max(colMin, pctTarget) for pct cols)
             // plus colMin for auto cols, plus spacing and collapse insets.
             float floor = totalSpacing + insetExtra;
+            float pctBasisFloor = tableContentWidth - insetExtra;
+            if (pctBasisFloor < 0) pctBasisFloor = 0;
             for (size_t c = 0; c < numCols; c++) {
                 if (colPctFrac[c] >= 0) {
-                    float target = colPctFrac[c] * tableContentWidth;
+                    float target = colPctFrac[c] * pctBasisFloor;
                     floor += std::max(colMin[c], target);
                 } else {
                     floor += colMin[c];
@@ -578,10 +580,14 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float autoMinSum = 0.0f;
     float autoSlackSum = 0.0f;
     float autoMaxSum = 0.0f;
+    // Percent targets resolve against the cell-track area (not the table's
+    // outer border-box), which excludes the collapse-mode outer half-borders.
+    float pctBasis = tableContentWidth - collapseInset.left - collapseInset.right;
+    if (pctBasis < 0) pctBasis = 0;
     if (anyPct) {
         for (size_t c = 0; c < numCols; c++) {
             if (colPctFrac[c] >= 0) {
-                float target = colPctFrac[c] * tableContentWidth;
+                float target = colPctFrac[c] * pctBasis;
                 colWidths[c] = std::max(colMin[c], target);
                 pctConsumed += colWidths[c];
             } else {
