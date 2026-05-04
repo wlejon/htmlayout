@@ -806,6 +806,28 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Set table dimensions
     node->box.contentRect.width = tableContentWidth;
 
+    // Handle margin: auto for horizontal centering (like block boxes do).
+    // The table behaves as a block container in this respect.
+    {
+        const std::string& marginLeftVal  = styleVal(style, "margin-left");
+        const std::string& marginRightVal = styleVal(style, "margin-right");
+        if (marginLeftVal == "auto" || marginRightVal == "auto") {
+            float fullW = tableContentWidth + paddingH + borderH;
+            float remaining = availableWidth - fullW;
+            if (remaining < 0) remaining = 0;
+            if (marginLeftVal == "auto" && marginRightVal == "auto") {
+                node->box.margin.left  = remaining / 2.0f;
+                node->box.margin.right = remaining / 2.0f;
+            } else if (marginLeftVal == "auto") {
+                node->box.margin.left  = remaining - node->box.margin.right;
+                if (node->box.margin.left < 0) node->box.margin.left = 0;
+            } else {
+                node->box.margin.right = remaining - node->box.margin.left;
+                if (node->box.margin.right < 0) node->box.margin.right = 0;
+            }
+        }
+    }
+
     float specH = resolveLength(styleVal(style, "height"), 0, fontSize);
     const std::string& heightVal = styleVal(style, "height");
     if (heightVal != "auto" && !heightVal.empty()) {
