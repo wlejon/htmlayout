@@ -44,6 +44,7 @@ const std::vector<PropertyDef>& knownProperties() {
         {"overflow-x",        "visible",false},
         {"overflow-y",        "visible",false},
         {"box-sizing",        "content-box", false},
+        {"aspect-ratio",      "auto",   false},
 
         // Flexbox
         {"flex-direction",    "row",       false},

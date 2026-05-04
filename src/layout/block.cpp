@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 
 namespace htmlayout::layout {
 
@@ -18,6 +19,35 @@ float resolveDimension(const std::string& value, float available, float fontSize
     if (value == "max-content") return SIZING_MAX_CONTENT;
     if (value == "fit-content") return SIZING_FIT_CONTENT;
     return resolveLength(value, available, fontSize);
+}
+
+// Parse `aspect-ratio` value. Returns ratio = width/height as a positive float,
+// or -1.0f if value is auto/none/empty/invalid. Accepts forms like "16 / 9",
+// "1.5", or "auto 16/9" (auto prefix is ignored — fallback to ratio for
+// non-replaced elements).
+float parseAspectRatio(const std::string& value) {
+    if (value.empty() || value == "auto" || value == "none") return -1.0f;
+    const char* s = value.c_str();
+    // Skip leading "auto" (with optional whitespace) — replaced elements use
+    // intrinsic ratio when one is provided alongside, but for non-replaced
+    // boxes the explicit ratio still applies.
+    if (value.size() >= 4 && std::strncmp(s, "auto", 4) == 0 &&
+        (value.size() == 4 || std::isspace(static_cast<unsigned char>(s[4])))) {
+        s += 4;
+        while (*s && std::isspace(static_cast<unsigned char>(*s))) ++s;
+        if (!*s) return -1.0f;
+    }
+    char* end = nullptr;
+    double w = std::strtod(s, &end);
+    if (end == s || w <= 0) return -1.0f;
+    while (*end && std::isspace(static_cast<unsigned char>(*end))) ++end;
+    if (*end != '/') return static_cast<float>(w);
+    ++end;
+    while (*end && std::isspace(static_cast<unsigned char>(*end))) ++end;
+    char* end2 = nullptr;
+    double h = std::strtod(end, &end2);
+    if (end2 == end || h <= 0) return -1.0f;
+    return static_cast<float>(w / h);
 }
 
 } // anonymous namespace
@@ -122,6 +152,24 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float paddingV = node->box.padding.top + node->box.padding.bottom;
     float borderV = node->box.border.top + node->box.border.bottom;
     float earlyHeight = resolveDimension(styleVal(style, "height"), node->availableHeight, fontSize);
+    // aspect-ratio: when height is auto and width is definite, derive a
+    // content-box height from the ratio. The ratio applies to the box that
+    // box-sizing selects: content-box (default) → ratio of content widths and
+    // heights; border-box → ratio of border boxes.
+    // aspectRatioCBH < 0 means "no aspect-ratio override".
+    float aspectRatio = parseAspectRatio(styleVal(style, "aspect-ratio"));
+    float aspectRatioCBH = -1.0f;
+    if (earlyHeight < 0.0f && aspectRatio > 0.0f && contentWidth >= 0.0f) {
+        const std::string& bs = styleVal(style, "box-sizing");
+        if (bs == "border-box") {
+            float borderBoxW = contentWidth + paddingH + borderH;
+            float borderBoxH = borderBoxW / aspectRatio;
+            aspectRatioCBH = borderBoxH - paddingV - borderV;
+        } else {
+            aspectRatioCBH = contentWidth / aspectRatio;
+        }
+        if (aspectRatioCBH < 0.0f) aspectRatioCBH = 0.0f;
+    }
     float earlyChildAvailableHeight = 0.0f;
     if (earlyHeight >= 0.0f) {
         const std::string& boxSizing = styleVal(style, "box-sizing");
@@ -130,6 +178,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         else
             earlyChildAvailableHeight = earlyHeight;
         if (earlyChildAvailableHeight < 0.0f) earlyChildAvailableHeight = 0.0f;
+    } else if (aspectRatioCBH >= 0.0f) {
+        earlyChildAvailableHeight = aspectRatioCBH;
     } else if (node->viewportHeight > 0 &&
                (!node->parent() || !node->parent()->parent())) {
         // Root element chain (html/body): the initial containing block has
@@ -886,6 +936,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         } else {
             node->box.contentRect.height = specifiedHeight;
         }
+    } else if (aspectRatioCBH >= 0.0f && cursorY <= aspectRatioCBH) {
+        // aspect-ratio: derive height from width when height is auto.
+        // Per spec the ratio applies to the border box; if content overflows,
+        // content height takes precedence.
+        node->box.contentRect.height = aspectRatioCBH;
     } else {
         // height: auto — for replaced elements (e.g. <img>) with intrinsic
         // size, use that; otherwise shrink to fit content.
