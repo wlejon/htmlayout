@@ -2,6 +2,7 @@
 #include "layout/box.h"
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <vector>
 
 namespace htmlayout::layout {
