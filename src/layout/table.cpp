@@ -318,6 +318,12 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     if (numCols > 0) {
 
+    // Reserve cellInfos so pointers stored in grid stay valid as we push.
+    {
+        size_t totalCells = 0;
+        for (auto& row : rows) totalCells += row.cells.size();
+        cellInfos.reserve(totalCells + 8);
+    }
     // Build grid — may grow if rowspans push cells into new columns
     std::vector<std::vector<CellInfo*>> grid(numRows, std::vector<CellInfo*>(numCols, nullptr));
 
@@ -417,6 +423,96 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         collapseInset.right  = std::max(borderWidth.right,  rightMax)  * 0.5f;
     }
 
+    // Helper: get a cell's left border width (resolves px from style).
+    auto getCellBorderL = [&](LayoutNode* cell) -> float {
+        auto& cs = cell->computedStyle();
+        float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        if (cfs <= 0) cfs = fontSize;
+        return (styleVal(cs, "border-left-style") != "none")
+               ? resolveLength(styleVal(cs, "border-left-width"), 0, cfs) : 0;
+    };
+    auto getCellBorderR = [&](LayoutNode* cell) -> float {
+        auto& cs = cell->computedStyle();
+        float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        if (cfs <= 0) cfs = fontSize;
+        return (styleVal(cs, "border-right-style") != "none")
+               ? resolveLength(styleVal(cs, "border-right-width"), 0, cfs) : 0;
+    };
+    auto getCellBorderT = [&](LayoutNode* cell) -> float {
+        auto& cs = cell->computedStyle();
+        float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        if (cfs <= 0) cfs = fontSize;
+        return (styleVal(cs, "border-top-style") != "none")
+               ? resolveLength(styleVal(cs, "border-top-width"), 0, cfs) : 0;
+    };
+    auto getCellBorderB = [&](LayoutNode* cell) -> float {
+        auto& cs = cell->computedStyle();
+        float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        if (cfs <= 0) cfs = fontSize;
+        return (styleVal(cs, "border-bottom-style") != "none")
+               ? resolveLength(styleVal(cs, "border-bottom-width"), 0, cfs) : 0;
+    };
+
+    // Compute the four shared half-borders for a cell at the grid position.
+    // Looks at actual neighbors in the grid (not column-wise max) so e.g.
+    // a thin cell next to a thick cell only shares the gridline with that
+    // specific neighbor, not the max across all rows.
+    auto cellSharedHalfBorders = [&](LayoutNode* cell, size_t gridRow,
+                                     size_t gridCol, size_t colspan, size_t rowspan,
+                                     float& hL, float& hR, float& hT, float& hB) {
+        size_t rcol = gridCol + colspan - 1;
+        size_t rrow = gridRow + rowspan - 1;
+        float ownL = getCellBorderL(cell);
+        float ownR = getCellBorderR(cell);
+        float ownT = getCellBorderT(cell);
+        float ownB = getCellBorderB(cell);
+
+        // Left edge: scan over rowspan rows on the left side.
+        float leftMax = ownL;
+        if (gridCol == 0) {
+            leftMax = std::max(leftMax, borderWidth.left);
+        } else {
+            for (size_t dr = 0; dr < rowspan && gridRow + dr < numRows; dr++) {
+                CellInfo* nb = grid[gridRow + dr][gridCol - 1];
+                if (nb && nb->node) leftMax = std::max(leftMax, getCellBorderR(nb->node));
+            }
+        }
+        // Right edge.
+        float rightMax = ownR;
+        if (rcol >= numCols - 1) {
+            rightMax = std::max(rightMax, borderWidth.right);
+        } else {
+            for (size_t dr = 0; dr < rowspan && gridRow + dr < numRows; dr++) {
+                CellInfo* nb = grid[gridRow + dr][rcol + 1];
+                if (nb && nb->node) rightMax = std::max(rightMax, getCellBorderL(nb->node));
+            }
+        }
+        // Top edge.
+        float topMax = ownT;
+        if (gridRow == 0) {
+            topMax = std::max(topMax, borderWidth.top);
+        } else {
+            for (size_t dc = 0; dc < colspan && gridCol + dc < numCols; dc++) {
+                CellInfo* nb = grid[gridRow - 1][gridCol + dc];
+                if (nb && nb->node) topMax = std::max(topMax, getCellBorderB(nb->node));
+            }
+        }
+        // Bottom edge.
+        float bottomMax = ownB;
+        if (rrow >= numRows - 1) {
+            bottomMax = std::max(bottomMax, borderWidth.bottom);
+        } else {
+            for (size_t dc = 0; dc < colspan && gridCol + dc < numCols; dc++) {
+                CellInfo* nb = grid[rrow + 1][gridCol + dc];
+                if (nb && nb->node) bottomMax = std::max(bottomMax, getCellBorderT(nb->node));
+            }
+        }
+        hL = leftMax   * 0.5f;
+        hR = rightMax  * 0.5f;
+        hT = topMax    * 0.5f;
+        hB = bottomMax * 0.5f;
+    };
+
     auto cellEdges = [&](LayoutNode* cell, size_t gridCol, size_t colspan,
                          float& padBorderH) {
         auto& cs = cell->computedStyle();
@@ -424,27 +520,22 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (cfs <= 0) cfs = fontSize;
         float pl = resolveLength(styleVal(cs, "padding-left"), 0, cfs);
         float pr = resolveLength(styleVal(cs, "padding-right"), 0, cfs);
-        float bl = (styleVal(cs, "border-left-style") != "none")
-                   ? resolveLength(styleVal(cs, "border-left-width"), 0, cfs) : 0;
-        float br = (styleVal(cs, "border-right-style") != "none")
-                   ? resolveLength(styleVal(cs, "border-right-width"), 0, cfs) : 0;
+        float bl = getCellBorderL(cell);
+        float br = getCellBorderR(cell);
         if (collapse) {
-            // In border-collapse mode the cell's effective horizontal border
-            // is half(border) per side. The boundary side takes
-            // max(cellBorder, tableBorder, max-boundary-cell-border) * 0.5.
-            float effL = bl * 0.5f;
-            float effR = br * 0.5f;
-            if (gridCol == 0) {
-                float boundary = std::max(borderWidth.left, colMaxLeft[gridCol]);
-                effL = std::max(effL, boundary * 0.5f);
-            }
-            if (gridCol + colspan >= numCols && numCols > 0) {
-                size_t rc = numCols - 1;
-                float boundary = std::max(borderWidth.right, colMaxRight[rc]);
-                effR = std::max(effR, boundary * 0.5f);
-            }
-            bl = effL;
-            br = effR;
+            // We don't have the grid row here in some callsites; the
+            // approximation uses just own borders + table boundary. The
+            // accurate per-cell shared-border is applied later in the cell
+            // border-box override. For column allocation a stable per-cell
+            // sized estimate is sufficient since cells anchor on column tracks.
+            float leftHalf = bl * 0.5f;
+            float rightHalf = br * 0.5f;
+            if (gridCol == 0)
+                leftHalf = std::max(leftHalf, std::max(borderWidth.left, colMaxLeft[gridCol]) * 0.5f);
+            if (gridCol + colspan >= numCols && numCols > 0)
+                rightHalf = std::max(rightHalf, std::max(borderWidth.right, colMaxRight[numCols - 1]) * 0.5f);
+            bl = leftHalf;
+            br = rightHalf;
         }
         padBorderH = pl + pr + bl + br;
     };
@@ -698,45 +789,14 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
 
         // In border-collapse mode, the cell's border is shared with its
-        // neighbor (or the table's outer border on the boundary). The reported
-        // cell border-box height is content + padding + half(border) on each
-        // side, where the boundary side takes max(cellHalfBorder, tableHalfBorder).
-        // Override the cell's border edges accordingly so fullHeight() reports
-        // the Chromium-compatible value.
+        // actual neighbors in the grid. Each cell gets half(max(adjacent
+        // borders meeting on that gridline)).
         if (collapse) {
-            Edges cellHalf{
-                ci.node->box.border.top    * 0.5f,
-                ci.node->box.border.right  * 0.5f,
-                ci.node->box.border.bottom * 0.5f,
-                ci.node->box.border.left   * 0.5f,
-            };
-            Edges tableHalf{
-                borderWidth.top    * 0.5f,
-                borderWidth.right  * 0.5f,
-                borderWidth.bottom * 0.5f,
-                borderWidth.left   * 0.5f,
-            };
-            Edges outerBorder = cellHalf;
-            // On the table boundary, the half-border takes
-            // max(cellBorder, tableBorder, max-boundary-cell-border) * 0.5.
-            if (ci.gridRow == 0) {
-                float boundary = std::max(borderWidth.top, rowMaxTop[0]);
-                outerBorder.top = std::max(cellHalf.top, boundary * 0.5f);
-            }
-            if (ci.gridRow + ci.rowspan >= numRows && numRows > 0) {
-                float boundary = std::max(borderWidth.bottom, rowMaxBottom[numRows - 1]);
-                outerBorder.bottom = std::max(cellHalf.bottom, boundary * 0.5f);
-            }
-            if (ci.gridCol == 0) {
-                float boundary = std::max(borderWidth.left, colMaxLeft[0]);
-                outerBorder.left = std::max(cellHalf.left, boundary * 0.5f);
-            }
-            if (ci.gridCol + ci.colspan >= numCols && numCols > 0) {
-                float boundary = std::max(borderWidth.right, colMaxRight[numCols - 1]);
-                outerBorder.right = std::max(cellHalf.right, boundary * 0.5f);
-            }
-            ci.node->box.border = outerBorder;
-            (void)tableHalf;
+            Edges b{};
+            cellSharedHalfBorders(ci.node, ci.gridRow, ci.gridCol,
+                                  ci.colspan, ci.rowspan,
+                                  b.left, b.right, b.top, b.bottom);
+            ci.node->box.border = b;
         }
 
         // The cell's rendered width is always its allocated column-track span.
