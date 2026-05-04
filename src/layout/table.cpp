@@ -366,6 +366,9 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // any deficit equally across the spanned columns.
     std::vector<float> colMin(numCols, 0.0f);
     std::vector<float> colMax(numCols, 0.0f);
+    // Per-column percentage width target (fraction of tableContentWidth) for
+    // cells with `width: N%`. A negative value means "no percent set".
+    std::vector<float> colPctFrac(numCols, -1.0f);
     float totalSpacing = borderSpacing * (numCols + 1);
 
     auto cellEdges = [&](LayoutNode* cell, float& padBorderH) {
@@ -389,10 +392,11 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         const std::string& cwVal = styleVal(cs, "width");
         float cellMin = computeMinContentWidth(ci.node, metrics) + pbh;
         float cellMax = computeMaxContentWidth(ci.node, metrics) + pbh;
-        if (!cwVal.empty() && cwVal != "auto") {
+        bool isPercentWidth = (!cwVal.empty() && cwVal.back() == '%');
+        if (!cwVal.empty() && cwVal != "auto" && !isPercentWidth) {
             float specCellW = resolveLength(cwVal, tableContentWidth, fontSize);
             if (styleVal(cs, "box-sizing") != "border-box") specCellW += pbh;
-            // Treat explicit width as a strong preferred for max-content,
+            // Treat explicit (length) width as a strong preferred for max-content,
             // and as a floor for min-content.
             cellMax = std::max(cellMax, specCellW);
             cellMin = std::max(cellMin, specCellW);
@@ -400,6 +404,13 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (ci.colspan == 1) {
             colMin[ci.gridCol] = std::max(colMin[ci.gridCol], cellMin);
             colMax[ci.gridCol] = std::max(colMax[ci.gridCol], cellMax);
+            if (isPercentWidth) {
+                // Parse "N%" -> fraction
+                float pct = 0.0f;
+                try { pct = std::stof(cwVal.substr(0, cwVal.size() - 1)); } catch (...) {}
+                float frac = std::max(0.0f, pct / 100.0f);
+                if (colPctFrac[ci.gridCol] < frac) colPctFrac[ci.gridCol] = frac;
+            }
         }
     }
 
@@ -456,44 +467,120 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         tableContentWidth = std::min(availContent, prefTable);
         tableContentWidth = std::max(tableContentWidth, minTable);
     } else {
-        // Honor explicit width but never less than min-content
-        tableContentWidth = std::max(tableContentWidth, minTable);
+        // Honor explicit width. We may grow above it only if min-content
+        // requires it AND there are no percent columns to absorb the slack.
+        // With percent columns under an explicit table width, the percent
+        // targets apply inside tableContentWidth — even if a cell's
+        // min-content is below its percent share, the share wins.
+        bool hasPct = false;
+        for (size_t c = 0; c < numCols; c++) if (colPctFrac[c] >= 0) { hasPct = true; break; }
+        if (!hasPct) {
+            tableContentWidth = std::max(tableContentWidth, minTable);
+        } else {
+            // Allow tableContentWidth below sumMin only if percent cols absorb
+            // enough; floor by the sum of (max(colMin, pctTarget) for pct cols)
+            // plus colMin for auto cols, plus spacing.
+            float floor = totalSpacing;
+            for (size_t c = 0; c < numCols; c++) {
+                if (colPctFrac[c] >= 0) {
+                    float target = colPctFrac[c] * tableContentWidth;
+                    floor += std::max(colMin[c], target);
+                } else {
+                    floor += colMin[c];
+                }
+            }
+            tableContentWidth = std::max(tableContentWidth, floor);
+        }
     }
 
     // Distribute the table content width across columns.
-    // Start each column at its min; add per-col extra weighted by (max - min)
-    // if there's slack between min and max; further extra proportional to max
-    // if any remains after every column reached its max-content.
+    // Percent columns claim their N% of tableContentWidth (clamped to colMin).
+    // Auto columns share the remaining space, starting at colMin and growing
+    // toward colMax weighted by slack.
     std::vector<float> colWidths = colMin;
     float available = tableContentWidth - totalSpacing;
-    float used = sumMin;
+
+    // First, satisfy percent columns.
+    bool anyPct = false;
+    for (size_t c = 0; c < numCols; c++) if (colPctFrac[c] >= 0) { anyPct = true; break; }
+    float pctConsumed = 0.0f;
+    float autoMinSum = 0.0f;
+    float autoSlackSum = 0.0f;
+    float autoMaxSum = 0.0f;
+    if (anyPct) {
+        for (size_t c = 0; c < numCols; c++) {
+            if (colPctFrac[c] >= 0) {
+                float target = colPctFrac[c] * tableContentWidth;
+                colWidths[c] = std::max(colMin[c], target);
+                pctConsumed += colWidths[c];
+            } else {
+                autoMinSum += colMin[c];
+                autoSlackSum += (colMax[c] - colMin[c]);
+                autoMaxSum += colMax[c];
+            }
+        }
+    }
+    float used = anyPct ? (pctConsumed + autoMinSum) : sumMin;
     if (available > used) {
         float extra = available - used;
-        float slackTotal = 0;
-        for (size_t c = 0; c < numCols; c++) slackTotal += (colMax[c] - colMin[c]);
-        if (slackTotal > 0) {
-            float take = std::min(extra, slackTotal);
+        // Distribute extra to non-percent columns first (by slack, then by max).
+        if (anyPct && autoSlackSum > 0) {
+            float take = std::min(extra, autoSlackSum);
             for (size_t c = 0; c < numCols; c++) {
+                if (colPctFrac[c] >= 0) continue;
                 float slack = colMax[c] - colMin[c];
-                colWidths[c] += take * (slack / slackTotal);
+                if (slack > 0) colWidths[c] += take * (slack / autoSlackSum);
             }
             extra -= take;
+        } else if (!anyPct) {
+            float slackTotal = 0;
+            for (size_t c = 0; c < numCols; c++) slackTotal += (colMax[c] - colMin[c]);
+            if (slackTotal > 0) {
+                float take = std::min(extra, slackTotal);
+                for (size_t c = 0; c < numCols; c++) {
+                    float slack = colMax[c] - colMin[c];
+                    colWidths[c] += take * (slack / slackTotal);
+                }
+                extra -= take;
+            }
         }
         if (extra > 0) {
-            // All columns at max-content; spread remaining space proportional to max-content
-            float maxTotal = sumMax;
-            if (maxTotal > 0) {
-                for (size_t c = 0; c < numCols; c++) {
-                    colWidths[c] += extra * (colMax[c] / maxTotal);
+            // Remaining: spread across auto columns by max-content (or
+            // across all columns if no auto columns / no maxes).
+            if (anyPct) {
+                if (autoMaxSum > 0) {
+                    for (size_t c = 0; c < numCols; c++) {
+                        if (colPctFrac[c] >= 0) continue;
+                        colWidths[c] += extra * (colMax[c] / autoMaxSum);
+                    }
+                } else {
+                    // No non-percent cols (or all zero-max): give to percent
+                    // columns proportionally to their pct fractions.
+                    float fracSum = 0;
+                    for (size_t c = 0; c < numCols; c++) if (colPctFrac[c] > 0) fracSum += colPctFrac[c];
+                    if (fracSum > 0) {
+                        for (size_t c = 0; c < numCols; c++) {
+                            if (colPctFrac[c] > 0) colWidths[c] += extra * (colPctFrac[c] / fracSum);
+                        }
+                    } else {
+                        float per = extra / numCols;
+                        for (size_t c = 0; c < numCols; c++) colWidths[c] += per;
+                    }
                 }
             } else {
-                float per = extra / numCols;
-                for (size_t c = 0; c < numCols; c++) colWidths[c] += per;
+                if (sumMax > 0) {
+                    for (size_t c = 0; c < numCols; c++) {
+                        colWidths[c] += extra * (colMax[c] / sumMax);
+                    }
+                } else {
+                    float per = extra / numCols;
+                    for (size_t c = 0; c < numCols; c++) colWidths[c] += per;
+                }
             }
         }
     } else if (available < used && used > 0) {
-        // Shouldn't normally happen because we floored tableContentWidth at minTable,
-        // but guard anyway: scale down proportionally to min.
+        // Shouldn't normally happen because we floored tableContentWidth above,
+        // but guard anyway: scale down proportionally to current widths.
         float scale = available / used;
         for (size_t c = 0; c < numCols; c++) colWidths[c] *= scale;
     }
