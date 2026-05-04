@@ -371,7 +371,8 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     std::vector<float> colPctFrac(numCols, -1.0f);
     float totalSpacing = borderSpacing * (numCols + 1);
 
-    auto cellEdges = [&](LayoutNode* cell, float& padBorderH) {
+    auto cellEdges = [&](LayoutNode* cell, size_t gridCol, size_t colspan,
+                         float& padBorderH) {
         auto& cs = cell->computedStyle();
         float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
         if (cfs <= 0) cfs = fontSize;
@@ -381,12 +382,25 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                    ? resolveLength(styleVal(cs, "border-left-width"), 0, cfs) : 0;
         float br = (styleVal(cs, "border-right-style") != "none")
                    ? resolveLength(styleVal(cs, "border-right-width"), 0, cfs) : 0;
+        if (collapse) {
+            // In border-collapse mode the cell's effective horizontal border
+            // is half(border) per side. The boundary side takes
+            // max(cellHalfBorder, tableHalfBorder).
+            float effL = bl * 0.5f;
+            float effR = br * 0.5f;
+            if (gridCol == 0)
+                effL = std::max(effL, borderWidth.left * 0.5f);
+            if (gridCol + colspan >= numCols)
+                effR = std::max(effR, borderWidth.right * 0.5f);
+            bl = effL;
+            br = effR;
+        }
         padBorderH = pl + pr + bl + br;
     };
 
     for (auto& ci : cellInfos) {
         float pbh = 0;
-        cellEdges(ci.node, pbh);
+        cellEdges(ci.node, ci.gridCol, ci.colspan, pbh);
         // Honor explicit cell width if specified
         auto& cs = ci.node->computedStyle();
         const std::string& cwVal = styleVal(cs, "width");
@@ -421,7 +435,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto& ci : cellInfos) {
         if (ci.colspan <= 1) continue;
         float pbh = 0;
-        cellEdges(ci.node, pbh);
+        cellEdges(ci.node, ci.gridCol, ci.colspan, pbh);
         float cellMin = computeMinContentWidth(ci.node, metrics) + pbh;
         float cellMax = computeMaxContentWidth(ci.node, metrics) + pbh;
         float spanSpacing = borderSpacing * (ci.colspan - 1);
