@@ -19,7 +19,7 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - `@container` queries with named containers and size containment
 - Shorthand expansion for ~150 properties (`margin`, `padding`, `border`, `flex`, `grid`, `font`, `container`, `background`, etc.), including multi-layer `background` with `position / size` slash syntax
 - Color parsing (named, hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`)
-- `transform` and `transform-origin` parsing into a 2D matrix for consumer-side rendering
+- `transform` and `transform-origin` parsing into a 2D affine matrix or 4×4 matrix (3D functions: `translate3d`, `translateZ`, `scale3d`, `scaleZ`, `rotateX/Y/Z`, `rotate3d`, `perspective`, `matrix3d`) for consumer-side rendering
 - `@media` query evaluation (`min/max-width`, `min/max-height`, `orientation`, range syntax, logical `or`)
 - `@supports` feature queries
 - `@import` resolution with consumer-provided callback (with media/layer qualifiers)
@@ -32,7 +32,7 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - Inline formatting context with line wrapping and text alignment (`left`, `right`, `center`, `justify`)
 - Flexbox (`flex-direction`, `flex-wrap`, `justify-content`, `align-items`, `align-content`, baseline alignment, grow/shrink, gap, order)
 - CSS Grid (templates with `fr` units and `minmax()`, `grid-template-areas`, `span N`, 1-based line placement, `grid-auto-flow`, `grid-auto-columns/rows`, auto-placement, `gap`, `justify-items`, `align-items`, `justify-self`, `align-self`)
-- Table layout (`table-row`, `table-cell`, `table-caption`, `border-spacing`, `border-collapse`, `rowspan`, `colspan`, `caption-side`, `vertical-align`)
+- Table layout (`table-row`, `table-cell`, `table-caption`, `border-spacing` (one- or two-value), `border-collapse`, `rowspan`, `colspan`, `caption-side`, `vertical-align`)
 - Multi-column layout (`column-count`, `column-width`, `column-gap`, `column-span: all`, `break-before`/`break-after`)
 - Length units: `px`, `em`, `%`, `vw`, `vh`, `vmin`, `vmax`, `rem`, `ch`, `ex`, `pt`, `cm`, `mm`, `in`, `pc`
 - `calc()` expressions with basic math (`+`, `-`, `*`, `/`) and nested parentheses
@@ -49,11 +49,13 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 ## Current Limitations
 
 - **Positioning**: `position: sticky` applies a static offset only; scroll-based clamping is not performed (layout-time only).
-- **At-rules**: `@font-face` and `@keyframes` are parsed but discarded (no font loading or animation). `@scope` is not implemented.
+- **At-rules**: `@font-face` and `@keyframes` are parsed and exposed on the `Cascade` (`Cascade::fontFaces()` / `Cascade::keyframes()`) for the consumer to act on, but the engine itself does no font loading or animation. `@scope` is not implemented.
 - **Animations & transitions**: not run — transitions/animations are parsed but produce no time-varying values.
 - **Bidirectional text**: `direction: rtl` affects text alignment but does not reorder inline content. No Unicode bidi algorithm.
 - **Color**: only legacy color formats (named, hex, `rgb`/`rgba`, `hsl`/`hsla`). `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, and `color-mix()` are not parsed.
-- **Generated content**: `::before` / `::after` boxes participate in layout via consumer-supplied pseudo nodes; `content:` string literals, CSS counters, and list-style markers are not synthesized by the engine.
+- **Generated content**: `::before` / `::after` boxes participate in layout via consumer-supplied pseudo nodes (`LayoutNode::pseudoBefore()` / `pseudoAfter()`); `content:` string literals, CSS counters, and list-style markers are not synthesized by the engine.
+- **Logical properties**: `margin-inline-*`, `padding-inline-*`, `inset-inline-*` etc. expand to physical properties assuming `writing-mode: horizontal-tb` and `direction: ltr`. Vertical writing modes are not fully supported.
+- **Grid**: `subgrid` is not implemented.
 - **Filters & effects**: `filter`, `backdrop-filter`, and `will-change` are not honored beyond stacking-context effects.
 
 ## Requirements
@@ -114,6 +116,10 @@ class MyLayoutNode : public htmlayout::layout::LayoutNode {
     LayoutNode* parent() const override;
     std::vector<LayoutNode*> children() const override;
     const htmlayout::css::ComputedStyle& computedStyle() const override;
+    // Optional: attribute() (presentational HTML attrs like colspan/rowspan/width/height/align),
+    //   intrinsicSize() (replaced elements like <input>, <textarea>, <select>),
+    //   scrollLeftPx() / scrollTopPx() (for scrollable containers in hit testing),
+    //   pseudoBefore() / pseudoAfter() (consumer-synthesized ::before / ::after boxes)
     // After layout, read results from the `box` field
 };
 
@@ -149,10 +155,18 @@ using namespace htmlayout::layout;
 
 MyTextMetrics metrics;
 layoutTree(rootNode, viewportWidth, metrics);
+// Or, with explicit viewport for proper vw/vh resolution:
+//   layoutTree(rootNode, Viewport{w, h}, metrics);
+
+// Optionally clip subtrees of overflow:hidden/scroll/auto nodes to their content+padding box:
+applyOverflowClipping(rootNode);
 
 // Each node's `box` field now contains positioned results:
 // box.contentRect  — {x, y, width, height}
 // box.margin, box.padding, box.border — edge sizes
+// box.naturalHeight — pre-clamp content height (scroll extent)
+// box.textTruncated — true if text-overflow:ellipsis truncated this node
+// box.textRuns      — placed run geometry for text nodes
 ```
 
 ### 4. Hit testing
