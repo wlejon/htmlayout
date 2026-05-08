@@ -215,7 +215,7 @@ void validateExpectations(SpecNode* node, const SpecExpectation& exp) {
                 else if (prop == "height") actual = node->box.contentRect.height;
                 else if (prop == "x") actual = node->box.contentRect.x;
                 else if (prop == "y") actual = node->box.contentRect.y;
-                check(std::abs(actual - val) < 1.0f, 
+                check(std::abs(actual - val) < 1.0f,
                       (exp.selector + " " + prop + " approx " + std::to_string(val)).c_str());
             }
         }
@@ -311,7 +311,7 @@ void testSpecCompliance() {
             "Table L3: Basic row/cell layout",
             "CSS-TABLE-3 Section 3",
             "<table><tr><td class='c1'></td><td class='c2'></td></tr></table>",
-            "body { margin: 0; } table { width: 400px; border-spacing: 0; border-collapse: collapse; } td { height: 50px; padding: 0; border: none; }",
+            "body { margin: 0; } table { width: 400px; border: 0; border-spacing: 0; border-collapse: collapse; } td { height: 50px; padding: 0; border: none; }",
             {
                 {".c1", {}, {{"width", 200.0f}}},
                 {".c2", {}, {{"width", 200.0f}, {"x", 200.0f}}}

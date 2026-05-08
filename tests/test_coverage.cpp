@@ -1698,6 +1698,9 @@ static void testTableVerticalAlignMiddle() {
     CovNode mid; mid.initBlock();
     mid.style_["display"] = "table-cell"; mid.style_["height"] = "40px";
     mid.style_["vertical-align"] = "middle";
+    CovNode midContent; midContent.initBlock();
+    midContent.style_["height"] = "20px";
+    mid.addChild(&midContent);
 
     row.addChild(&tall); row.addChild(&mid);
     table.addChild(&row);
@@ -1705,10 +1708,14 @@ static void testTableVerticalAlignMiddle() {
     CovMetrics m;
     layoutTree(&table, 800, m);
 
-    // mid cell should be vertically centered in the 100px row
-    // Content offset should be roughly (100-40)/2 = 30 from the cell's baseline
-    check(mid.box.contentRect.y > tall.box.contentRect.y + 10,
-          "table vertical-align:middle: cell centered vertically");
+    // The cell box stays anchored at the row top; only its inner content
+    // shifts to satisfy vertical-align. Row stretches to the tallest cell
+    // (100px), so the 20px child centers around (100-20)/2 = 40px below
+    // the cell's content top.
+    check(approx(mid.box.contentRect.y, tall.box.contentRect.y),
+          "table vertical-align:middle: cell box stays at row top");
+    check(midContent.box.contentRect.y > 30.0f,
+          "table vertical-align:middle: child shifted toward middle");
 }
 
 static void testTableVerticalAlignBottom() {
@@ -1722,6 +1729,9 @@ static void testTableVerticalAlignBottom() {
     CovNode bot; bot.initBlock();
     bot.style_["display"] = "table-cell"; bot.style_["height"] = "30px";
     bot.style_["vertical-align"] = "bottom";
+    CovNode botContent; botContent.initBlock();
+    botContent.style_["height"] = "20px";
+    bot.addChild(&botContent);
 
     row.addChild(&tall); row.addChild(&bot);
     table.addChild(&row);
@@ -1729,9 +1739,12 @@ static void testTableVerticalAlignBottom() {
     CovMetrics m;
     layoutTree(&table, 800, m);
 
-    // bot cell content should be at the bottom of the row
-    check(bot.box.contentRect.y > tall.box.contentRect.y + 50,
-          "table vertical-align:bottom: cell at bottom");
+    // Cell box stays at row top; child shifts to the bottom of the
+    // stretched 100px cell. Child top = 100 - 20 = 80.
+    check(approx(bot.box.contentRect.y, tall.box.contentRect.y),
+          "table vertical-align:bottom: cell box stays at row top");
+    check(botContent.box.contentRect.y > 70.0f,
+          "table vertical-align:bottom: child shifted to bottom");
 }
 
 // ======================================================================
