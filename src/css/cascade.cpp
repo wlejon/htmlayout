@@ -127,11 +127,11 @@ bool Cascade::evaluateContainerQuery(const ElementRef& elem,
     // Walk up the tree to find the nearest container ancestor
     const ElementRef* current = elem.parent();
     while (current) {
-        std::string cType = current->containerType();
+        std::string_view cType = current->containerType();
         if (cType != "none") {
             // Check name match if required
             if (!containerName.empty()) {
-                std::string cName = current->containerName();
+                std::string cName(current->containerName());
                 // Check if the container's name list contains the required name
                 bool nameMatch = false;
                 std::istringstream iss(cName);
@@ -363,7 +363,7 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             if (elem.scope() == nullptr) continue;  // element must be in a shadow scope
             if (rule.scope != nullptr) continue;     // ::part rules come from outer/document scope
             // Check part name match
-            std::string partName = elem.partName();
+            std::string_view partName = elem.partName();
             if (partName.empty()) continue;
         } else {
             // Scope check: null-scope rules (UA defaults) apply everywhere;
@@ -393,7 +393,7 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             for (auto& s : rule.selector.chain.entries[0].compound.simples) {
                 if (s.type == SimpleSelectorType::PseudoElement && s.value == "part") {
                     // Check if element's part name list contains the target part name
-                    std::string elemParts = elem.partName();
+                    std::string elemParts(elem.partName());
                     std::istringstream iss(elemParts);
                     std::string p;
                     while (iss >> p) {

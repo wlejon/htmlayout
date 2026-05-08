@@ -7,7 +7,8 @@ namespace htmlayout::layout {
 // its computed display property, then dispatches to the right one.
 void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics);
 
-// Sentinel values for intrinsic sizing keywords
+// Sentinel values for intrinsic sizing keywords. Valid CSS sizing values are
+// non-negative, so these specific negative values cannot collide with real lengths.
 constexpr float SIZING_MIN_CONTENT = -10.0f;
 constexpr float SIZING_MAX_CONTENT = -20.0f;
 constexpr float SIZING_FIT_CONTENT = -30.0f;
@@ -36,11 +37,11 @@ float resolveLineHeight(const std::string& value, float fontSize);
 
 // Preferred overload: "normal" resolves to the font's intrinsic line height
 // (ascent + descent + leading) via TextMetrics, matching browser behavior.
-// Falls back to 1.2 * fontSize if metrics is null or returns <= 0.
+// Falls back to 1.2 * fontSize if metrics returns <= 0.
 float resolveLineHeight(const std::string& value, float fontSize,
                         const std::string& fontFamily,
                         const std::string& fontWeight,
-                        TextMetrics* metrics);
+                        TextMetrics& metrics);
 
 // Parse edges (margin, padding, border-width) from computed style
 Edges resolveEdges(const css::ComputedStyle& style,

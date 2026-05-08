@@ -219,7 +219,7 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
                 if (ws) continue;
             }
             // Min-content: each word on its own line, take the widest word
-            std::string text = child->textContent();
+            std::string_view text = child->textContent();
             std::string word;
             float widestWord = 0.0f;
             for (size_t i = 0; i <= text.size(); i++) {
@@ -289,7 +289,7 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     float maxChildMax = 0.0f;
     float sumChildMax = 0.0f;
 
-    auto isWhitespaceOnly = [](const std::string& s) {
+    auto isWhitespaceOnly = [](std::string_view s) {
         for (char c : s) {
             if (!std::isspace(static_cast<unsigned char>(c))) return false;
         }
@@ -301,7 +301,7 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
             // Flex containers discard whitespace-only text nodes (CSS Flexbox §4)
             if (isFlexContainer && isWhitespaceOnly(child->textContent())) continue;
             // Max-content: no wrapping, measure the whole text as one line
-            std::string text = child->textContent();
+            std::string_view text = child->textContent();
             // Collapse whitespace
             std::string collapsed;
             bool lastSpace = false;
@@ -422,12 +422,10 @@ float resolveLineHeight(const std::string& value, float fontSize) {
 float resolveLineHeight(const std::string& value, float fontSize,
                         const std::string& fontFamily,
                         const std::string& fontWeight,
-                        TextMetrics* metrics) {
+                        TextMetrics& metrics) {
     if (value.empty() || value == "normal") {
-        if (metrics) {
-            float h = metrics->lineHeight(fontFamily, fontSize, fontWeight);
-            if (h > 0) return h;
-        }
+        float h = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+        if (h > 0) return h;
         return fontSize * 1.2f;
     }
     return resolveLineHeight(value, fontSize);

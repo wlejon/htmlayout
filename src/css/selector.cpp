@@ -19,8 +19,8 @@ int safeStoi(const std::string& s, int defaultVal = 0) {
     }
 }
 
-std::string toLower(const std::string& s) {
-    std::string r = s;
+std::string toLower(std::string_view s) {
+    std::string r(s);
     for (auto& c : r) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return r;
 }
@@ -33,9 +33,9 @@ std::string trim(const std::string& s) {
 }
 
 // Split a string by a delimiter (for class matching)
-std::vector<std::string> splitWhitespace(const std::string& s) {
+std::vector<std::string> splitWhitespace(std::string_view s) {
     std::vector<std::string> parts;
-    std::istringstream iss(s);
+    std::istringstream iss((std::string(s)));
     std::string part;
     while (iss >> part) parts.push_back(part);
     return parts;
@@ -567,7 +567,7 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
         case SimpleSelectorType::Attribute: {
             if (!elem.hasAttribute(ss.attrName)) return false;
             if (ss.attrOp == AttrMatchOp::Exists) return true;
-            std::string val = elem.getAttribute(ss.attrName);
+            std::string val(elem.getAttribute(ss.attrName));
             std::string cmpVal = ss.attrValue;
             // Apply case-insensitive flag
             if (ss.attrCaseInsensitive) {

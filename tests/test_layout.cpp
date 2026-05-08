@@ -15,15 +15,15 @@ struct MockLayoutNode : public LayoutNode {
     bool isText = false;
     std::string text;
     MockLayoutNode* parentNode = nullptr;
-    std::vector<MockLayoutNode*> childNodes;
+    std::vector<LayoutNode*> childNodes;
     ComputedStyle style;
 
-    std::string tagName() const override { return tag; }
+    std::string_view tagName() const override { return tag; }
     bool isTextNode() const override { return isText; }
-    std::string textContent() const override { return text; }
+    std::string_view textContent() const override { return text; }
     LayoutNode* parent() const override { return parentNode; }
-    std::vector<LayoutNode*> children() const override {
-        return {childNodes.begin(), childNodes.end()};
+    std::span<LayoutNode* const> children() const override {
+        return childNodes;
     }
     const ComputedStyle& computedStyle() const override { return style; }
 
@@ -48,13 +48,13 @@ struct MockLayoutNode : public LayoutNode {
 // ---- Mock TextMetrics (simple fixed-width) ----
 
 struct MockTextMetrics : public TextMetrics {
-    float measureWidth(const std::string& text,
-                       const std::string&, float fontSize,
-                       const std::string&) override {
+    float measureWidth(std::string_view text,
+                       std::string_view, float fontSize,
+                       std::string_view) override {
         return static_cast<float>(text.size()) * fontSize * 0.6f;
     }
-    float lineHeight(const std::string&, float fontSize,
-                     const std::string&) override {
+    float lineHeight(std::string_view, float fontSize,
+                     std::string_view) override {
         return fontSize * 1.2f;
     }
 };

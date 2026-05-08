@@ -1,6 +1,8 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include <vector>
+#include <span>
 #include <functional>
 #include <cstdint>
 #include <memory>
@@ -11,13 +13,13 @@ namespace htmlayout::css {
 // Consumers (like bro) implement this to bridge their DOM.
 struct ElementRef {
     virtual ~ElementRef() = default;
-    virtual std::string tagName() const = 0;
-    virtual std::string id() const = 0;
-    virtual std::string className() const = 0;
-    virtual std::string getAttribute(const std::string& name) const = 0;
-    virtual bool hasAttribute(const std::string& name) const = 0;
+    virtual std::string_view tagName() const = 0;
+    virtual std::string_view id() const = 0;
+    virtual std::string_view className() const = 0;
+    virtual std::string_view getAttribute(std::string_view name) const = 0;
+    virtual bool hasAttribute(std::string_view name) const = 0;
     virtual ElementRef* parent() const = 0;
-    virtual std::vector<ElementRef*> children() const = 0;
+    virtual std::span<ElementRef* const> children() const = 0;
     virtual int childIndex() const = 0;          // 0-based index among siblings
     virtual int childIndexOfType() const = 0;    // 0-based index among same-tag siblings
     virtual int siblingCount() const = 0;         // total sibling count
@@ -57,17 +59,17 @@ struct ElementRef {
     virtual ElementRef* assignedSlot() const { return nullptr; }
 
     // CSS Parts: the part name(s) exposed by this element (space-separated).
-    virtual std::string partName() const { return ""; }
+    virtual std::string_view partName() const { return ""; }
 
     // Custom elements: is this element defined (registered)?
     virtual bool isDefined() const { return true; }
 
     // Container queries: the container type of this element.
     // Valid values: "none", "inline-size", "size"
-    virtual std::string containerType() const { return "none"; }
+    virtual std::string_view containerType() const { return "none"; }
 
     // Container queries: the container name of this element (space-separated names).
-    virtual std::string containerName() const { return ""; }
+    virtual std::string_view containerName() const { return ""; }
 
     // Container queries: the current inline size of this element's content box.
     virtual float containerInlineSize() const { return 0; }

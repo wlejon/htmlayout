@@ -205,7 +205,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     bool hasVisibleContent = false;
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
-            const std::string& text = child->textContent();
+            std::string_view text = child->textContent();
             for (char c : text) {
                 if (!std::isspace(static_cast<unsigned char>(c))) {
                     hasVisibleContent = true;
@@ -231,7 +231,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         const std::string& fontWeight = styleVal(style, "font-weight");
         const std::string& whiteSpace = styleVal(style, "white-space");
         float lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize,
-            fontFamily, fontWeight, &metrics);
+            fontFamily, fontWeight, metrics);
 
         struct IFCItem {
             float width = 0, height = 0;
@@ -261,7 +261,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (child->isTextNode()) {
                 float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
                 float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
-                auto runs = breakTextIntoRuns(child->textContent(), childAvailable,
+                auto runs = breakTextIntoRuns(std::string(child->textContent()), childAvailable,
                     fontFamily, fontSize, fontWeight, whiteSpace, metrics,
                     "normal", "normal", ls, ws);
                 // Fresh layout pass — clear any previously placed runs.
@@ -592,7 +592,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 float tw = 0, th = 0;
                 float ls2 = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
                 float ws2 = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
-                auto runs = breakTextIntoRuns(inl->textContent(), childAvailable,
+                auto runs = breakTextIntoRuns(std::string(inl->textContent()), childAvailable,
                     styleVal(style, "font-family"), fontSize, styleVal(style, "font-weight"),
                     styleVal(style, "white-space"), metrics,
                     "normal", "normal", ls2, ws2);
@@ -601,12 +601,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     th = std::max(th, run.height);
                 }
                 float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize,
-                    styleVal(style, "font-family"), styleVal(style, "font-weight"), &metrics);
+                    styleVal(style, "font-family"), styleVal(style, "font-weight"), metrics);
                 th = std::max(th, lh);
                 anonItems.push_back({inl, tw, th, true, false});
             } else if (inl->tagName() == "br" || inl->tagName() == "BR") {
                 float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize,
-                    styleVal(style, "font-family"), styleVal(style, "font-weight"), &metrics);
+                    styleVal(style, "font-family"), styleVal(style, "font-weight"), metrics);
                 inl->box = LayoutBox{};
                 // Record the natural font line-height (not the CSS line-height)
                 // as the BR's bounding rect height — matches Chromium's

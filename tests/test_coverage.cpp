@@ -24,17 +24,17 @@ struct CovNode : public LayoutNode {
     bool isText = false;
     std::string text;
     CovNode* parentNode = nullptr;
-    std::vector<CovNode*> childNodes;
+    std::vector<LayoutNode*> childNodes;
     ComputedStyle style_;
     bool hasIntrinsic = false;
     float intrW = 0, intrH = 0;
 
-    std::string tagName() const override { return tag; }
+    std::string_view tagName() const override { return tag; }
     bool isTextNode() const override { return isText; }
-    std::string textContent() const override { return text; }
+    std::string_view textContent() const override { return text; }
     LayoutNode* parent() const override { return parentNode; }
-    std::vector<LayoutNode*> children() const override {
-        return {childNodes.begin(), childNodes.end()};
+    std::span<LayoutNode* const> children() const override {
+        return childNodes;
     }
     const ComputedStyle& computedStyle() const override { return style_; }
     bool intrinsicSize(float& w, float& h, float) const override {
@@ -98,10 +98,10 @@ struct CovNode : public LayoutNode {
 };
 
 struct CovMetrics : public TextMetrics {
-    float measureWidth(const std::string& t, const std::string&, float, const std::string&) override {
+    float measureWidth(std::string_view t, std::string_view, float, std::string_view) override {
         return static_cast<float>(t.size()) * 10.0f;
     }
-    float lineHeight(const std::string&, float, const std::string&) override { return 20.0f; }
+    float lineHeight(std::string_view, float, std::string_view) override { return 20.0f; }
 };
 
 static bool approx(float a, float b, float tol = 1.0f) {

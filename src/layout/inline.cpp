@@ -270,7 +270,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         bool ibHasContent = false;
         for (auto* child : getLayoutChildren(node)) {
             if (child->isTextNode()) {
-                const std::string& t = child->textContent();
+                std::string_view t = child->textContent();
                 for (char c : t) {
                     if (!std::isspace(static_cast<unsigned char>(c))) { ibHasContent = true; break; }
                 }
@@ -286,13 +286,13 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         if (ibHasContent && ibAllInline) {
             // Inline content in inline-block: measure text and inline children
             float ibLineHeight = resolveLineHeight(lineHeightVal, fontSize,
-                fontFamily, fontWeight, &metrics);
+                fontFamily, fontWeight, metrics);
             float cursorX = 0, lineMaxH = 0;
             for (auto* child : getLayoutChildren(node)) {
                 if (child->isTextNode()) {
                     float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
                     float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
-                    auto runs = breakTextIntoRuns(child->textContent(), contentAvail,
+                    auto runs = breakTextIntoRuns(std::string(child->textContent()), contentAvail,
                         fontFamily, fontSize, fontWeight, whiteSpace, metrics,
                         "normal", "normal", ls, ws);
                     bool firstRun = true;
@@ -435,7 +435,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
             float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
             auto runs = breakTextIntoRuns(
-                child->textContent(), contentAvail,
+                std::string(child->textContent()), contentAvail,
                 fontFamily, fontSize, fontWeight, whiteSpace, metrics,
                 owrap, wbreak, ls, ws);
 

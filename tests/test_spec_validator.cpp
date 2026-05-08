@@ -21,15 +21,16 @@ struct SpecNode;
 // Bridge to ElementRef
 struct SpecElement : public ElementRef {
     SpecNode* owner;
+    mutable std::vector<ElementRef*> childElemsCache;
     SpecElement(SpecNode* o) : owner(o) {}
 
-    std::string tagName() const override;
-    std::string id() const override;
-    std::string className() const override;
-    std::string getAttribute(const std::string& name) const override;
-    bool hasAttribute(const std::string& name) const override;
+    std::string_view tagName() const override;
+    std::string_view id() const override;
+    std::string_view className() const override;
+    std::string_view getAttribute(std::string_view name) const override;
+    bool hasAttribute(std::string_view name) const override;
     ElementRef* parent() const override;
-    std::vector<ElementRef*> children() const override;
+    std::span<ElementRef* const> children() const override;
     int childIndex() const override;
     int childIndexOfType() const override;
     int siblingCount() const override;
@@ -40,10 +41,10 @@ struct SpecElement : public ElementRef {
     void* scope() const override { return nullptr; }
     void* shadowRoot() const override { return nullptr; }
     ElementRef* assignedSlot() const override { return nullptr; }
-    std::string partName() const override { return ""; }
+    std::string_view partName() const override { return ""; }
     bool isDefined() const override { return true; }
-    std::string containerType() const override;
-    std::string containerName() const override;
+    std::string_view containerType() const override;
+    std::string_view containerName() const override;
     float containerInlineSize() const override { return 0; }
     float containerBlockSize() const override { return 0; }
 };
@@ -51,82 +52,81 @@ struct SpecElement : public ElementRef {
 struct SpecNode : public LayoutNode {
     GumboNode* node;
     SpecNode* parentNode = nullptr;
-    std::vector<SpecNode*> childNodes;
+    std::vector<LayoutNode*> childNodes; // stores SpecNode* upcast; static_cast back where needed
     ComputedStyle style;
     SpecElement elementBridge;
 
-    SpecNode(GumboNode* n, SpecNode* p = nullptr) 
+    SpecNode(GumboNode* n, SpecNode* p = nullptr)
         : node(n), parentNode(p), elementBridge(this) {}
-    
-    ~SpecNode() { for (auto* c : childNodes) delete c; }
+
+    ~SpecNode() { for (auto* c : childNodes) delete static_cast<SpecNode*>(c); }
 
     // LayoutNode implementation
-    std::string tagName() const override {
+    std::string_view tagName() const override {
         if (node->type == GUMBO_NODE_ELEMENT) return gumbo_normalized_tagname(node->v.element.tag);
         return "";
     }
-    bool isTextNode() const override { 
-        return node->type == GUMBO_NODE_TEXT || node->type == GUMBO_NODE_WHITESPACE; 
+    bool isTextNode() const override {
+        return node->type == GUMBO_NODE_TEXT || node->type == GUMBO_NODE_WHITESPACE;
     }
-    std::string textContent() const override { 
-        return isTextNode() ? node->v.text.text : ""; 
+    std::string_view textContent() const override {
+        return isTextNode() ? std::string_view(node->v.text.text) : std::string_view{};
     }
     LayoutNode* parent() const override { return parentNode; }
-    std::vector<LayoutNode*> children() const override {
-        std::vector<LayoutNode*> res;
-        for (auto* c : childNodes) res.push_back(c);
-        return res;
-    }
+    std::span<LayoutNode* const> children() const override { return childNodes; }
     const ComputedStyle& computedStyle() const override { return style; }
 };
 
 // Implement SpecElement methods using SpecNode
-std::string SpecElement::tagName() const { return owner->tagName(); }
-std::string SpecElement::id() const {
+std::string_view SpecElement::tagName() const { return owner->tagName(); }
+std::string_view SpecElement::id() const {
     if (owner->node->type != GUMBO_NODE_ELEMENT) return "";
     GumboAttribute* attr = gumbo_get_attribute(&owner->node->v.element.attributes, "id");
-    return attr ? attr->value : "";
+    return attr ? std::string_view(attr->value) : std::string_view{};
 }
-std::string SpecElement::className() const {
+std::string_view SpecElement::className() const {
     if (owner->node->type != GUMBO_NODE_ELEMENT) return "";
     GumboAttribute* attr = gumbo_get_attribute(&owner->node->v.element.attributes, "class");
-    return attr ? attr->value : "";
+    return attr ? std::string_view(attr->value) : std::string_view{};
 }
-std::string SpecElement::getAttribute(const std::string& name) const {
+std::string_view SpecElement::getAttribute(std::string_view name) const {
     if (owner->node->type != GUMBO_NODE_ELEMENT) return "";
-    GumboAttribute* attr = gumbo_get_attribute(&owner->node->v.element.attributes, name.c_str());
-    return attr ? attr->value : "";
+    GumboAttribute* attr = gumbo_get_attribute(&owner->node->v.element.attributes, std::string(name).c_str());
+    return attr ? std::string_view(attr->value) : std::string_view{};
 }
-bool SpecElement::hasAttribute(const std::string& name) const {
+bool SpecElement::hasAttribute(std::string_view name) const {
     if (owner->node->type != GUMBO_NODE_ELEMENT) return false;
-    return gumbo_get_attribute(&owner->node->v.element.attributes, name.c_str()) != nullptr;
+    return gumbo_get_attribute(&owner->node->v.element.attributes, std::string(name).c_str()) != nullptr;
 }
 ElementRef* SpecElement::parent() const {
     return owner->parentNode ? &owner->parentNode->elementBridge : nullptr;
 }
-std::vector<ElementRef*> SpecElement::children() const {
-    std::vector<ElementRef*> res;
+std::span<ElementRef* const> SpecElement::children() const {
+    childElemsCache.clear();
     for (auto* c : owner->childNodes) {
-        if (c->node->type == GUMBO_NODE_ELEMENT) res.push_back(&c->elementBridge);
+        auto* sn = static_cast<SpecNode*>(c);
+        if (sn->node->type == GUMBO_NODE_ELEMENT) childElemsCache.push_back(&sn->elementBridge);
     }
-    return res;
+    return childElemsCache;
 }
 int SpecElement::childIndex() const {
     if (!owner->parentNode) return 0;
     int i = 0;
     for (auto* c : owner->parentNode->childNodes) {
-        if (c == owner) return i;
-        if (c->node->type == GUMBO_NODE_ELEMENT) i++;
+        auto* sn = static_cast<SpecNode*>(c);
+        if (sn == owner) return i;
+        if (sn->node->type == GUMBO_NODE_ELEMENT) i++;
     }
     return 0;
 }
 int SpecElement::childIndexOfType() const {
     if (!owner->parentNode) return 0;
     int i = 0;
-    std::string tag = tagName();
+    std::string_view tag = tagName();
     for (auto* c : owner->parentNode->childNodes) {
-        if (c == owner) return i;
-        if (c->node->type == GUMBO_NODE_ELEMENT && c->tagName() == tag) i++;
+        auto* sn = static_cast<SpecNode*>(c);
+        if (sn == owner) return i;
+        if (sn->node->type == GUMBO_NODE_ELEMENT && sn->tagName() == tag) i++;
     }
     return 0;
 }
@@ -134,24 +134,26 @@ int SpecElement::siblingCount() const {
     if (!owner->parentNode) return 1;
     int count = 0;
     for (auto* c : owner->parentNode->childNodes) {
-        if (c->node->type == GUMBO_NODE_ELEMENT) count++;
+        auto* sn = static_cast<SpecNode*>(c);
+        if (sn->node->type == GUMBO_NODE_ELEMENT) count++;
     }
     return count;
 }
 int SpecElement::siblingCountOfType() const {
     if (!owner->parentNode) return 1;
     int count = 0;
-    std::string tag = tagName();
+    std::string_view tag = tagName();
     for (auto* c : owner->parentNode->childNodes) {
-        if (c->node->type == GUMBO_NODE_ELEMENT && c->tagName() == tag) count++;
+        auto* sn = static_cast<SpecNode*>(c);
+        if (sn->node->type == GUMBO_NODE_ELEMENT && sn->tagName() == tag) count++;
     }
     return count;
 }
-std::string SpecElement::containerType() const {
-    return owner->style.count("container-type") ? owner->style.at("container-type") : "none";
+std::string_view SpecElement::containerType() const {
+    return owner->style.count("container-type") ? std::string_view(owner->style.at("container-type")) : std::string_view("none");
 }
-std::string SpecElement::containerName() const {
-    return owner->style.count("container-name") ? owner->style.at("container-name") : "";
+std::string_view SpecElement::containerName() const {
+    return owner->style.count("container-name") ? std::string_view(owner->style.at("container-name")) : std::string_view{};
 }
 
 SpecNode* buildTree(GumboNode* node, SpecNode* parent = nullptr) {
@@ -172,7 +174,7 @@ void resolveAllStyles(SpecNode* node, Cascade& cascade, const ComputedStyle* par
         node->style = *parentStyle;
     }
     for (auto* child : node->childNodes) {
-        resolveAllStyles(child, cascade, &node->style);
+        resolveAllStyles(static_cast<SpecNode*>(child), cascade, &node->style);
     }
 }
 
@@ -191,10 +193,10 @@ struct SpecTestCase {
 };
 
 struct SpecMetrics : public TextMetrics {
-    float measureWidth(const std::string& text, const std::string&, float fontSize, const std::string&) override {
+    float measureWidth(std::string_view text, std::string_view, float fontSize, std::string_view) override {
         return text.length() * fontSize * 0.6f;
     }
-    float lineHeight(const std::string&, float fontSize, const std::string&) override {
+    float lineHeight(std::string_view, float fontSize, std::string_view) override {
         return fontSize * 1.2f;
     }
 };
@@ -218,7 +220,7 @@ void validateExpectations(SpecNode* node, const SpecExpectation& exp) {
             }
         }
     }
-    for (auto* child : node->childNodes) validateExpectations(child, exp);
+    for (auto* child : node->childNodes) validateExpectations(static_cast<SpecNode*>(child), exp);
 }
 
 void runSpecTest(const SpecTestCase& test) {

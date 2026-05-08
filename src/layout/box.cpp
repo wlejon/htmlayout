@@ -360,8 +360,8 @@ void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& m
 
 // Layout-affecting properties: if any of these change, relayout is needed.
 // Properties not in this set only need repaint.
-static const std::vector<std::string>& layoutProperties() {
-    static const std::vector<std::string> props = {
+static const std::vector<std::string_view>& layoutProperties() {
+    static const std::vector<std::string_view> props = {
         "display", "position", "float", "clear",
         "width", "height", "min-width", "min-height", "max-width", "max-height",
         "margin-top", "margin-right", "margin-bottom", "margin-left",
@@ -408,10 +408,10 @@ std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node) {
     return result;
 }
 
-bool needsRelayout(const std::vector<std::string>& changedProperties) {
+bool needsRelayout(std::initializer_list<std::string_view> changedProperties) {
     auto& lp = layoutProperties();
-    for (auto& prop : changedProperties) {
-        for (auto& lProp : lp) {
+    for (auto prop : changedProperties) {
+        for (auto lProp : lp) {
             if (prop == lProp) return true;
         }
     }

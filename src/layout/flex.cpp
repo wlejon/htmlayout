@@ -136,7 +136,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
             // Anonymous flex item: measure text and include as a flex item
-            std::string text = child->textContent();
+            std::string_view text = child->textContent();
             bool allWhitespace = true;
             for (char c : text) {
                 if (!std::isspace(static_cast<unsigned char>(c))) { allWhitespace = false; break; }

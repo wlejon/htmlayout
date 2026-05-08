@@ -215,7 +215,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // explicit width, OR if no <col> children exist, expands span
                 auto& gcs = child->computedStyle();
                 std::string gWidthVal = styleVal(gcs, "width");
-                std::string gSpan = child->attribute("span");
+                std::string gSpan(child->attribute("span"));
                 bool hasColChildren = false;
                 for (auto* gc : child->children()) {
                     if (gc->isTextNode()) continue;
@@ -234,7 +234,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         }
                         ci.specWidth = w;
                         int span = 1;
-                        std::string colSpanAttr = gc->attribute("span");
+                        std::string colSpanAttr(gc->attribute("span"));
                         if (!colSpanAttr.empty()) span = std::max(1, std::atoi(colSpanAttr.c_str()));
                         for (int s = 0; s < span; s++) colInfos.push_back(ci);
                     }
@@ -261,7 +261,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     ci.specWidth = resolveLength(wVal, availableWidth, fontSize);
                 }
                 int span = 1;
-                std::string colSpanAttr = child->attribute("span");
+                std::string colSpanAttr(child->attribute("span"));
                 if (!colSpanAttr.empty()) span = std::max(1, std::atoi(colSpanAttr.c_str()));
                 for (int s = 0; s < span; s++) colInfos.push_back(ci);
             } else if (isTableCaption(d)) {
@@ -299,7 +299,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Read colspan/rowspan from either the HTML attribute (preferred) or the
     // computed style (test-only fallback). Returns >= 1.
     auto readSpan = [&](LayoutNode* cell, const char* name) -> int {
-        std::string a = cell->attribute(name);
+        std::string a(cell->attribute(name));
         int v = 0;
         if (!a.empty()) v = std::atoi(a.c_str());
         if (v <= 0) {

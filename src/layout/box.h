@@ -1,7 +1,10 @@
 #pragma once
 #include "css/cascade.h"
 #include <string>
+#include <string_view>
 #include <vector>
+#include <span>
+#include <initializer_list>
 #include <memory>
 #include <cstdint>
 
@@ -79,13 +82,13 @@ struct LayoutNode {
     virtual ~LayoutNode() = default;
 
     // Identity
-    virtual std::string tagName() const = 0;
+    virtual std::string_view tagName() const = 0;
     virtual bool isTextNode() const = 0;
-    virtual std::string textContent() const = 0;
+    virtual std::string_view textContent() const = 0;
 
     // Tree
     virtual LayoutNode* parent() const = 0;
-    virtual std::vector<LayoutNode*> children() const = 0;
+    virtual std::span<LayoutNode* const> children() const = 0;
 
     // Computed style (from the CSS cascade)
     virtual const css::ComputedStyle& computedStyle() const = 0;
@@ -93,7 +96,7 @@ struct LayoutNode {
     // HTML attribute lookup for layout-affecting presentational attributes
     // (colspan, rowspan, width, height, align on table cells, etc.).
     // Default returns empty; consumers override to bridge to their DOM.
-    virtual std::string attribute(const std::string& name) const { (void)name; return {}; }
+    virtual std::string_view attribute(std::string_view name) const { (void)name; return {}; }
 
     // Replaced element intrinsic size (e.g. <input>, <textarea>, <select>).
     // Returns true if this node has an intrinsic size, false otherwise.
@@ -129,13 +132,13 @@ struct LayoutNode {
 // Text measurement callback — consumers provide this (e.g. via Skia)
 struct TextMetrics {
     virtual ~TextMetrics() = default;
-    virtual float measureWidth(const std::string& text,
-                                const std::string& fontFamily,
+    virtual float measureWidth(std::string_view text,
+                                std::string_view fontFamily,
                                 float fontSize,
-                                const std::string& fontWeight) = 0;
-    virtual float lineHeight(const std::string& fontFamily,
+                                std::string_view fontWeight) = 0;
+    virtual float lineHeight(std::string_view fontFamily,
                               float fontSize,
-                              const std::string& fontWeight) = 0;
+                              std::string_view fontWeight) = 0;
 };
 
 // Viewport dimensions for layout
@@ -174,6 +177,6 @@ void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& m
 // Style invalidation: given a set of changed property names,
 // determine if a node needs re-layout or just re-paint.
 // Returns true if any layout-affecting property changed.
-bool needsRelayout(const std::vector<std::string>& changedProperties);
+bool needsRelayout(std::initializer_list<std::string_view> changedProperties);
 
 } // namespace htmlayout::layout

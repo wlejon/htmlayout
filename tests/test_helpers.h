@@ -2,6 +2,8 @@
 #include "css/selector.h"
 #include <cstdio>
 #include <string>
+#include <string_view>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -26,7 +28,7 @@ struct MockElement : public htmlayout::css::ElementRef {
     std::string classes;  // space-separated
     std::unordered_map<std::string, std::string> attrs;
     MockElement* parentElem = nullptr;
-    std::vector<MockElement*> childElems;
+    std::vector<htmlayout::css::ElementRef*> childElems;
     bool hovered = false;
     bool focused = false;
     bool active = false;
@@ -40,20 +42,20 @@ struct MockElement : public htmlayout::css::ElementRef {
     float contInlineSize = 0;
     float contBlockSize = 0;
 
-    std::string tagName() const override { return tag; }
-    std::string id() const override { return elemId; }
-    std::string className() const override { return classes; }
+    std::string_view tagName() const override { return tag; }
+    std::string_view id() const override { return elemId; }
+    std::string_view className() const override { return classes; }
 
-    std::string getAttribute(const std::string& name) const override {
-        auto it = attrs.find(name);
-        return it != attrs.end() ? it->second : "";
+    std::string_view getAttribute(std::string_view name) const override {
+        auto it = attrs.find(std::string(name));
+        return it != attrs.end() ? std::string_view(it->second) : std::string_view{};
     }
-    bool hasAttribute(const std::string& name) const override {
-        return attrs.count(name) > 0;
+    bool hasAttribute(std::string_view name) const override {
+        return attrs.count(std::string(name)) > 0;
     }
     ElementRef* parent() const override { return parentElem; }
-    std::vector<ElementRef*> children() const override {
-        return {childElems.begin(), childElems.end()};
+    std::span<ElementRef* const> children() const override {
+        return childElems;
     }
     int childIndex() const override {
         if (!parentElem) return 0;
@@ -67,7 +69,7 @@ struct MockElement : public htmlayout::css::ElementRef {
         int idx = 0;
         for (auto* c : parentElem->childElems) {
             if (c == this) return idx;
-            if (c->tag == tag) idx++;
+            if (static_cast<MockElement*>(c)->tag == tag) idx++;
         }
         return 0;
     }
@@ -79,7 +81,7 @@ struct MockElement : public htmlayout::css::ElementRef {
         if (!parentElem) return 1;
         int count = 0;
         for (auto* c : parentElem->childElems) {
-            if (c->tag == tag) count++;
+            if (static_cast<MockElement*>(c)->tag == tag) count++;
         }
         return count;
     }
@@ -89,10 +91,10 @@ struct MockElement : public htmlayout::css::ElementRef {
     void* scope() const override { return scopePtr; }
     void* shadowRoot() const override { return shadowRootPtr; }
     ElementRef* assignedSlot() const override { return assignedSlotElem; }
-    std::string partName() const override { return partNames; }
+    std::string_view partName() const override { return partNames; }
     bool isDefined() const override { return defined; }
-    std::string containerType() const override { return contType; }
-    std::string containerName() const override { return contName; }
+    std::string_view containerType() const override { return contType; }
+    std::string_view containerName() const override { return contName; }
     float containerInlineSize() const override { return contInlineSize; }
     float containerBlockSize() const override { return contBlockSize; }
 
