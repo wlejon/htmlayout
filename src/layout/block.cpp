@@ -180,6 +180,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (earlyChildAvailableHeight < 0.0f) earlyChildAvailableHeight = 0.0f;
     } else if (aspectRatioCBH >= 0.0f) {
         earlyChildAvailableHeight = aspectRatioCBH;
+    } else if (node->box.contentRect.height > 0) {
+        // Outer pass (flex item finalMain, grid track, abs-positioned with
+        // inset) already resolved a definite content height into contentRect.
+        // Treat that as the definite containing-block height for percentage
+        // resolution in children — matches flex.cpp's row-stretch fallback.
+        earlyChildAvailableHeight = node->box.contentRect.height;
     } else if (node->viewportHeight > 0 &&
                (!node->parent() || !node->parent()->parent())) {
         // Root element chain (html/body): the initial containing block has
