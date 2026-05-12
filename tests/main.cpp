@@ -19,6 +19,7 @@
 #include "test_transform.h"
 #include "test_coverage_extra.h"
 #include "test_layout_extra.h"
+#include "test_flex_grid_extra.h"
 #include <cstdio>
 
 int g_passed = 0;
@@ -88,6 +89,9 @@ int main() {
     printf("\n");
 
     testLayoutExtra();
+    printf("\n");
+
+    testFlexGridExtra();
     printf("\n");
 
     printf("=== Results: %d passed, %d failed ===\n", g_passed, g_failed);
