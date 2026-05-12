@@ -411,6 +411,21 @@ static void testCascadeSpecificity() {
     check(it != cs.end() && it->second == "red", "id beats class beats tag");
 }
 
+static void testGridShorthandExpansion() {
+    printf("--- Shorthand: grid-row / grid-column / grid-area / grid-template ---\n");
+    auto r = expandShorthand("grid-row", "1 / 3");
+    check(r.size() == 1 && r[0].property == "grid-row", "grid-row stored as-is");
+
+    r = expandShorthand("grid-column", "2 / 5");
+    check(r.size() == 1 && r[0].property == "grid-column", "grid-column stored as-is");
+
+    r = expandShorthand("grid-area", "header");
+    check(r.size() == 1 && r[0].property == "grid-area", "grid-area stored as-is");
+
+    r = expandShorthand("grid-template", "100px 1fr / auto 200px");
+    check(r.size() == 1 && r[0].property == "grid-template", "grid-template stored as-is");
+}
+
 void testCoverageExtra() {
     printf("=== Extra Coverage Tests ===\n");
     testBackgroundShorthand();
@@ -432,4 +447,5 @@ void testCoverageExtra() {
     testNestedAtRulesParse();
     testCascadeImportant();
     testCascadeSpecificity();
+    testGridShorthandExpansion();
 }
