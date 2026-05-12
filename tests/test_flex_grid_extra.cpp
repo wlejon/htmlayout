@@ -204,6 +204,55 @@ static void testFlexAlignStretchExplicitCross() {
           "stretch alignment resolves cross size");
 }
 
+static void testFlexColumnWithBorder() {
+    printf("--- flex: column with item borders ---\n");
+    FGNode root; root.initFlex();
+    root.style_["flex-direction"] = "column";
+    root.style_["height"] = "200px";
+    root.style_["align-items"] = "stretch";
+
+    FGNode a; a.initFlexItem();
+    a.style_["flex-grow"] = "1";
+    a.style_["border-top-width"] = "2px"; a.style_["border-top-style"] = "solid";
+    a.style_["border-bottom-width"] = "2px"; a.style_["border-bottom-style"] = "solid";
+    a.style_["padding-top"] = "5px"; a.style_["padding-bottom"] = "5px";
+    root.addChild(&a);
+
+    FGMetrics m;
+    layoutTree(&root, 400, m);
+    check(approx(a.box.border.top, 2), "column flex item with top border");
+}
+
+static void testFlexJustifyAround() {
+    printf("--- flex: justify-content space-around ---\n");
+    FGNode root; root.initFlex();
+    root.style_["width"] = "400px";
+    root.style_["justify-content"] = "space-around";
+
+    FGNode a; a.initFlexItem(); a.style_["width"] = "50px"; a.style_["height"] = "30px";
+    FGNode b; b.initFlexItem(); b.style_["width"] = "50px"; b.style_["height"] = "30px";
+    root.addChild(&a); root.addChild(&b);
+
+    FGMetrics m;
+    layoutTree(&root, 500, m);
+    check(a.box.contentRect.x > 0, "space-around adds leading gap");
+}
+
+static void testFlexJustifyEvenly() {
+    printf("--- flex: justify-content space-evenly ---\n");
+    FGNode root; root.initFlex();
+    root.style_["width"] = "400px";
+    root.style_["justify-content"] = "space-evenly";
+
+    FGNode a; a.initFlexItem(); a.style_["width"] = "50px"; a.style_["height"] = "30px";
+    FGNode b; b.initFlexItem(); b.style_["width"] = "50px"; b.style_["height"] = "30px";
+    root.addChild(&a); root.addChild(&b);
+
+    FGMetrics m;
+    layoutTree(&root, 500, m);
+    check(a.box.contentRect.x > 0, "space-evenly adds leading gap");
+}
+
 static void testFlexAbsoluteChild() {
     printf("--- flex: absolute child ignored in flow ---\n");
     FGNode root; root.initFlex();
@@ -348,6 +397,9 @@ void testFlexGridExtra() {
     testFlexColumnFixedHeight();
     testFlexAutoMargin();
     testFlexAlignStretchExplicitCross();
+    testFlexColumnWithBorder();
+    testFlexJustifyAround();
+    testFlexJustifyEvenly();
     testFlexAbsoluteChild();
     testGridMinContent();
     testGridMaxContent();
