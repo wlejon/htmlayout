@@ -20,6 +20,7 @@
 #include "test_coverage_extra.h"
 #include "test_layout_extra.h"
 #include "test_flex_grid_extra.h"
+#include "test_more_coverage.h"
 #include <cstdio>
 
 int g_passed = 0;
@@ -92,6 +93,9 @@ int main() {
     printf("\n");
 
     testFlexGridExtra();
+    printf("\n");
+
+    testMoreCoverage();
     printf("\n");
 
     printf("=== Results: %d passed, %d failed ===\n", g_passed, g_failed);

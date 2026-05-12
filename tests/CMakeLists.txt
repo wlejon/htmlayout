@@ -22,6 +22,7 @@ add_executable(htmlayout_test
     test_coverage_extra.cpp
     test_layout_extra.cpp
     test_flex_grid_extra.cpp
+    test_more_coverage.cpp
 )
 target_include_directories(htmlayout_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(htmlayout_test PRIVATE htmlayout gumbo)
