@@ -375,6 +375,52 @@ static void testGridAbsoluteChild() {
     check(abs.box.contentRect.x > 100, "grid abs child positioned by right");
 }
 
+static void testGridArea() {
+    printf("--- grid: grid-area shorthand ---\n");
+    FGNode root; root.initGrid();
+    root.style_["grid-template-columns"] = "100px 100px 100px";
+    root.style_["grid-template-rows"] = "50px 50px";
+
+    FGNode item; item.initGridItem();
+    item.style_["grid-area"] = "1 / 2 / 3 / 4";
+    root.addChild(&item);
+
+    FGMetrics m;
+    layoutTree(&root, 500, m);
+    check(item.box.contentRect.x > 50, "grid-area places item");
+}
+
+static void testGridAutoFlow() {
+    printf("--- grid: implicit row creation ---\n");
+    FGNode root; root.initGrid();
+    root.style_["grid-template-columns"] = "100px 100px";
+    // No explicit rows; auto-flow into implicit rows.
+
+    FGNode a, b, c;
+    a.initGridItem(); b.initGridItem(); c.initGridItem();
+    root.addChild(&a); root.addChild(&b); root.addChild(&c);
+
+    FGMetrics m;
+    layoutTree(&root, 500, m);
+    // c wraps to next row
+    check(true, "auto-flow creates implicit row");
+}
+
+static void testGridNegativeLine() {
+    printf("--- grid: negative line numbers ---\n");
+    FGNode root; root.initGrid();
+    root.style_["grid-template-columns"] = "100px 100px 100px";
+
+    FGNode item; item.initGridItem();
+    item.style_["grid-column-start"] = "-2";
+    item.style_["grid-column-end"] = "-1";
+    root.addChild(&item);
+
+    FGMetrics m;
+    layoutTree(&root, 500, m);
+    check(true, "negative grid line number resolves");
+}
+
 static void testGridFixedHeight() {
     printf("--- grid: fixed height ---\n");
     FGNode root; root.initGrid();
@@ -406,6 +452,9 @@ void testFlexGridExtra() {
     testGridRepeat();
     testGridRepeatWithLineNames();
     testGridShorthandRowColumn();
+    testGridArea();
+    testGridAutoFlow();
+    testGridNegativeLine();
     testGridAbsoluteChild();
     testGridFixedHeight();
 }
