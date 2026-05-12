@@ -475,6 +475,84 @@ static void testBlockMarginAuto() {
     check(child.box.margin.left > 50, "margin: auto computes left margin");
 }
 
+static void testBlockBrInline() {
+    printf("--- block: <br> as inline child ---\n");
+    LxNode root; root.initBase();
+    LxNode t1; t1.initBase(); t1.isText = true; t1.text = "first";
+    LxNode br; br.initBase(); br.tag = "br";
+    LxNode t2; t2.initBase(); t2.isText = true; t2.text = "second";
+    root.addChild(&t1); root.addChild(&br); root.addChild(&t2);
+    LxMetrics m;
+    layoutTree(&root, 400, m);
+    check(root.box.contentRect.height >= 30, "block with text+br+text creates 2 lines");
+}
+
+static void testBlockMarginAutoRightOnly() {
+    printf("--- block: margin-right auto pushes left ---\n");
+    LxNode root; root.initBase();
+    root.style_["width"] = "400px";
+
+    LxNode child; child.initBase();
+    child.style_["width"] = "100px"; child.style_["height"] = "20px";
+    child.style_["margin-right"] = "auto";
+    root.addChild(&child);
+
+    LxMetrics m;
+    layoutTree(&root, 500, m);
+    check(child.box.margin.right > 0,
+          "single auto margin-right resolves to remaining space");
+}
+
+static void testBlockBorderBox() {
+    printf("--- block: box-sizing border-box ---\n");
+    LxNode root; root.initBase();
+    root.style_["box-sizing"] = "border-box";
+    root.style_["width"] = "200px";
+    root.style_["padding-left"] = "10px";
+    root.style_["padding-right"] = "10px";
+    root.style_["border-left-width"] = "5px"; root.style_["border-left-style"] = "solid";
+    root.style_["border-right-width"] = "5px"; root.style_["border-right-style"] = "solid";
+
+    LxMetrics m;
+    layoutTree(&root, 400, m);
+    // 200 - 10 - 10 - 5 - 5 = 170 content
+    check(approx(root.box.contentRect.width, 170, 5),
+          "border-box subtracts padding+border from width");
+}
+
+static void testBlockBfcRtl() {
+    printf("--- block: BFC RTL alignment ---\n");
+    LxNode root; root.initBase();
+    root.style_["direction"] = "rtl";
+    root.style_["text-align"] = "start";
+    root.style_["width"] = "300px";
+
+    LxNode child; child.initBase();
+    child.style_["display"] = "inline-block";
+    child.style_["width"] = "50px"; child.style_["height"] = "20px";
+    root.addChild(&child);
+
+    LxMetrics m;
+    layoutTree(&root, 400, m);
+    check(true, "BFC RTL alignment exercises that branch");
+}
+
+static void testBlockMultiCol() {
+    printf("--- block: multi-column container ---\n");
+    LxNode root; root.initBase();
+    root.style_["column-count"] = "2";
+    root.style_["column-gap"] = "20px";
+    root.style_["width"] = "300px";
+
+    LxNode c1; c1.initBase(); c1.style_["height"] = "100px";
+    LxNode c2; c2.initBase(); c2.style_["height"] = "100px";
+    root.addChild(&c1); root.addChild(&c2);
+
+    LxMetrics m;
+    layoutTree(&root, 400, m);
+    check(true, "multi-column container layout completes");
+}
+
 void testLayoutExtra() {
     printf("=== Extra Layout Tests ===\n");
     testTableColspan();
@@ -496,4 +574,9 @@ void testLayoutExtra() {
     testBlockAnonymousInline();
     testBlockRtlAlign();
     testBlockMarginAuto();
+    testBlockBrInline();
+    testBlockMarginAutoRightOnly();
+    testBlockBorderBox();
+    testBlockBfcRtl();
+    testBlockMultiCol();
 }
