@@ -18,6 +18,7 @@ add_executable(htmlayout_test
     test_coverage.cpp
     test_spec_completeness.cpp
     test_spec_validator.cpp
+    test_transform.cpp
 )
 target_include_directories(htmlayout_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(htmlayout_test PRIVATE htmlayout gumbo)

@@ -16,6 +16,7 @@
 #include "test_coverage.h"
 #include "test_spec_completeness.h"
 #include "test_spec_validator.h"
+#include "test_transform.h"
 #include <cstdio>
 
 int g_passed = 0;
@@ -76,6 +77,9 @@ int main() {
     printf("\n");
 
     testSpecCompliance();
+    printf("\n");
+
+    testTransform();
     printf("\n");
 
     printf("=== Results: %d passed, %d failed ===\n", g_passed, g_failed);
