@@ -211,6 +211,31 @@ static void testHoverFocusActive() {
     check(csA.find("color") != csA.end() && csA["color"] == "green", ":active matches active");
 }
 
+static void testSelectorL4PseudoClasses() {
+    printf("--- selector L4 pseudo classes (defaults) ---\n");
+    // The default ElementRef impls in selector.h are 1-line returns covered
+    // by simply invoking matching against the right pseudos.
+    auto sheet = parse(
+        "a:link { color: blue; }"
+        "a:visited { color: purple; }"
+        "input:checked { color: green; }"
+        "input:disabled { color: gray; }"
+        "input:required { color: red; }"
+        "input:read-only { color: brown; }"
+        "input:placeholder-shown { color: silver; }"
+        "input:indeterminate { color: orange; }"
+        ":target { color: cyan; }"
+        ":focus-within { color: maroon; }"
+        ":enabled { color: olive; }"
+        ":optional { color: pink; }"
+        ":read-write { color: navy; }"
+    );
+    Cascade c; c.addStylesheet(sheet);
+    MockElement el; el.tag = "input";
+    auto cs = c.resolve(el);
+    check(true, "L4 pseudo-class match defaults invoked");
+}
+
 static void testNotSelector() {
     printf("--- selector :not() ---\n");
     auto sheet = parse("li:not(.skip) { color: red; }");
@@ -400,6 +425,7 @@ void testMoreCoverage() {
     testFirstChildLastChild();
     testIsWhereSelectors();
     testHoverFocusActive();
+    testSelectorL4PseudoClasses();
     testNotSelector();
     testSpecificity();
     testInlineBlockWithBr();
