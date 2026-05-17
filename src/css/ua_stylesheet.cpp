@@ -213,7 +213,6 @@ input, button, select, textarea {
 
 input {
     width: 173px;
-    height: 20px;
     padding: 2px 4px;
 }
 
