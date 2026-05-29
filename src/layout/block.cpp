@@ -629,40 +629,66 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
-        // Build lines
-        struct AnonLine { size_t start; size_t end; float totalWidth; float maxHeight; bool endsWithBreak; };
+        // Build lines. Each line is float-aware: its available width and left
+        // start come from getAvailableAtY() at the line's Y, so inline content
+        // wraps narrower (and shifts right) where a float intrudes. xStart and
+        // availWidth are carried into the positioning pass below. With no
+        // overlapping float, leftEdge=0 and rightEdge=childAvailable, so this
+        // reduces to the plain full-width behavior.
+        struct AnonLine { size_t start; size_t end; float totalWidth; float maxHeight;
+                          bool endsWithBreak; float xStart; float availWidth; };
         std::vector<AnonLine> anonLines;
         {
+            // Height estimate for the per-line float band query (the line's own
+            // height isn't known until it's filled). The natural font
+            // line-height matches the common all-text/inline-word case.
+            float estLineH = resolveLineHeight(styleVal(style, "line-height"), fontSize,
+                styleVal(style, "font-family"), styleVal(style, "font-weight"), metrics);
+
+            float lineY = cursorY;
+            auto band = [&](float y) {
+                auto [le, re] = getAvailableAtY(y, estLineH);
+                return std::pair<float, float>{le, re};
+            };
+            auto [curLE, curRE] = band(lineY);
+
             size_t ls = 0;
             float cx = 0, mh = 0;
+            auto closeLine = [&](size_t end, bool brk) {
+                anonLines.push_back({ls, end, cx, mh, brk, curLE, curRE - curLE});
+                lineY += (mh > 0 ? mh : estLineH);
+                ls = end; cx = 0; mh = 0;
+                auto b = band(lineY);
+                curLE = b.first; curRE = b.second;
+            };
             for (size_t i = 0; i < anonItems.size(); i++) {
                 if (anonItems[i].forceBreak) {
                     if (cx == 0 && mh == 0) mh = anonItems[i].height;
-                    anonLines.push_back({ls, i + 1, cx, mh, true});
-                    ls = i + 1; cx = 0; mh = 0;
+                    closeLine(i + 1, true);
                     continue;
                 }
-                if (cx > 0 && cx + anonItems[i].width > childAvailable) {
-                    anonLines.push_back({ls, i, cx, mh, false});
-                    ls = i; cx = 0; mh = 0;
+                if (cx > 0 && cx + anonItems[i].width > (curRE - curLE)) {
+                    closeLine(i, false);
                 }
                 cx += anonItems[i].width;
                 mh = std::max(mh, anonItems[i].height);
             }
-            if (ls < anonItems.size()) anonLines.push_back({ls, anonItems.size(), cx, mh, false});
+            if (ls < anonItems.size())
+                anonLines.push_back({ls, anonItems.size(), cx, mh, false, curLE, curRE - curLE});
         }
 
         // Position with text-align (skip zero-width lines from whitespace,
         // but preserve explicit <br>-terminated lines so blank lines render)
         for (auto& line : anonLines) {
             if (line.totalWidth <= 0 && !line.endsWithBreak) continue;
-            float extra = childAvailable - line.totalWidth;
+            float extra = line.availWidth - line.totalWidth;
             float xOff = 0;
             if (extra > 0) {
                 if (bfcResolvedAlign == "center") xOff = extra / 2.0f;
                 else if (bfcResolvedAlign == "right" || bfcResolvedAlign == "end") xOff = extra;
             }
-            float cx = xOff;
+            // line.xStart is the float-aware left edge of this line.
+            float cx = line.xStart + xOff;
             for (size_t i = line.start; i < line.end; i++) {
                 auto& ai = anonItems[i];
                 if (ai.forceBreak) {
