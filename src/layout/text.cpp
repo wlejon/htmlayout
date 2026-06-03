@@ -42,7 +42,31 @@ std::vector<SourceWord> scanWords(const std::string& text) {
 
 } // namespace
 
-std::vector<TextRun> breakTextIntoRuns(const std::string& text,
+std::string applyTextTransform(const std::string& text,
+                               const std::string& transform) {
+    if (transform == "uppercase") {
+        std::string r = text;
+        for (auto& c : r) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return r;
+    }
+    if (transform == "lowercase") {
+        std::string r = text;
+        for (auto& c : r) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return r;
+    }
+    if (transform == "capitalize") {
+        std::string r = text;
+        bool nextCap = true;
+        for (auto& c : r) {
+            if (std::isspace(static_cast<unsigned char>(c))) { nextCap = true; }
+            else if (nextCap) { c = static_cast<char>(std::toupper(static_cast<unsigned char>(c))); nextCap = false; }
+        }
+        return r;
+    }
+    return text;
+}
+
+std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
                                         float availableWidth,
                                         const std::string& fontFamily,
                                         float fontSize,
@@ -52,9 +76,15 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                                         const std::string& overflowWrap,
                                         const std::string& wordBreak,
                                         float letterSpacing,
-                                        float wordSpacing) {
+                                        float wordSpacing,
+                                        const std::string& textTransform) {
     std::vector<TextRun> runs;
-    if (text.empty() || availableWidth <= 0) return runs;
+    if (srcText.empty() || availableWidth <= 0) return runs;
+
+    // Apply text-transform up front so every measurement and wrap decision
+    // below uses the painted glyphs. ASCII transforms preserve byte length, so
+    // the srcStart/srcEnd offsets still index the original DOM text.
+    const std::string text = applyTextTransform(srcText, textTransform);
 
     float lineH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
 

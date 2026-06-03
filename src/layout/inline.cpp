@@ -294,7 +294,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
                     auto runs = breakTextIntoRuns(std::string(child->textContent()), contentAvail,
                         fontFamily, fontSize, fontWeight, whiteSpace, metrics,
-                        "normal", "normal", ls, ws);
+                        "normal", "normal", ls, ws, styleVal(style, "text-transform"));
                     bool firstRun = true;
                     child->box.textRuns.clear();
                     for (auto& run : runs) {
@@ -437,7 +437,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             auto runs = breakTextIntoRuns(
                 std::string(child->textContent()), contentAvail,
                 fontFamily, fontSize, fontWeight, whiteSpace, metrics,
-                owrap, wbreak, ls, ws);
+                owrap, wbreak, ls, ws, styleVal(style, "text-transform"));
 
             // Fresh layout pass: clear any previously placed runs so we don't
             // accumulate stale geometry from the prior layout.

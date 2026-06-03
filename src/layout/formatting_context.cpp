@@ -1,4 +1,5 @@
 #include "layout/formatting_context.h"
+#include "layout/text.h"
 #include "../from_chars_compat.h"
 #include "layout/block.h"
 #include "layout/inline.h"
@@ -319,6 +320,9 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
                 collapsed.pop_back();
                 --spaceCount;
             }
+            // Match the painted glyphs: intrinsic width must use the
+            // text-transformed string, same as breakTextIntoRuns does.
+            collapsed = applyTextTransform(collapsed, styleVal(style, "text-transform"));
             float w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
             if (letterSpacing != 0 && collapsed.size() > 1)
                 w += letterSpacing * static_cast<float>(collapsed.size() - 1);

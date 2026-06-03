@@ -33,8 +33,17 @@ struct TextRun {
     bool forceBreakAfter = false;
 };
 
+// Apply CSS text-transform ("uppercase" / "lowercase" / "capitalize"; anything
+// else is a no-op) to an ASCII string in place of return. Must be applied
+// during layout — not just at paint — so measurement and line-breaking use the
+// glyphs that are actually rendered (e.g. "rendering" laid out as "RENDERING").
+std::string applyTextTransform(const std::string& text,
+                               const std::string& transform);
+
 // Break text into runs that fit within availableWidth.
 // Uses TextMetrics for measurement.
+// textTransform: CSS text-transform applied before measuring (so the box and
+//   wrap match the painted glyphs). "none" (default) leaves text untouched.
 // overflowWrap: "normal" (default) or "break-word" / "anywhere"
 // wordBreak: "normal" (default) or "break-all" / "keep-all"
 std::vector<TextRun> breakTextIntoRuns(const std::string& text,
@@ -47,6 +56,7 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                                         const std::string& overflowWrap = "normal",
                                         const std::string& wordBreak = "normal",
                                         float letterSpacing = 0,
-                                        float wordSpacing = 0);
+                                        float wordSpacing = 0,
+                                        const std::string& textTransform = "none");
 
 } // namespace htmlayout::layout

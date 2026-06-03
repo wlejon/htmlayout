@@ -155,6 +155,29 @@ static void testTextBreakWhitespaceCollapse() {
     check(runs[0].text == " hello world ", "collapse: extra spaces removed, edges kept");
 }
 
+static void testTextTransform() {
+    printf("--- Text: text-transform applied during layout ---\n");
+    // text-transform must be applied at layout time (not just paint) so the
+    // run text — which drives measurement, wrapping, and inline-block sizing —
+    // matches the painted glyphs. Regression: "uppercase" captions were being
+    // measured at their lowercase width, so backgrounds were too short.
+    check(applyTextTransform("rendering live", "uppercase") == "RENDERING LIVE",
+          "applyTextTransform: uppercase");
+    check(applyTextTransform("HELLO World", "lowercase") == "hello world",
+          "applyTextTransform: lowercase");
+    check(applyTextTransform("hello world", "capitalize") == "Hello World",
+          "applyTextTransform: capitalize");
+    check(applyTextTransform("Hello", "none") == "Hello",
+          "applyTextTransform: none is a no-op");
+
+    FixedTextMetrics metrics;
+    auto runs = breakTextIntoRuns("hello world", 500, "mono", 16, "normal",
+                                  "normal", metrics, "normal", "normal", 0, 0,
+                                  "uppercase");
+    check(runs.size() == 1 && runs[0].text == "HELLO WORLD",
+          "breakTextIntoRuns: run text is transformed");
+}
+
 // ========== Inline Layout Tests ==========
 
 static void testInlineTextLayout() {
@@ -473,6 +496,7 @@ void testInlineLayout() {
     testTextBreakNowrap();
     testTextBreakPre();
     testTextBreakWhitespaceCollapse();
+    testTextTransform();
 
     // Inline layout
     testInlineTextLayout();

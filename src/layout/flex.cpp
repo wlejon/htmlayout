@@ -1,5 +1,6 @@
 #include "layout/flex.h"
 #include "layout/formatting_context.h"
+#include "layout/text.h"
 #include "layout/style_util.h"
 #include <algorithm>
 #include <cmath>
@@ -145,7 +146,9 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
             const std::string& fontFamily = styleVal(style, "font-family");
             const std::string& fontWeight = styleVal(style, "font-weight");
-            float textW = metrics.measureWidth(text, fontFamily, fontSize, fontWeight);
+            // Measure the text-transformed glyphs (matches paint + breakTextIntoRuns).
+            std::string shaped = applyTextTransform(std::string(text), styleVal(style, "text-transform"));
+            float textW = metrics.measureWidth(shaped, fontFamily, fontSize, fontWeight);
             float textH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
 
             child->box.contentRect.width = textW;

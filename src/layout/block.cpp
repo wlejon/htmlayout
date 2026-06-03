@@ -269,7 +269,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
                 auto runs = breakTextIntoRuns(std::string(child->textContent()), childAvailable,
                     fontFamily, fontSize, fontWeight, whiteSpace, metrics,
-                    "normal", "normal", ls, ws);
+                    "normal", "normal", ls, ws, styleVal(style, "text-transform"));
                 // Fresh layout pass — clear any previously placed runs.
                 child->box.textRuns.clear();
                 // Pure-whitespace text node (scanWords returned no words):
@@ -601,7 +601,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 auto runs = breakTextIntoRuns(std::string(inl->textContent()), childAvailable,
                     styleVal(style, "font-family"), fontSize, styleVal(style, "font-weight"),
                     styleVal(style, "white-space"), metrics,
-                    "normal", "normal", ls2, ws2);
+                    "normal", "normal", ls2, ws2, styleVal(style, "text-transform"));
                 for (auto& run : runs) {
                     tw += run.width;
                     th = std::max(th, run.height);
