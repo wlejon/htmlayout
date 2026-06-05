@@ -553,8 +553,52 @@ static void testBlockMultiCol() {
     check(true, "multi-column container layout completes");
 }
 
+// Regression: a fixed-width replaced/inline-block element (e.g. <input>) used as
+// a flex item must honor box-sizing:border-box and not overflow its container.
+static void testFlexReplacedBorderBox() {
+    printf("--- flex item: inline-block replaced, border-box width ---\n");
+    LxNode root; root.initBase();
+    root.style_["display"] = "flex";          // #controls (outer flex row)
+    root.style_["flex-direction"] = "row";
+
+    LxNode cfg; cfg.initBase();               // .cfg (inner flex row, auto width)
+    cfg.style_["display"] = "flex";
+    cfg.style_["flex-direction"] = "row";
+    cfg.style_["align-items"] = "center";
+    root.addChild(&cfg);
+
+    LxNode label; label.initBase(); label.isText = true; label.text = "MODEL"; // the cfg label
+    cfg.addChild(&label);
+
+    LxNode in; in.initBase();
+    in.style_["display"] = "inline-block";
+    // intrinsic min-content >= the specified width is what triggers the bug: the
+    // automatic min-width:auto adds padding+border on top, inflating the item's
+    // minimum past its own border-box width unless capped by the specified size.
+    in.hasIntrinsic = true; in.intrW = 300; in.intrH = 18;   // like a filled <input>
+    in.style_["box-sizing"] = "border-box";
+    in.style_["width"] = "300px";
+    in.style_["padding-left"] = "8px";
+    in.style_["padding-right"] = "8px";
+    in.style_["border-left-width"] = "1px";
+    in.style_["border-right-width"] = "1px";
+    in.style_["border-left-style"] = "solid";
+    in.style_["border-right-style"] = "solid";
+    cfg.addChild(&in);
+
+    LxMetrics m;
+    layoutTree(&root, 1000, m);
+    float content = in.box.contentRect.width;
+    float outer = content + in.box.padding.left + in.box.padding.right +
+                  in.box.border.left + in.box.border.right;
+    printf("  content=%.1f outer=%.1f (border-box width:300 -> expect content 282, outer 300)\n",
+           content, outer);
+    check(approx(outer, 300, 1), "border-box replaced flex item outer width == 300");
+}
+
 void testLayoutExtra() {
     printf("=== Extra Layout Tests ===\n");
+    testFlexReplacedBorderBox();
     testTableColspan();
     testTableRowspan();
     testTableColgroup();

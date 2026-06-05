@@ -251,6 +251,14 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         bh += resolveLength(styleVal(cs, std::string("border-") + s + "-width"), mainAvailable, childFontSize);
                 }
                 item.minMain = minContent + ph + bh;
+                // CSS Flexbox §4.5: the automatic minimum size is capped by the
+                // "specified size suggestion" — the item's definite main size, if
+                // any. flexBasis already holds that as an outer (border-box) size,
+                // so an explicit width keeps the item from being clamped *larger*
+                // than itself (e.g. a border-box <input> whose padding+border would
+                // otherwise inflate its content-based min past its own width).
+                if (basisFromMainDim && item.flexBasis >= 0 && item.minMain > item.flexBasis)
+                    item.minMain = item.flexBasis;
             }
         }
         if (item.minMain < 0) item.minMain = 0;
