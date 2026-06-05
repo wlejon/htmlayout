@@ -90,45 +90,52 @@ htmlayout operates on abstract interfaces that you implement to bridge your DOM 
 #include "css/selector.h"   // ElementRef
 #include "layout/box.h"     // LayoutNode, TextMetrics
 
-// Bridge your DOM for CSS matching
+// Bridge your DOM for CSS matching. All string accessors return std::string_view
+// and children() returns a std::span — the consumer owns the backing storage.
 class MyElement : public htmlayout::css::ElementRef {
-    std::string tagName() const override;
-    std::string id() const override;
-    std::string className() const override;
-    std::string getAttribute(const std::string& name) const override;
-    bool hasAttribute(const std::string& name) const override;
+    std::string_view tagName() const override;
+    std::string_view id() const override;
+    std::string_view className() const override;
+    std::string_view getAttribute(std::string_view name) const override;
+    bool hasAttribute(std::string_view name) const override;
     ElementRef* parent() const override;
-    std::vector<ElementRef*> children() const override;
+    std::span<ElementRef* const> children() const override;
     int childIndex() const override;
     int childIndexOfType() const override;
     int siblingCount() const override;
     int siblingCountOfType() const override;
-    // Optional: isHovered(), isFocused(), isActive(), scope(),
-    //   shadowRoot(), assignedSlot(), partName(), isDefined(),
+    // Optional state/structure hooks (all have default impls):
+    //   isHovered(), isFocused(), isActive(),
+    //   isLink(), isVisited(), isFocusWithin(), isFocusVisible(),
+    //   isChecked(), isDisabled(), isEnabled(), isRequired(), isOptional(),
+    //   isReadOnly(), isReadWrite(), isPlaceholderShown(), isIndeterminate(), isTarget(),
+    //   scope(), shadowRoot(), assignedSlot(), partName(), isDefined(),
     //   containerType(), containerName(), containerInlineSize(), containerBlockSize()
 };
 
 // Bridge your DOM for layout
 class MyLayoutNode : public htmlayout::layout::LayoutNode {
-    std::string tagName() const override;
+    std::string_view tagName() const override;
     bool isTextNode() const override;
-    std::string textContent() const override;
+    std::string_view textContent() const override;
     LayoutNode* parent() const override;
-    std::vector<LayoutNode*> children() const override;
+    std::span<LayoutNode* const> children() const override;
     const htmlayout::css::ComputedStyle& computedStyle() const override;
-    // Optional: attribute() (presentational HTML attrs like colspan/rowspan/width/height/align),
+    // Optional (all have default impls):
+    //   attribute() (presentational HTML attrs like colspan/rowspan/width/height/align),
     //   intrinsicSize() (replaced elements like <input>, <textarea>, <select>),
     //   scrollLeftPx() / scrollTopPx() (for scrollable containers in hit testing),
     //   pseudoBefore() / pseudoAfter() (consumer-synthesized ::before / ::after boxes)
-    // After layout, read results from the `box` field
+    // After layout, read results from the `box` field; the engine also sets
+    // availableHeight / viewportHeight on each node during layout.
 };
 
 // Provide text measurement from your font engine
 class MyTextMetrics : public htmlayout::layout::TextMetrics {
-    float measureWidth(const std::string& text, const std::string& fontFamily,
-                       float fontSize, const std::string& fontWeight) override;
-    float lineHeight(const std::string& fontFamily, float fontSize,
-                     const std::string& fontWeight) override;
+    float measureWidth(std::string_view text, std::string_view fontFamily,
+                       float fontSize, std::string_view fontWeight) override;
+    float lineHeight(std::string_view fontFamily, float fontSize,
+                     std::string_view fontWeight) override;
 };
 ```
 
@@ -198,11 +205,14 @@ auto rects = getSelectionRects(rootNode, startNode, startOff, endNode, endOff, m
 ## Project Structure
 
 ```
-src/css/       CSS tokenizer, parser, selector matcher, cascade, properties, color
-src/layout/    Block, inline, flex, grid, table layout, hit testing, text breaking
-tests/         Test suite
+src/css/       CSS tokenizer, parser, selector matcher, cascade, properties,
+               color, transform, UA stylesheet
+src/layout/    Block, inline, flex, grid, table, multi-column layout,
+               formatting-context dispatch, hit testing, text breaking,
+               text geometry (caret/selection)
+tests/         Test suite (single htmlayout_test executable)
 third_party/   Bundled gumbo HTML5 parser
-docs/          Architecture document
+docs/          Architecture document (docs/architecture.md)
 ```
 
 ## Architecture
