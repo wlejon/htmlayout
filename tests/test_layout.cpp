@@ -145,12 +145,22 @@ static void testResolveLengthAdditionalUnits() {
     check(approx(resolveLength("4ch", 100, 20), 40.0f), "4ch at 20px = 40");
     // ex ≈ 0.5em
     check(approx(resolveLength("1ex", 100, 16), 8.0f), "1ex at 16px = 8");
-    // vh (approximated)
-    check(approx(resolveLength("100vh", 800, 16), 800.0f), "100vh = referenceSize");
-    check(approx(resolveLength("50vh", 600, 16), 300.0f), "50vh = 300");
-    // vmin/vmax (approximated as referenceSize)
-    check(approx(resolveLength("100vmin", 400, 16), 400.0f), "100vmin = referenceSize");
-    check(approx(resolveLength("100vmax", 400, 16), 400.0f), "100vmax = referenceSize");
+    // Viewport units fall back to the percentage reference when no viewport is set
+    // (resolveLength called outside a layout pass). Reset first so a prior test's
+    // layoutTree() can't leave a stale viewport in the resolver.
+    setLayoutViewport(0.0f, 0.0f);
+    check(approx(resolveLength("100vh", 800, 16), 800.0f), "100vh (no viewport) = referenceSize");
+    check(approx(resolveLength("50vh", 600, 16), 300.0f), "50vh (no viewport) = 300");
+    check(approx(resolveLength("100vmin", 400, 16), 400.0f), "100vmin (no viewport) = referenceSize");
+    check(approx(resolveLength("100vmax", 400, 16), 400.0f), "100vmax (no viewport) = referenceSize");
+    // With a viewport set, vw/vh/vmin/vmax resolve against it, NOT the reference.
+    setLayoutViewport(1000.0f, 500.0f);
+    check(approx(resolveLength("100vw", 7, 16), 1000.0f), "100vw = viewport width");
+    check(approx(resolveLength("100vh", 7, 16), 500.0f),  "100vh = viewport height");
+    check(approx(resolveLength("50vh", 7, 16), 250.0f),   "50vh = half viewport height");
+    check(approx(resolveLength("100vmin", 7, 16), 500.0f), "100vmin = min(w,h)");
+    check(approx(resolveLength("100vmax", 7, 16), 1000.0f), "100vmax = max(w,h)");
+    setLayoutViewport(0.0f, 0.0f);   // leave the resolver clean for later tests
     // cm/mm/in/pc
     check(approx(resolveLength("1in", 100, 16), 96.0f), "1in = 96px");
     check(approx(resolveLength("1cm", 100, 16), 96.0f / 2.54f), "1cm = 37.8px");

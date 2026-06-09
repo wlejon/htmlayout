@@ -27,6 +27,7 @@ static void resetBoxes(LayoutNode* node) {
 
 void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
     if (!root) return;
+    setLayoutViewport(viewport.width, viewport.height);
     resetBoxes(root);
     root->availableHeight = viewport.height;
     root->viewportHeight = viewport.height;

@@ -16,6 +16,18 @@ namespace htmlayout::layout {
 
 using layout::styleVal;
 
+// Current viewport for vw/vh/vmin/vmax resolution, set by layoutTree() before each
+// pass. Layout is single-threaded, so a file-scoped value is the simplest way to
+// reach the workhorse resolver (resolveSingleLength) which is called from hundreds
+// of sites without a node/context in hand. 0 means "unknown" — see setLayoutViewport.
+static float g_viewportWidth = 0.0f;
+static float g_viewportHeight = 0.0f;
+
+void setLayoutViewport(float width, float height) {
+    g_viewportWidth = width;
+    g_viewportHeight = height;
+}
+
 // Resolve a single CSS length token (number + unit) to pixels.
 static float resolveSingleLength(const std::string& value, float referenceSize, float fontSize) {
     if (value.empty() || value == "auto" || value == "none" || value == "normal") {
@@ -40,10 +52,16 @@ static float resolveSingleLength(const std::string& value, float referenceSize, 
     if (unit == "em") return num * fontSize;
     if (unit == "rem") return num * 16.0f;
     if (unit == "%") return num * referenceSize / 100.0f;
-    if (unit == "vw") return num * referenceSize / 100.0f;
-    if (unit == "vh") return num * referenceSize / 100.0f;
-    if (unit == "vmin") return num * referenceSize / 100.0f;
-    if (unit == "vmax") return num * referenceSize / 100.0f;
+    // Viewport units resolve against the real viewport (set by layoutTree). When a
+    // viewport dimension is unknown (0), fall back to the percentage reference so
+    // behavior matches the pre-viewport resolver rather than collapsing to 0.
+    if (unit == "vw") return num * (g_viewportWidth  > 0.0f ? g_viewportWidth  : referenceSize) / 100.0f;
+    if (unit == "vh") return num * (g_viewportHeight > 0.0f ? g_viewportHeight : referenceSize) / 100.0f;
+    if (unit == "vmin" || unit == "vmax") {
+        float vw = g_viewportWidth  > 0.0f ? g_viewportWidth  : referenceSize;
+        float vh = g_viewportHeight > 0.0f ? g_viewportHeight : referenceSize;
+        return num * (unit == "vmin" ? std::min(vw, vh) : std::max(vw, vh)) / 100.0f;
+    }
     if (unit == "pt") return num * 96.0f / 72.0f;
     if (unit == "ch") return num * fontSize * 0.5f;
     if (unit == "ex") return num * fontSize * 0.5f;

@@ -23,6 +23,13 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics);
 // Compute max-content width: the width if the content never wraps.
 float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics);
 
+// Set the viewport used to resolve vw/vh/vmin/vmax units. Called once per layout
+// pass by layoutTree() so the workhorse length resolver (which has no node/context
+// in hand) can size viewport-relative units against the real viewport rather than
+// the local percentage reference. A dimension of 0 means "unknown" — viewport units
+// then fall back to the percentage reference, preserving pre-viewport behavior.
+void setLayoutViewport(float width, float height);
+
 // Resolve CSS length values (px, em, rem, %, vw, vh, vmin, vmax, ch, pt, auto) to pixels.
 // Supports calc() expressions.
 float resolveLength(const std::string& value, float referenceSize, float fontSize);
