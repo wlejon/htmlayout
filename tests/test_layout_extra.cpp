@@ -24,6 +24,7 @@ struct LxNode : public LayoutNode {
     ComputedStyle style_;
     std::unordered_map<std::string, std::string> attrs;
     bool hasIntrinsic = false;
+    bool hasRatio = false;
     float intrW = 0, intrH = 0;
 
     std::string_view tagName() const override { return tag; }
@@ -40,6 +41,7 @@ struct LxNode : public LayoutNode {
         if (!hasIntrinsic) return false;
         w = intrW; h = intrH; return true;
     }
+    bool hasIntrinsicRatio() const override { return hasRatio; }
     void addChild(LxNode* c) { c->parentNode = this; childNodes.push_back(c); }
     void initBase() {
         style_["display"] = "block";
@@ -596,8 +598,59 @@ static void testFlexReplacedBorderBox() {
     check(approx(outer, 300, 1), "border-box replaced flex item outer width == 300");
 }
 
+// A block-level replaced element with a fixed intrinsic ratio (e.g. <canvas
+// width=1120 height=240>) and max-width:100% must scale its auto height to keep
+// the ratio when the container clamps its width — not keep the raw intrinsic
+// height (which would squash a 1120x240 raster into 768x240). A form control
+// (no intrinsic ratio) must NOT scale its height the same way.
+static void testBlockReplacedMaxWidthRatio() {
+    printf("--- Block: replaced max-width preserves intrinsic ratio ---\n");
+
+    // canvas-like: intrinsic 1120x240, ratio-locked, max-width:100% in a 768 box.
+    LxNode media; media.initBase();
+    media.hasIntrinsic = true; media.hasRatio = true;
+    media.intrW = 1120; media.intrH = 240;
+    media.style_["max-width"] = "100%";
+
+    LxNode root1; root1.initBase();
+    root1.addChild(&media);
+    LxMetrics m;
+    layoutTree(&root1, 768, m);
+    printf("  media %.1fx%.1f (expect 768x164.6)\n",
+           media.box.contentRect.width, media.box.contentRect.height);
+    check(approx(media.box.contentRect.width, 768, 1), "ratio media width clamped to 768");
+    check(approx(media.box.contentRect.height, 240.0f * (768.0f / 1120.0f), 1),
+          "ratio media height scaled to preserve 1120:240 ratio");
+
+    // Unconstrained: container wider than intrinsic -> exact intrinsic box.
+    LxNode media2; media2.initBase();
+    media2.hasIntrinsic = true; media2.hasRatio = true;
+    media2.intrW = 1120; media2.intrH = 240;
+    media2.style_["max-width"] = "100%";
+    LxNode root2; root2.initBase();
+    root2.addChild(&media2);
+    layoutTree(&root2, 1600, m);
+    check(approx(media2.box.contentRect.width, 1120, 1), "unconstrained media keeps intrinsic width");
+    check(approx(media2.box.contentRect.height, 240, 1), "unconstrained media keeps intrinsic height");
+
+    // Form-control-like: intrinsic 200x30, NO ratio. max-width clamps width but
+    // height must stay 30 (content size), not scale down with the width.
+    LxNode ctrl; ctrl.initBase();
+    ctrl.hasIntrinsic = true; ctrl.hasRatio = false;
+    ctrl.intrW = 200; ctrl.intrH = 30;
+    ctrl.style_["max-width"] = "100px";
+    LxNode root3; root3.initBase();
+    root3.addChild(&ctrl);
+    layoutTree(&root3, 1000, m);
+    printf("  control %.1fx%.1f (expect 100x30, height unchanged)\n",
+           ctrl.box.contentRect.width, ctrl.box.contentRect.height);
+    check(approx(ctrl.box.contentRect.width, 100, 1), "no-ratio control width clamped to 100");
+    check(approx(ctrl.box.contentRect.height, 30, 1), "no-ratio control height stays intrinsic (not scaled)");
+}
+
 void testLayoutExtra() {
     printf("=== Extra Layout Tests ===\n");
+    testBlockReplacedMaxWidthRatio();
     testFlexReplacedBorderBox();
     testTableColspan();
     testTableRowspan();

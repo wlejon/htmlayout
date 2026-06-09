@@ -102,6 +102,15 @@ struct LayoutNode {
     // Returns true if this node has an intrinsic size, false otherwise.
     virtual bool intrinsicSize(float& w, float& h, float maxWidth) const { return false; }
 
+    // True when intrinsicSize() reports a *fixed intrinsic aspect ratio* — i.e.
+    // replaced media (<img>, <canvas>, <video>, <svg>) whose width and height
+    // scale together. Form controls (<input>, <textarea>, <select>) report an
+    // intrinsic size but NOT a locked ratio, so they return false. Layout uses
+    // this to preserve the ratio when one axis is constrained away from its
+    // intrinsic value (CSS2 §10.4) — e.g. max-width shrinking a canvas's width
+    // must shrink its height to match. Default false.
+    virtual bool hasIntrinsicRatio() const { return false; }
+
     // Scroll offsets in px. Used by hit testing to map the test point into
     // the child coordinate space when an element scrolls its content. Default
     // is 0 (no scrolling). Consumers that expose scrolling containers should

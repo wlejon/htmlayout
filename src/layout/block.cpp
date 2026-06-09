@@ -979,7 +979,17 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float intrW = 0, intrH = 0;
         float ctW = node->box.contentRect.width;
         if (cursorY == 0.0f && node->intrinsicSize(intrW, intrH, ctW)) {
-            node->box.contentRect.height = intrH;
+            if (node->hasIntrinsicRatio() && intrW > 0.0f && intrH > 0.0f &&
+                ctW != intrW) {
+                // The used width was constrained away from intrinsic (max-width,
+                // min-width, or a specified width). A replaced element with a
+                // fixed intrinsic ratio scales its auto height to match, so the
+                // box keeps the media's aspect ratio (CSS2 §10.4) instead of
+                // squashing a 1120×240 canvas into 768×240.
+                node->box.contentRect.height = intrH * (ctW / intrW);
+            } else {
+                node->box.contentRect.height = intrH;
+            }
         } else {
             node->box.contentRect.height = cursorY;
         }
