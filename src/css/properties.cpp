@@ -674,6 +674,15 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
                         if (!t.empty()) { toks.push_back(t); t.clear(); }
                         continue;
                     }
+                    // The position/size separator '/' may be written without
+                    // surrounding spaces (`center/contain`). Emit it as its own
+                    // token so the slash handling below sees it. Only at depth 0
+                    // (paths inside url(...) keep their slashes).
+                    if (depth == 0 && c == '/') {
+                        if (!t.empty()) { toks.push_back(t); t.clear(); }
+                        toks.push_back("/");
+                        continue;
+                    }
                     t += c;
                 }
                 if (!t.empty()) toks.push_back(t);

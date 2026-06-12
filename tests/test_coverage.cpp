@@ -637,6 +637,37 @@ static void testShorthandBackground() {
         if (d.property == "background-color" && d.value == "red") hasBgColor = true;
     }
     check(hasBgColor, "background: color value sets background-color");
+
+    // The `position/size` syntax may be written without spaces around the
+    // slash (`center/contain`). It must still expand to background-position
+    // and background-size — otherwise size stays `auto` and a contained/cover
+    // image renders at its natural (often oversized) dimensions.
+    auto get = [](const std::vector<ExpandedDecl>& ds, const std::string& p) {
+        for (auto& d : ds) if (d.property == p) return d.value;
+        return std::string();
+    };
+    auto slash = expandShorthand("background", "#0d0f12 center/contain no-repeat");
+    check(get(slash, "background-size") == "contain",
+          "background: center/contain (no spaces) sets background-size: contain");
+    check(get(slash, "background-position") == "center",
+          "background: center/contain sets background-position: center");
+    check(get(slash, "background-repeat") == "no-repeat",
+          "background: ...no-repeat sets background-repeat");
+    check(get(slash, "background-color") == "#0d0f12",
+          "background: leading color sets background-color");
+
+    auto cover = expandShorthand("background", "url(a.png) center/cover no-repeat");
+    check(get(cover, "background-size") == "cover",
+          "background: center/cover sets background-size: cover");
+    check(get(cover, "background-image") == "url(a.png)",
+          "background: url(...) sets background-image");
+
+    // Spaces around the slash must keep working too.
+    auto spaced = expandShorthand("background", "left top / 50% 60% no-repeat");
+    check(get(spaced, "background-size") == "50% 60%",
+          "background: left top / 50% 60% sets background-size");
+    check(get(spaced, "background-position") == "left top",
+          "background: left top / ... sets background-position");
 }
 
 static void testPropertyInheritanceFlags() {
