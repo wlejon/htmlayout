@@ -3,6 +3,7 @@
 #include <cctype>
 #include <cmath>
 #include <charconv>
+#include <cstdlib>
 
 namespace htmlayout::css {
 
@@ -51,6 +52,49 @@ private:
 
     static bool isWhitespace(char c) {
         return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+    }
+
+    static bool isHexDigit(char c) {
+        return std::isxdigit(static_cast<unsigned char>(c));
+    }
+
+    static void appendUtf8(std::string& out, unsigned long cp) {
+        if (cp <= 0x7F) {
+            out += static_cast<char>(cp);
+        } else if (cp <= 0x7FF) {
+            out += static_cast<char>(0xC0 | (cp >> 6));
+            out += static_cast<char>(0x80 | (cp & 0x3F));
+        } else if (cp <= 0xFFFF) {
+            out += static_cast<char>(0xE0 | (cp >> 12));
+            out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (cp & 0x3F));
+        } else {
+            out += static_cast<char>(0xF0 | (cp >> 18));
+            out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+            out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+            out += static_cast<char>(0x80 | (cp & 0x3F));
+        }
+    }
+
+    // Consume a CSS "escaped code point" (spec section 4.3.7), assuming the
+    // leading backslash has already been consumed. 1-6 hex digits decode as
+    // a Unicode code point (UTF-8 encoded into `out`), consuming one
+    // trailing whitespace character as the escape's terminator; anything
+    // else is a literal single-character escape (e.g. "\." in a selector).
+    void consumeEscapedCodePoint(std::string& out) {
+        if (atEnd()) return;
+        if (isHexDigit(peek())) {
+            std::string hex;
+            for (int i = 0; i < 6 && isHexDigit(peek()); i++) hex += advance();
+            if (!atEnd() && isWhitespace(peek())) advance();
+            unsigned long cp = std::strtoul(hex.c_str(), nullptr, 16);
+            if (cp == 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+                cp = 0xFFFD; // REPLACEMENT CHARACTER
+            }
+            appendUtf8(out, cp);
+        } else {
+            out += advance();
+        }
     }
 
     // Check if next chars start a number: optional sign, then digit or dot+digit
@@ -106,7 +150,7 @@ private:
                 name += advance();
             } else if (c == '\\' && peek(1) != '\n') {
                 advance(); // skip backslash
-                if (!atEnd()) name += advance();
+                consumeEscapedCodePoint(name);
             } else {
                 break;
             }
@@ -165,7 +209,7 @@ private:
                 if (next == '\n') {
                     advance(); // escaped newline, consume and continue
                 } else {
-                    value += advance();
+                    consumeEscapedCodePoint(value);
                 }
             } else if (c == '\n') {
                 // Unescaped newline in string is a parse error; end the string
