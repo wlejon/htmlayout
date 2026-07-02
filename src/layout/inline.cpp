@@ -53,7 +53,8 @@ struct LineBox {
 // splitting the unit.
 std::vector<LineBox> buildLineBoxes(
     const std::vector<LineItem>& items,
-    float availableWidth)
+    float availableWidth,
+    bool noWrap = false)
 {
     auto endsInSpace = [](const LineItem& it) {
         return it.canBreakAfter ||
@@ -92,7 +93,7 @@ std::vector<LineBox> buildLineBoxes(
             currentLine = LineBox{};
             continue;
         }
-        if (!currentLine.items.empty() &&
+        if (!noWrap && !currentLine.items.empty() &&
             currentLine.totalWidth + item.width > availableWidth) {
             // Would overflow. Look for the most recent break opportunity in
             // currentLine; if the overflowing item itself can break on its
@@ -522,8 +523,13 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         }
     }
 
-    // Build line boxes
-    auto lineBoxes = buildLineBoxes(allItems, contentAvail);
+    // Build line boxes. Under white-space: nowrap, cross-item wraps between
+    // separate inline children/text runs must not happen either — only an
+    // explicit <br> (forceBreak) should start a new line. Without this,
+    // multi-child inline content (e.g. text interleaved with <b> spans)
+    // would wrap once it exceeds availableWidth even though nowrap says the
+    // whole line should overflow instead.
+    auto lineBoxes = buildLineBoxes(allItems, contentAvail, whiteSpace == "nowrap");
 
     // Resolve text-align with direction
     // "start" -> "left" for LTR, "right" for RTL

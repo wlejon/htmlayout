@@ -430,7 +430,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     lineMaxH = 0;
                     continue;
                 }
-                if (cursorX > 0 && cursorX + items[i].width > childAvailable) {
+                if (whiteSpace != "nowrap" && cursorX > 0 && cursorX + items[i].width > childAvailable) {
                     // Find the latest in-range break point at or before i.
                     size_t breakIdx = i;
                     while (breakIdx > lineStart &&
@@ -644,6 +644,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // line-height matches the common all-text/inline-word case.
             float estLineH = resolveLineHeight(styleVal(style, "line-height"), fontSize,
                 styleVal(style, "font-family"), styleVal(style, "font-weight"), metrics);
+            bool anonNoWrap = styleVal(style, "white-space") == "nowrap";
 
             float lineY = cursorY;
             auto band = [&](float y) {
@@ -667,7 +668,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     closeLine(i + 1, true);
                     continue;
                 }
-                if (cx > 0 && cx + anonItems[i].width > (curRE - curLE)) {
+                if (!anonNoWrap && cx > 0 && cx + anonItems[i].width > (curRE - curLE)) {
                     closeLine(i, false);
                 }
                 cx += anonItems[i].width;
