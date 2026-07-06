@@ -151,6 +151,9 @@ const std::vector<PropertyDef>& knownProperties() {
         {"column-fill",       "balance",    false},
         {"column-span",       "none",       false},
 
+        // CSS Shapes (float exclusion geometry)
+        {"shape-outside",     "none",       false},
+
         // Color & background extras
         {"background-position", "0% 0%",    false},
         {"background-repeat",   "repeat",   false},

@@ -61,6 +61,20 @@ struct LayoutBox {
     // for every other kind of node. Cleared on each relayout.
     std::vector<PlacedTextRun> textRuns;
 
+    // Floats established by descendants that this block does NOT contain
+    // (it is not a block-formatting-context root, so per CSS2 §9.4.1 the
+    // floats belong to the nearest BFC ancestor and keep intruding into
+    // following content). Coordinates are margin boxes relative to this
+    // box's content origin; the parent adopts them into its own float list.
+    // shapeR >= 0 carries a shape-outside: circle() exclusion (center cx/cy,
+    // radius r in the same coordinate space).
+    struct EscapedFloat {
+        float x = 0, y = 0, width = 0, height = 0;
+        bool isLeft = true;
+        float shapeCx = 0, shapeCy = 0, shapeR = -1.0f;
+    };
+    std::vector<EscapedFloat> escapedFloats;
+
     // Distance from the top of contentRect to the box's text baseline, set
     // by inline layout when the box has inline-level content. Inline boxes
     // record their first-line baseline (the parent line box aligns an inline
@@ -167,6 +181,17 @@ struct TextMetrics {
                          float fontSize,
                          std::string_view fontWeight) {
         return 0.8f * lineHeight(fontFamily, fontSize, fontWeight);
+    }
+    // x-height of the font (height of a lowercase 'x' above the baseline).
+    // vertical-align: middle centers a box on baseline + xHeight/2 (CSS2
+    // §10.8). The default approximates 1ex = 0.5em — the CSS fallback
+    // ratio — so consumers that only implement the pure virtuals keep
+    // working; override to supply the real metric from the font backend.
+    virtual float xHeight(std::string_view fontFamily,
+                          float fontSize,
+                          std::string_view fontWeight) {
+        (void)fontFamily; (void)fontWeight;
+        return 0.5f * fontSize;
     }
 };
 

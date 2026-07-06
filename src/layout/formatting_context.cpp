@@ -552,6 +552,9 @@ float resolveLineHeight(const std::string& value, float fontSize,
                         const std::string& fontWeight,
                         TextMetrics& metrics) {
     if (value.empty() || value == "normal") {
+        // font-size:0 → normal line-height is 0; don't ask the font backend,
+        // which may clamp degenerate sizes to a usable minimum.
+        if (fontSize <= 0) return 0.0f;
         float h = metrics.lineHeight(fontFamily, fontSize, fontWeight);
         if (h > 0) return h;
         return fontSize * 1.2f;

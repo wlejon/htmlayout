@@ -1155,6 +1155,226 @@ static void testBlockReplacedMaxWidthRatio() {
     check(approx(ctrl.box.contentRect.height, 30, 1), "no-ratio control height stays intrinsic (not scaled)");
 }
 
+// ===== font-size:0 — the strut is empty (Chromium parity) =====
+static void testFontSizeZeroStrut() {
+    printf("--- font-size:0: empty strut, no descent under inline-block ---\n");
+    LxNode root; root.initBase();
+    root.style_["font-size"] = "0";
+    root.style_["width"] = "500px";
+
+    LxNode ib; ib.initBase();
+    ib.style_["display"] = "inline-block";
+    ib.style_["width"] = "440px";
+    ib.style_["height"] = "32px";
+    root.addChild(&ib);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  container height=%.1f (expect exactly 32)\n", root.box.contentRect.height);
+    check(approx(root.box.contentRect.height, 32, 0.1f),
+          "font-size:0 line adds no strut descent below a 32px inline-block");
+}
+
+// ===== Blink half-leading split: floor(leading/2) above, remainder below =====
+static void testLeadingSplitFloorZeroFont() {
+    printf("--- font-size:0 + line-height:15px: strut is 7 above / 8 below ---\n");
+    // A baseline-aligned inline-block (baseline = bottom margin edge) shows
+    // the strut descent directly: line = max(itemAbove, 7) + 8.
+    LxNode root; root.initBase();
+    root.style_["font-size"] = "0";
+    root.style_["line-height"] = "15px";
+    root.style_["width"] = "100px";
+
+    LxNode ib; ib.initBase();
+    ib.style_["display"] = "inline-block";
+    ib.style_["width"] = "20px";
+    ib.style_["height"] = "10px";
+    root.addChild(&ib);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  container height=%.1f (expect 18 = 10 above + 8 below)\n",
+           root.box.contentRect.height);
+    check(approx(root.box.contentRect.height, 18, 0.1f),
+          "odd leading puts the extra half-pixel below the baseline");
+}
+
+static void testLeadingSplitFloorRealFont() {
+    printf("--- 16px font + line-height:25px: ascent side floors ---\n");
+    // Mock metrics: natural 20, ascent 16. leading = 5 -> 2 above, 3 below.
+    // A baseline-aligned inline-block h=10 sits at y = (16+2) - 10 = 8.
+    LxNode root; root.initBase();
+    root.style_["line-height"] = "25px";
+    root.style_["width"] = "300px";
+
+    LxNode ib; ib.initBase();
+    ib.style_["display"] = "inline-block";
+    ib.style_["width"] = "20px";
+    ib.style_["height"] = "10px";
+    root.addChild(&ib);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  ib y=%.2f (expect 8, not 8.5), container h=%.1f (expect 25)\n",
+           ib.box.contentRect.y, root.box.contentRect.height);
+    check(approx(ib.box.contentRect.y, 8, 0.2f),
+          "half-leading ascent side is floored (Blink CalculateLeadingSpace)");
+    check(approx(root.box.contentRect.height, 25, 0.1f),
+          "line box height equals the specified line-height");
+}
+
+// ===== vertical-align: middle centers on the baseline (+ xHeight/2) =====
+static void testVerticalAlignMiddleBaselineCentered() {
+    printf("--- vertical-align:middle at font-size:0 (newspaper .w rows) ---\n");
+    // fs0 + line-height:15px -> strut 7/8. Item margin box 15 (h7 + mb8),
+    // middle-aligned at the baseline (xHeight 0): spans baseline +-7.5.
+    // Line = max(7,7.5) + max(8,7.5) = 15.5, item top at the line top.
+    // Three items in a one-per-line container stack every 15.5px.
+    LxNode root; root.initBase();
+    root.style_["font-size"] = "0";
+    root.style_["line-height"] = "15px";
+    root.style_["width"] = "50px";
+
+    LxNode w[3];
+    for (auto& n : w) {
+        n.initBase();
+        n.style_["display"] = "inline-block";
+        n.style_["width"] = "40px";
+        n.style_["height"] = "7px";
+        n.style_["margin-right"] = "5px";
+        n.style_["margin-bottom"] = "8px";
+        n.style_["vertical-align"] = "middle";
+        root.addChild(&n);
+    }
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  rows at y=%.1f / %.1f / %.1f (expect 0 / 15.5 / 31), h=%.1f (expect 46.5)\n",
+           w[0].box.contentRect.y, w[1].box.contentRect.y, w[2].box.contentRect.y,
+           root.box.contentRect.height);
+    check(approx(w[0].box.contentRect.y, 0, 0.1f), "middle item sits at the line top");
+    check(approx(w[1].box.contentRect.y, 15.5f, 0.1f), "lines advance by 15.5px");
+    check(approx(w[2].box.contentRect.y, 31.0f, 0.1f), "third line at 31px");
+    check(approx(root.box.contentRect.height, 46.5f, 0.1f), "container is 3 x 15.5");
+}
+
+// ===== Floats: containment and escape (CSS2 §10.6.3 / §9.4.1) =====
+static void testFloatNotContainedByAutoHeight() {
+    printf("--- float: does not extend a non-BFC parent's auto height ---\n");
+    LxNode root; root.initBase(); // root establishes the initial BFC
+    root.style_["width"] = "200px";
+
+    LxNode wrap; wrap.initBase(); // plain block: floats escape it
+    LxNode fl; fl.initBase();
+    fl.style_["float"] = "left";
+    fl.style_["width"] = "50px";
+    fl.style_["height"] = "90px";
+    LxNode para; para.initBase();
+    para.style_["height"] = "20px";
+    wrap.addChild(&fl); wrap.addChild(&para);
+    root.addChild(&wrap);
+
+    LxNode sib; sib.initBase(); // sibling after the wrapper
+    sib.style_["height"] = "30px";
+    root.addChild(&sib);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  wrap h=%.1f (expect 20); sib x=%.1f w=%.1f (expect 50 / 150); root h=%.1f (expect 90)\n",
+           wrap.box.contentRect.height, sib.box.contentRect.x,
+           sib.box.contentRect.width, root.box.contentRect.height);
+    check(approx(wrap.box.contentRect.height, 20, 0.1f),
+          "auto height ignores the protruding float");
+    check(approx(sib.box.contentRect.x, 50, 0.1f),
+          "escaped float still excludes the following sibling");
+    check(approx(sib.box.contentRect.width, 150, 0.1f),
+          "sibling is narrowed beside the escaped float");
+    check(approx(root.box.contentRect.height, 90, 0.1f),
+          "the BFC root contains the adopted float");
+}
+
+static void testFloatContainedByBFC() {
+    printf("--- float: a BFC root does contain its floats ---\n");
+    LxNode root; root.initBase();
+    root.style_["width"] = "200px";
+
+    LxNode wrap; wrap.initBase();
+    wrap.style_["overflow"] = "hidden"; // BFC root
+    LxNode fl; fl.initBase();
+    fl.style_["float"] = "left";
+    fl.style_["width"] = "50px";
+    fl.style_["height"] = "90px";
+    wrap.addChild(&fl);
+    root.addChild(&wrap);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  wrap h=%.1f (expect 90)\n", wrap.box.contentRect.height);
+    check(approx(wrap.box.contentRect.height, 90, 0.1f),
+          "overflow:hidden container wraps its float");
+}
+
+// ===== Floats inside an inline run don't break the line (CSS2 §9.5) =====
+static void testMidRunFloatKeepsLine() {
+    printf("--- float between inline siblings: the line continues ---\n");
+    LxNode root; root.initBase();
+    root.style_["width"] = "300px";
+
+    LxNode ib1; ib1.initBase();
+    ib1.style_["display"] = "inline-block";
+    ib1.style_["width"] = "50px"; ib1.style_["height"] = "10px";
+    LxNode fl; fl.initBase();
+    fl.style_["float"] = "left";
+    fl.style_["width"] = "80px"; fl.style_["height"] = "40px";
+    LxNode ib2; ib2.initBase();
+    ib2.style_["display"] = "inline-block";
+    ib2.style_["width"] = "50px"; ib2.style_["height"] = "10px";
+    root.addChild(&ib1); root.addChild(&fl); root.addChild(&ib2);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  ib1 y=%.1f ib2 (%.1f,%.1f); float y=%.1f (expect below line at 20)\n",
+           ib1.box.contentRect.y, ib2.box.contentRect.x, ib2.box.contentRect.y,
+           fl.box.contentRect.y);
+    check(approx(ib2.box.contentRect.y, ib1.box.contentRect.y, 0.1f),
+          "the inline run continues on the same line after the float");
+    check(approx(ib2.box.contentRect.x, 50, 0.1f),
+          "second inline-block follows the first horizontally");
+    check(approx(fl.box.contentRect.y, 20, 0.1f),
+          "the mid-run float is placed below the current line");
+}
+
+// ===== shape-outside: circle() =====
+static void testShapeOutsideCircleWrap() {
+    printf("--- shape-outside: circle() frees the corner of a float ---\n");
+    // Right float 100x100 with circle(50%) -> r = 50, centered at (150,50)
+    // in a 200px block. The first line's band [0,20] only meets the chord
+    // at dy=30 -> half-width 40 -> right edge 110, so two 52px items fit
+    // (104 <= 110) where the raw margin box (edge 100) would wrap.
+    LxNode root; root.initBase();
+    root.style_["width"] = "200px";
+
+    LxNode fl; fl.initBase();
+    fl.style_["float"] = "right";
+    fl.style_["width"] = "100px"; fl.style_["height"] = "100px";
+    fl.style_["shape-outside"] = "circle(50%)";
+    LxNode ib1; ib1.initBase();
+    ib1.style_["display"] = "inline-block";
+    ib1.style_["width"] = "52px"; ib1.style_["height"] = "10px";
+    LxNode ib2; ib2.initBase();
+    ib2.style_["display"] = "inline-block";
+    ib2.style_["width"] = "52px"; ib2.style_["height"] = "10px";
+    root.addChild(&fl); root.addChild(&ib1); root.addChild(&ib2);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  ib2 (%.1f,%.1f) (expect on line 1 at x=52)\n",
+           ib2.box.contentRect.x, ib2.box.contentRect.y);
+    check(approx(ib2.box.contentRect.y, ib1.box.contentRect.y, 0.1f),
+          "second item stays on line 1 inside the circle's free corner");
+    check(approx(ib2.box.contentRect.x, 52, 0.1f), "packed after the first item");
+}
+
 void testLayoutExtra() {
     printf("=== Extra Layout Tests ===\n");
     testBlockReplacedMaxWidthRatio();
@@ -1197,4 +1417,12 @@ void testLayoutExtra() {
     testBlockBorderBox();
     testBlockBfcRtl();
     testBlockMultiCol();
+    testFontSizeZeroStrut();
+    testLeadingSplitFloorZeroFont();
+    testLeadingSplitFloorRealFont();
+    testVerticalAlignMiddleBaselineCentered();
+    testFloatNotContainedByAutoHeight();
+    testFloatContainedByBFC();
+    testMidRunFloatKeepsLine();
+    testShapeOutsideCircleWrap();
 }

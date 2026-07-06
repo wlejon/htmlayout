@@ -1,11 +1,13 @@
 #include "layout/block.h"
 #include "layout/formatting_context.h"
+#include "../from_chars_compat.h"
 #include "layout/style_util.h"
 #include "layout/text.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace htmlayout::layout {
 
@@ -50,19 +52,113 @@ float parseAspectRatio(const std::string& value) {
     return static_cast<float>(w / h);
 }
 
+// CSS2 §10.8 strut for a block's inline formatting context: a zero-width
+// inline box with the block's own font and line-height. The font's natural
+// box (ascent + descent) is distributed in the line-height by half-leading;
+// Blink floors the ascent-side half (CalculateLeadingSpace) and the descent
+// side takes the remainder, so an odd leading puts the extra half-pixel
+// below the baseline. font-size:0 produces an empty strut — the font
+// backend is not consulted (it may clamp degenerate sizes).
+struct StrutMetrics {
+    float above = 0;      // line-top to baseline when only the strut is present
+    float below = 0;      // baseline to line-bottom
+    float ascent = 0;     // font natural ascent (no leading)
+    float xHeight = 0;    // for vertical-align: middle
+    float lineHeight = 0; // used line-height
+};
+
+StrutMetrics computeStrut(const css::ComputedStyle& style, float fontSize,
+                          TextMetrics& metrics) {
+    const std::string& fam = styleVal(style, "font-family");
+    const std::string& wt = styleVal(style, "font-weight");
+    StrutMetrics s;
+    s.lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize,
+                                     fam, wt, metrics);
+    float natural = fontSize > 0 ? metrics.lineHeight(fam, fontSize, wt) : 0.0f;
+    if (natural <= 0) natural = fontSize * 1.2f;
+    float asc = fontSize > 0 ? metrics.ascent(fam, fontSize, wt) : 0.0f;
+    if (fontSize > 0 && (asc <= 0 || asc >= natural)) asc = natural * 0.8f;
+    float leading = s.lineHeight - natural;
+    float half = std::floor(leading * 0.5f);
+    s.ascent = asc;
+    s.above = asc + half;
+    s.below = (natural - asc) + (leading - half);
+    s.xHeight = fontSize > 0 ? metrics.xHeight(fam, fontSize, wt) : 0.0f;
+    return s;
+}
+
+// Baseline geometry of an atomic inline-level box (inline-block, replaced
+// element…) that has already been laid out. `height` is the margin-box
+// height. Returns the distance from the margin-box top to the box's
+// baseline plus the vertical-align keyword (0 = baseline, 1 = top,
+// 2 = middle, 3 = bottom) — CSS2 §10.8.1.
+struct AtomicInlineGeom {
+    float baseline = 0;
+    int valign = 0;
+};
+
+AtomicInlineGeom atomicInlineGeometry(LayoutNode* child, float height,
+                                      float strutBelow, float availWidth) {
+    AtomicInlineGeom g;
+    auto& styleRef = child->computedStyle();
+    const std::string& va = styleVal(styleRef, "vertical-align");
+    if (va == "top" || va == "text-top") g.valign = 1;
+    else if (va == "middle") g.valign = 2;
+    else if (va == "bottom" || va == "text-bottom") g.valign = 3;
+
+    float iw = 0, ih = 0;
+    if (child->intrinsicSize(iw, ih, availWidth)) {
+        if (child->hasIntrinsicRatio()) {
+            // Replaced media (img/canvas/video/svg): baseline is the bottom
+            // margin edge.
+            g.baseline = height;
+        } else {
+            // Form controls: browsers align them by the control's internal
+            // text baseline, approximated as a strut-descent above the
+            // bottom margin edge.
+            float below = std::min(strutBelow, height);
+            if (below < 0) below = 0;
+            g.baseline = height - below;
+        }
+    } else {
+        // Atomic inline: baseline of the last line box when it has in-flow
+        // content and visible overflow; otherwise the bottom margin edge.
+        const std::string& ov = styleVal(styleRef, "overflow");
+        bool visibleOv = ov.empty() || ov == "visible";
+        if (visibleOv && child->box.baselineOffset >= 0) {
+            g.baseline = child->box.margin.top + child->box.border.top +
+                child->box.padding.top + child->box.baselineOffset;
+            if (g.baseline > height) g.baseline = height;
+        } else {
+            g.baseline = height;
+        }
+    }
+    return g;
+}
+
 } // anonymous namespace
 
 void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (!node) return;
 
     auto& style = node->computedStyle();
-    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
-    if (fontSize <= 0.0f) fontSize = 16.0f;
+    const std::string& fontSizeStr = styleVal(style, "font-size");
+    float fontSize = resolveLength(fontSizeStr, 16.0f, 16.0f);
+    if (fontSize <= 0.0f) {
+        // An explicit zero (font-size: 0) is honored — em units and the
+        // line-box strut collapse to nothing, matching Chromium. Anything
+        // missing, negative or unparseable falls back to the default.
+        bool explicitZero = !fontSizeStr.empty() &&
+            (fontSizeStr[0] == '0' || fontSizeStr[0] == '.');
+        fontSize = explicitZero ? 0.0f : 16.0f;
+    }
 
     const std::string& position = styleVal(style, "position");
 
-    // Fresh layout pass: forget any baseline recorded by a previous layout.
+    // Fresh layout pass: forget any baseline recorded by a previous layout
+    // and any floats handed up to the parent last time.
     node->box.baselineOffset = -1.0f;
+    node->box.escapedFloats.clear();
 
     // Resolve margin, padding, border
     node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
@@ -239,22 +335,13 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         const std::string& fontFamily = styleVal(style, "font-family");
         const std::string& fontWeight = styleVal(style, "font-weight");
         const std::string& whiteSpace = styleVal(style, "white-space");
-        float lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize,
-            fontFamily, fontWeight, metrics);
-
-        // CSS2 §10.8: every line box starts with the block's strut — a
-        // zero-width inline box with the block's own font and line-height.
-        // A font's natural box (ascent A + descent D) is centered in its
-        // line-height by half-leading; the strut then reaches A + half
-        // above the baseline and D + half below it.
-        float strutNatural = metrics.lineHeight(fontFamily, fontSize, fontWeight);
-        if (strutNatural <= 0) strutNatural = fontSize * 1.2f;
-        float strutAscent = metrics.ascent(fontFamily, fontSize, fontWeight);
-        if (strutAscent <= 0 || strutAscent >= strutNatural)
-            strutAscent = strutNatural * 0.8f;
-        float strutHalf = (lineHeight - strutNatural) * 0.5f;
-        float strutAbove = strutAscent + strutHalf;
-        float strutBelow = (strutNatural - strutAscent) + strutHalf;
+        // CSS2 §10.8: every line box starts with the block's strut (see
+        // computeStrut for the Blink-compatible half-leading model).
+        StrutMetrics strut = computeStrut(style, fontSize, metrics);
+        float lineHeight = strut.lineHeight;
+        float strutAscent = strut.ascent;
+        float strutAbove = strut.above;
+        float strutBelow = strut.below;
 
         struct IFCItem {
             float width = 0, height = 0;
@@ -463,13 +550,17 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     if (cfs <= 0) cfs = fontSize;
                     const std::string& cff = styleVal(cs, "font-family");
                     const std::string& cfw = styleVal(cs, "font-weight");
-                    float cNatural = metrics.lineHeight(cff, cfs, cfw);
+                    float cNatural = cfs > 0 ? metrics.lineHeight(cff, cfs, cfw) : 0.0f;
                     if (cNatural <= 0) cNatural = cfs * 1.2f;
-                    float cAscent = metrics.ascent(cff, cfs, cfw);
-                    if (cAscent <= 0 || cAscent >= cNatural) cAscent = cNatural * 0.8f;
+                    float cAscent = cfs > 0 ? metrics.ascent(cff, cfs, cfw) : 0.0f;
+                    if (cfs > 0 && (cAscent <= 0 || cAscent >= cNatural))
+                        cAscent = cNatural * 0.8f;
                     float cLH = resolveLineHeight(styleVal(cs, "line-height"),
                         cfs, cff, cfw, metrics);
-                    float cHalf = (cLH - cNatural) * 0.5f;
+                    // Blink-compatible half-leading split: floor the ascent
+                    // side, remainder below (see the strut above).
+                    float cLead = cLH - cNatural;
+                    float cHalf = std::floor(cLead * 0.5f);
 
                     float b = (child->box.baselineOffset >= 0)
                         ? child->box.baselineOffset : cAscent;
@@ -478,9 +569,19 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     // Nested content taller than the element's own font
                     // (e.g. a bigger-font span inside) still has to fit.
                     it.above = std::max(cAscent + cHalf, b);
-                    it.below = std::max((cNatural - cAscent) + cHalf,
+                    it.below = std::max((cNatural - cAscent) + (cLead - cHalf),
                                         child->box.contentRect.height - b);
                 }
+                // Atomic inlines (inline-block, replaced media, controls)
+                // always offer a soft-wrap opportunity on both sides (CSS
+                // Text §5.3) — adjacent inline-blocks with no whitespace
+                // still wrap. Non-replaced inline elements (span/em/…) keep
+                // the text-driven break rules so "word<span>.</span>" stays
+                // atomic.
+                bool atomicInline = replaced || d == "inline-block" ||
+                    d == "inline-flex" || d == "inline-grid";
+                it.canBreakBefore = atomicInline;
+                it.canBreakAfter = atomicInline;
                 items.push_back(std::move(it));
             }
         }
@@ -617,21 +718,28 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         // Resolve each line's vertical geometry (CSS2 §10.8): baseline-align
         // the items, take the union of their [baseline-above, baseline+below]
-        // extents together with the block's strut, then let any top/middle/
-        // bottom-aligned item that is still taller than the line grow it
-        // downward (the baseline does not move).
+        // extents together with the block's strut. vertical-align: middle
+        // centers a box on baseline + xHeight/2 and its extent participates
+        // in the union; a top/bottom-aligned item that is still taller than
+        // the line grows it downward (the baseline does not move).
+        float strutXHeight = strut.xHeight;
         for (auto& line : lines) {
             float above = strutAbove;
             float below = strutBelow;
             for (size_t k = line.start; k < line.end; ++k) {
                 const IFCItem& it = items[k];
-                if (it.valign != 0) continue;
-                above = std::max(above, it.above);
-                below = std::max(below, it.below);
+                if (it.valign == 0) {
+                    above = std::max(above, it.above);
+                    below = std::max(below, it.below);
+                } else if (it.valign == 2) {
+                    float a = it.height * 0.5f + strutXHeight * 0.5f;
+                    above = std::max(above, a);
+                    below = std::max(below, it.height - a);
+                }
             }
             for (size_t k = line.start; k < line.end; ++k) {
                 const IFCItem& it = items[k];
-                if (it.valign == 0) continue;
+                if (it.valign != 1 && it.valign != 3) continue;
                 if (it.height > above + below) below = it.height - above;
             }
             line.above = above;
@@ -685,7 +793,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         float yTop;
                         switch (item.valign) {
                             case 1: yTop = cursorY; break;
-                            case 2: yTop = cursorY + (line.maxHeight - item.height) * 0.5f; break;
+                            case 2: yTop = lineBaseline -
+                                (item.height * 0.5f + strutXHeight * 0.5f); break;
                             case 3: yTop = cursorY + line.maxHeight - item.height; break;
                             default: yTop = lineBaseline - item.baseline; break;
                         }
@@ -753,25 +862,78 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float firstBlockChildMarginTop = 0.0f;
     bool hadFirstBlockChild = false;
 
-    // Float tracking: left and right float edges
+    // Float tracking: left and right float edges. shapeR >= 0 carries a
+    // shape-outside: circle() exclusion (center cx/cy, radius r).
     struct FloatRect {
         float x, y, width, height;
         bool isLeft;
+        float shapeCx = 0, shapeCy = 0, shapeR = -1.0f;
     };
     std::vector<FloatRect> floats;
 
-    // Get available width at a given Y position accounting for floats
+    // Does this block establish a new block formatting context? BFC roots
+    // contain their floats (CSS2 §10.6.3) and don't collapse margins with
+    // children; non-BFC blocks let floats escape to the nearest BFC
+    // ancestor. Computed up front so the child loop and the height pass
+    // agree.
+    bool establishesBFC = false;
+    {
+        // Root element always establishes the initial BFC
+        if (!node->parent()) establishesBFC = true;
+        const std::string& ov = styleVal(style, "overflow");
+        const std::string& ovx = styleVal(style, "overflow-x");
+        const std::string& ovy = styleVal(style, "overflow-y");
+        if ((ov != "visible" && !ov.empty()) ||
+            (ovx != "visible" && !ovx.empty()) ||
+            (ovy != "visible" && !ovy.empty()))
+            establishesBFC = true;
+        const std::string& disp = styleVal(style, "display");
+        if (disp == "inline-block" || disp == "flex" || disp == "inline-flex" ||
+            disp == "grid" || disp == "inline-grid" || disp == "flow-root" ||
+            disp == "table-cell" || disp == "table-caption")
+            establishesBFC = true;
+        if (position == "absolute" || position == "fixed")
+            establishesBFC = true;
+        const std::string& flt = styleVal(style, "float");
+        if (flt == "left" || flt == "right")
+            establishesBFC = true;
+        // Multi-column containers are formatting-context roots too.
+        const std::string& mcCount = styleVal(style, "column-count");
+        const std::string& mcWidth = styleVal(style, "column-width");
+        if ((!mcCount.empty() && mcCount != "auto") ||
+            (!mcWidth.empty() && mcWidth != "auto"))
+            establishesBFC = true;
+    }
+
+    // Get available width at a given Y position accounting for floats.
+    // A float with a circle shape (shape-outside) only excludes the chord
+    // of the circle covered by the queried band — outside the circle's
+    // vertical range content flows past the float box entirely.
     auto getAvailableAtY = [&](float y, float h) -> std::pair<float, float> {
         float leftEdge = 0;
         float rightEdge = childAvailable;
         float effectiveH = h > 0 ? h : 1.0f; // treat zero-height as point query
         for (auto& f : floats) {
-            if (y + effectiveH > f.y && y < f.y + f.height) {
+            if (!(y + effectiveH > f.y && y < f.y + f.height)) continue;
+            if (f.shapeR >= 0) {
+                // Vertical distance from the circle's center to the nearest
+                // edge of the band (0 when the band covers the center).
+                float dy = 0;
+                if (f.shapeCy < y) dy = y - f.shapeCy;
+                else if (f.shapeCy > y + effectiveH) dy = f.shapeCy - (y + effectiveH);
+                if (dy >= f.shapeR) continue; // band misses the circle
+                float half = std::sqrt(std::max(0.0f, f.shapeR * f.shapeR - dy * dy));
                 if (f.isLeft) {
-                    leftEdge = std::max(leftEdge, f.x + f.width);
+                    leftEdge = std::max(leftEdge,
+                        std::min(f.x + f.width, f.shapeCx + half));
                 } else {
-                    rightEdge = std::min(rightEdge, f.x);
+                    rightEdge = std::min(rightEdge,
+                        std::max(f.x, f.shapeCx - half));
                 }
+            } else if (f.isLeft) {
+                leftEdge = std::max(leftEdge, f.x + f.width);
+            } else {
+                rightEdge = std::min(rightEdge, f.x);
             }
         }
         return {leftEdge, rightEdge};
@@ -787,6 +949,70 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         bfcResolvedAlign = (bfcDirection == "rtl") ? "left" : "right";
     }
 
+    // The strut for anonymous line boxes in this BFC (same model as the
+    // dedicated IFC path — CSS2 §10.8 with Blink's half-leading split).
+    StrutMetrics anonStrut = computeStrut(style, fontSize, metrics);
+
+    // Place a floated child with its margin-box top at `atY`, register its
+    // exclusion (including any shape-outside: circle geometry), and return.
+    auto placeFloat = [&](LayoutNode* child, float atY) {
+        auto& childStyle = child->computedStyle();
+        const std::string& childFloat = styleVal(childStyle, "float");
+        layoutNode(child, childAvailable, metrics);
+
+        float floatWidth = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
+        float floatHeight = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
+
+        auto [leftEdge, rightEdge] = getAvailableAtY(atY, floatHeight);
+
+        FloatRect fr{0, atY, floatWidth, floatHeight, childFloat == "left"};
+        if (childFloat == "left") {
+            child->box.contentRect.x = leftEdge + child->box.margin.left +
+                child->box.padding.left + child->box.border.left;
+            fr.x = leftEdge;
+        } else {
+            child->box.contentRect.x = rightEdge - floatWidth + child->box.margin.left +
+                child->box.padding.left + child->box.border.left;
+            fr.x = rightEdge - floatWidth;
+        }
+        child->box.contentRect.y = atY + child->box.margin.top +
+            child->box.padding.top + child->box.border.top;
+
+        // shape-outside: circle(<r>) — content wraps the circle's chord
+        // instead of the margin box. The reference box defaults to the
+        // margin box; a percentage radius resolves against
+        // sqrt(w² + h²)/√2 (CSS Shapes §basic-shape).
+        const std::string& shapeOutside = styleVal(childStyle, "shape-outside");
+        if (shapeOutside.rfind("circle(", 0) == 0) {
+            std::string arg = shapeOutside.substr(7);
+            size_t stop = arg.find_first_of(")");
+            size_t at = arg.find(" at ");
+            if (at != std::string::npos && at < stop) stop = at;
+            arg = arg.substr(0, stop);
+            while (!arg.empty() && std::isspace((unsigned char)arg.front())) arg.erase(arg.begin());
+            while (!arg.empty() && std::isspace((unsigned char)arg.back())) arg.pop_back();
+            float r = -1.0f;
+            if (arg.empty() || arg == "closest-side") {
+                r = std::min(floatWidth, floatHeight) * 0.5f;
+            } else if (arg == "farthest-side") {
+                r = std::max(floatWidth, floatHeight) * 0.5f;
+            } else if (!arg.empty() && arg.back() == '%') {
+                float pct = 0;
+                htmlayout::from_chars_fp(arg.data(), arg.data() + arg.size(), pct);
+                r = pct * 0.01f * std::sqrt(
+                    (floatWidth * floatWidth + floatHeight * floatHeight) * 0.5f);
+            } else {
+                r = resolveLength(arg, floatWidth, fontSize);
+            }
+            if (r >= 0) {
+                fr.shapeCx = fr.x + floatWidth * 0.5f;
+                fr.shapeCy = fr.y + floatHeight * 0.5f;
+                fr.shapeR = r;
+            }
+        }
+        floats.push_back(fr);
+    };
+
     // Helper: flush accumulated inline children as an anonymous line box
     std::vector<LayoutNode*> pendingInline;
     auto flushInlineRun = [&]() {
@@ -798,6 +1024,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             float width = 0, height = 0;
             bool isText = false;
             bool forceBreak = false;
+            // Deferred float (placed during line building, not a line item)
+            bool isFloat = false;
+            // Baseline geometry (margin-box space for elements). Text hangs
+            // the block's natural font box on the shared baseline.
+            float baseline = 0;
+            int valign = 0;
         };
         std::vector<AnonItem> anonItems;
 
@@ -814,26 +1046,41 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     tw += run.width;
                     th = std::max(th, run.height);
                 }
-                float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize,
-                    styleVal(style, "font-family"), styleVal(style, "font-weight"), metrics);
-                th = std::max(th, lh);
-                anonItems.push_back({inl, tw, th, true, false});
+                th = std::max(th, anonStrut.lineHeight);
+                AnonItem it{};
+                it.node = inl; it.width = tw; it.height = th; it.isText = true;
+                it.baseline = anonStrut.ascent;
+                anonItems.push_back(std::move(it));
             } else if (inl->tagName() == "br" || inl->tagName() == "BR") {
-                float lh = resolveLineHeight(styleVal(style, "line-height"), fontSize,
-                    styleVal(style, "font-family"), styleVal(style, "font-weight"), metrics);
                 inl->box = LayoutBox{};
                 // Record the natural font line-height (not the CSS line-height)
                 // as the BR's bounding rect height — matches Chromium's
                 // getBoundingClientRect for forced-break inlines.
-                inl->box.contentRect.height = metrics.lineHeight(
+                inl->box.contentRect.height = fontSize > 0 ? metrics.lineHeight(
                     styleVal(style, "font-family"), fontSize,
-                    styleVal(style, "font-weight"));
-                anonItems.push_back({inl, 0.0f, lh, false, true});
+                    styleVal(style, "font-weight")) : 0.0f;
+                AnonItem it{};
+                it.node = inl; it.height = anonStrut.lineHeight;
+                it.forceBreak = true;
+                anonItems.push_back(std::move(it));
             } else {
+                const std::string& fd = styleVal(inl->computedStyle(), "float");
+                if (fd == "left" || fd == "right") {
+                    // Deferred mid-run float: placed while building lines.
+                    AnonItem it{};
+                    it.node = inl; it.isFloat = true;
+                    anonItems.push_back(std::move(it));
+                    continue;
+                }
                 layoutNode(inl, childAvailable, metrics);
                 float cw = inl->box.fullWidth() + inl->box.margin.left + inl->box.margin.right;
                 float ch = inl->box.fullHeight() + inl->box.margin.top + inl->box.margin.bottom;
-                anonItems.push_back({inl, cw, ch, false, false});
+                AtomicInlineGeom g = atomicInlineGeometry(inl, ch, anonStrut.below,
+                                                          childAvailable);
+                AnonItem it{};
+                it.node = inl; it.width = cw; it.height = ch;
+                it.baseline = g.baseline; it.valign = g.valign;
+                anonItems.push_back(std::move(it));
             }
         }
 
@@ -844,8 +1091,34 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // overlapping float, leftEdge=0 and rightEdge=childAvailable, so this
         // reduces to the plain full-width behavior.
         struct AnonLine { size_t start; size_t end; float totalWidth; float maxHeight;
-                          bool endsWithBreak; float xStart; float availWidth; };
+                          bool endsWithBreak; float xStart; float availWidth;
+                          float above; };
         std::vector<AnonLine> anonLines;
+        // Union of the strut with the items' baseline-aligned extents
+        // (CSS2 §10.8): returns {above, below} for the line's items.
+        auto anonLineExtents = [&](size_t s, size_t e) {
+            float a = anonStrut.above, b = anonStrut.below;
+            for (size_t k = s; k < e; ++k) {
+                const AnonItem& it = anonItems[k];
+                if (it.forceBreak || it.isFloat) continue;
+                if (it.isText) continue; // text == strut extents
+                if (it.valign == 0) {
+                    a = std::max(a, it.baseline);
+                    b = std::max(b, it.height - it.baseline);
+                } else if (it.valign == 2) {
+                    float ia = it.height * 0.5f + anonStrut.xHeight * 0.5f;
+                    a = std::max(a, ia);
+                    b = std::max(b, it.height - ia);
+                }
+            }
+            for (size_t k = s; k < e; ++k) {
+                const AnonItem& it = anonItems[k];
+                if (it.forceBreak || it.isText || it.isFloat) continue;
+                if (it.valign != 1 && it.valign != 3) continue;
+                if (it.height > a + b) b = it.height - a;
+            }
+            return std::pair<float, float>{a, b};
+        };
         {
             // Height estimate for the per-line float band query (the line's own
             // height isn't known until it's filled). The natural font
@@ -862,17 +1135,36 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             auto [curLE, curRE] = band(lineY);
 
             size_t ls = 0;
-            float cx = 0, mh = 0;
+            float cx = 0;
             auto closeLine = [&](size_t end, bool brk) {
-                anonLines.push_back({ls, end, cx, mh, brk, curLE, curRE - curLE});
-                lineY += (mh > 0 ? mh : estLineH);
-                ls = end; cx = 0; mh = 0;
+                auto [la, lb] = anonLineExtents(ls, end);
+                float lh = la + lb;
+                anonLines.push_back({ls, end, cx, lh, brk, curLE, curRE - curLE, la});
+                lineY += (lh > 0 ? lh : estLineH);
+                ls = end; cx = 0;
                 auto b = band(lineY);
                 curLE = b.first; curRE = b.second;
             };
             for (size_t i = 0; i < anonItems.size(); i++) {
+                if (anonItems[i].isFloat) {
+                    // A float breaking into the middle of a line is placed
+                    // below the line under construction (its top may not sit
+                    // above the current line box, CSS2 §9.5.1 rule 6); at a
+                    // line start it sits at the line's own top.
+                    float placeY = lineY;
+                    if (cx > 0) {
+                        auto [la, lb] = anonLineExtents(ls, i);
+                        placeY = lineY + la + lb;
+                    }
+                    placeFloat(anonItems[i].node, placeY);
+                    if (cx == 0) {
+                        // The new float narrows the line being started.
+                        auto b = band(lineY);
+                        curLE = b.first; curRE = b.second;
+                    }
+                    continue;
+                }
                 if (anonItems[i].forceBreak) {
-                    if (cx == 0 && mh == 0) mh = anonItems[i].height;
                     closeLine(i + 1, true);
                     continue;
                 }
@@ -880,10 +1172,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     closeLine(i, false);
                 }
                 cx += anonItems[i].width;
-                mh = std::max(mh, anonItems[i].height);
             }
-            if (ls < anonItems.size())
-                anonLines.push_back({ls, anonItems.size(), cx, mh, false, curLE, curRE - curLE});
+            if (ls < anonItems.size()) {
+                auto [la, lb] = anonLineExtents(ls, anonItems.size());
+                anonLines.push_back({ls, anonItems.size(), cx, la + lb, false,
+                                     curLE, curRE - curLE, la});
+            }
         }
 
         // Position with text-align (skip zero-width lines from whitespace,
@@ -898,8 +1192,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
             // line.xStart is the float-aware left edge of this line.
             float cx = line.xStart + xOff;
+            float lineBaseline = cursorY + line.above;
             for (size_t i = line.start; i < line.end; i++) {
                 auto& ai = anonItems[i];
+                if (ai.isFloat) continue; // placed during line building
                 if (ai.forceBreak) {
                     // Position the BR at the line's current x (post-content)
                     // and vertically center within the line box, matching
@@ -918,9 +1214,20 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     ai.node->box.contentRect.width = ai.width;
                     ai.node->box.contentRect.height = ai.height;
                 } else {
+                    // Vertical position by alignment: baseline items align
+                    // baselines; middle centers on baseline + xHeight/2;
+                    // top/bottom pin the margin box to the line edges.
+                    float yTop;
+                    switch (ai.valign) {
+                        case 1: yTop = cursorY; break;
+                        case 2: yTop = lineBaseline -
+                            (ai.height * 0.5f + anonStrut.xHeight * 0.5f); break;
+                        case 3: yTop = cursorY + line.maxHeight - ai.height; break;
+                        default: yTop = lineBaseline - ai.baseline; break;
+                    }
                     ai.node->box.contentRect.x = cx + ai.node->box.margin.left +
                         ai.node->box.padding.left + ai.node->box.border.left;
-                    ai.node->box.contentRect.y = cursorY + ai.node->box.margin.top +
+                    ai.node->box.contentRect.y = yTop + ai.node->box.margin.top +
                         ai.node->box.padding.top + ai.node->box.border.top;
                 }
                 cx += ai.width;
@@ -957,10 +1264,20 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             continue;
         }
 
+        const std::string& childFloat = styleVal(childStyle, "float");
+
+        // A float that interrupts an inline run does NOT break the line
+        // (CSS2 §9.5): defer it into the run — flushInlineRun places it
+        // below the line being built and the inline content continues.
+        if ((childFloat == "left" || childFloat == "right") &&
+            !pendingInline.empty()) {
+            pendingInline.push_back(child);
+            continue;
+        }
+
         // Block child encountered — flush any pending inline items first
         flushInlineRun();
 
-        const std::string& childFloat = styleVal(childStyle, "float");
         const std::string& childClear = styleVal(childStyle, "clear");
 
         // Handle clear: move past floats on the specified side(s)
@@ -977,26 +1294,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         // Handle float: left/right
         if (childFloat == "left" || childFloat == "right") {
-            layoutNode(child, childAvailable, metrics);
-
-            float floatWidth = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
-            float floatHeight = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
-
-            auto [leftEdge, rightEdge] = getAvailableAtY(cursorY, floatHeight);
-
-            if (childFloat == "left") {
-                child->box.contentRect.x = leftEdge + child->box.margin.left +
-                    child->box.padding.left + child->box.border.left;
-                child->box.contentRect.y = cursorY + child->box.margin.top +
-                    child->box.padding.top + child->box.border.top;
-                floats.push_back({leftEdge, cursorY, floatWidth, floatHeight, true});
-            } else {
-                child->box.contentRect.x = rightEdge - floatWidth + child->box.margin.left +
-                    child->box.padding.left + child->box.border.left;
-                child->box.contentRect.y = cursorY + child->box.margin.top +
-                    child->box.padding.top + child->box.border.top;
-                floats.push_back({rightEdge - floatWidth, cursorY, floatWidth, floatHeight, false});
-            }
+            placeFloat(child, cursorY);
             continue; // floats don't advance cursorY
         }
 
@@ -1065,6 +1363,21 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         child->box.contentRect.x = le2 + child->box.margin.left + child->box.padding.left + child->box.border.left;
         child->box.contentRect.y = cursorY + child->box.padding.top + child->box.border.top;
 
+        // Adopt floats that escaped the child (it isn't a BFC root, so its
+        // floats belong to this formatting context and keep excluding
+        // content beside the following siblings).
+        for (const auto& ef : child->box.escapedFloats) {
+            FloatRect fr{ef.x + child->box.contentRect.x,
+                         ef.y + child->box.contentRect.y,
+                         ef.width, ef.height, ef.isLeft};
+            if (ef.shapeR >= 0) {
+                fr.shapeCx = ef.shapeCx + child->box.contentRect.x;
+                fr.shapeCy = ef.shapeCy + child->box.contentRect.y;
+                fr.shapeR = ef.shapeR;
+            }
+            floats.push_back(fr);
+        }
+
         // Apply position: relative/sticky offset after normal positioning
         // (sticky behaves like relative during layout; scroll clamping is a paint-time concern)
         if (childPos == "relative" || childPos == "sticky") {
@@ -1103,9 +1416,23 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         cursorY += prevMarginBottom;
     }
 
-    // Container must also contain all floats
-    for (auto& f : floats) {
-        cursorY = std::max(cursorY, f.y + f.height);
+    // A BFC root contains its floats (CSS2 §10.6.3); a non-BFC block does
+    // NOT — they escape to the nearest BFC ancestor and keep excluding
+    // content beside the following siblings, so hand them up instead.
+    node->box.escapedFloats.clear();
+    if (establishesBFC) {
+        for (auto& f : floats) {
+            cursorY = std::max(cursorY, f.y + f.height);
+        }
+    } else {
+        node->box.escapedFloats.reserve(floats.size());
+        for (auto& f : floats) {
+            LayoutBox::EscapedFloat ef;
+            ef.x = f.x; ef.y = f.y; ef.width = f.width; ef.height = f.height;
+            ef.isLeft = f.isLeft;
+            ef.shapeCx = f.shapeCx; ef.shapeCy = f.shapeCy; ef.shapeR = f.shapeR;
+            node->box.escapedFloats.push_back(ef);
+        }
     }
 
     // Parent-child margin collapsing (CSS 2.1 §8.3.1):
@@ -1114,29 +1441,6 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     //   - No top/bottom padding or border separating them
     //   - The parent doesn't establish a new BFC
     //   - For bottom: parent has auto height
-    bool establishesBFC = false;
-    {
-        // Root element always establishes the initial BFC
-        if (!node->parent()) establishesBFC = true;
-        const std::string& ov = styleVal(style, "overflow");
-        const std::string& ovx = styleVal(style, "overflow-x");
-        const std::string& ovy = styleVal(style, "overflow-y");
-        if ((ov != "visible" && !ov.empty()) ||
-            (ovx != "visible" && !ovx.empty()) ||
-            (ovy != "visible" && !ovy.empty()))
-            establishesBFC = true;
-        const std::string& disp = styleVal(style, "display");
-        if (disp == "inline-block" || disp == "flex" || disp == "inline-flex" ||
-            disp == "grid" || disp == "inline-grid" || disp == "flow-root" ||
-            disp == "table-cell" || disp == "table-caption")
-            establishesBFC = true;
-        if (position == "absolute" || position == "fixed")
-            establishesBFC = true;
-        const std::string& flt = styleVal(style, "float");
-        if (flt == "left" || flt == "right")
-            establishesBFC = true;
-    }
-
     if (!establishesBFC && hadFirstBlockChild) {
         // Top margin collapsing: first child's top margin escapes through the parent
         if (node->box.padding.top == 0 && node->box.border.top == 0 &&
@@ -1146,6 +1450,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // Shift all children up by the first child's margin that was applied to cursorY
             for (auto* child : getLayoutChildren(node)) {
                 child->box.contentRect.y -= firstBlockChildMarginTop;
+            }
+            for (auto& ef : node->box.escapedFloats) {
+                ef.y -= firstBlockChildMarginTop;
+                if (ef.shapeR >= 0) ef.shapeCy -= firstBlockChildMarginTop;
             }
             cursorY -= firstBlockChildMarginTop;
         }
