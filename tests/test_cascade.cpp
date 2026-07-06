@@ -580,6 +580,46 @@ static void testImportWithLayer() {
           "import layer: unlayered rule wins over layered import");
 }
 
+static void testTableSpanAttributes() {
+    printf("--- Cascade: table span attributes surfaced ---\n");
+    Cascade cascade;
+
+    MockElement td; td.tag = "td";
+    td.attrs["colspan"] = "3";
+    td.attrs["rowspan"] = "2";
+    auto tdStyle = cascade.resolve(td);
+    check(tdStyle["colspan"] == "3", "cascade: td colspan attribute surfaced");
+    check(tdStyle["rowspan"] == "2", "cascade: td rowspan attribute surfaced");
+
+    MockElement th; th.tag = "TH"; // tag match is case-insensitive
+    th.attrs["colspan"] = "2";
+    auto thStyle = cascade.resolve(th);
+    check(thStyle["colspan"] == "2", "cascade: TH colspan surfaced (case-insensitive tag)");
+
+    MockElement col; col.tag = "col";
+    col.attrs["span"] = "4";
+    auto colStyle = cascade.resolve(col);
+    check(colStyle["span"] == "4", "cascade: col span attribute surfaced");
+
+    MockElement div; div.tag = "div";
+    div.attrs["colspan"] = "5";
+    auto divStyle = cascade.resolve(div);
+    check(divStyle.find("colspan") == divStyle.end(),
+          "cascade: colspan not surfaced on non-cell elements");
+
+    MockElement bad; bad.tag = "td";
+    bad.attrs["colspan"] = "abc";
+    auto badStyle = cascade.resolve(bad);
+    check(badStyle.find("colspan") == badStyle.end(),
+          "cascade: non-numeric colspan ignored");
+
+    MockElement zero; zero.tag = "td";
+    zero.attrs["colspan"] = "0";
+    auto zeroStyle = cascade.resolve(zero);
+    check(zeroStyle.find("colspan") == zeroStyle.end(),
+          "cascade: colspan below 1 ignored");
+}
+
 void testCascade() {
     testBasicResolve();
     testSpecificityOrder();
@@ -607,4 +647,5 @@ void testCascade() {
     testImportSourceOrder();
     testImportWithMediaCondition();
     testImportWithLayer();
+    testTableSpanAttributes();
 }

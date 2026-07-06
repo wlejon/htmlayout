@@ -1,6 +1,8 @@
 #include "css/cascade.h"
 #include "css/properties.h"
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <sstream>
 #include <unordered_set>
 
@@ -590,6 +592,39 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     //    falls back to initialValueRef() for missing keys, so the map only
     //    contains properties that were explicitly set or inherited — typically
     //    ~10-30 entries instead of ~317.
+
+    // 10. HTML table structure attributes: colspan/rowspan on cells and span
+    //     on <col>/<colgroup> are structural inputs to table layout rather
+    //     than CSS properties. Surface them as computed-style keys so table
+    //     layout still sees spans when the consumer's LayoutNode doesn't
+    //     bridge HTML attributes (layout prefers LayoutNode::attribute() and
+    //     falls back to these keys). Values are normalized positive integers;
+    //     they are non-inherited by construction (only set from the element's
+    //     own attributes).
+    {
+        auto tagIs = [&](std::string_view want) {
+            std::string_view tag = elem.tagName();
+            if (tag.size() != want.size()) return false;
+            for (size_t i = 0; i < tag.size(); i++) {
+                if (std::tolower(static_cast<unsigned char>(tag[i])) != want[i])
+                    return false;
+            }
+            return true;
+        };
+        auto surfaceSpan = [&](const char* attr) {
+            if (style.find(attr) != style.end()) return;
+            std::string_view v = elem.getAttribute(attr);
+            if (v.empty()) return;
+            int n = std::atoi(std::string(v).c_str());
+            if (n >= 1) style[attr] = std::to_string(n);
+        };
+        if (tagIs("td") || tagIs("th")) {
+            surfaceSpan("colspan");
+            surfaceSpan("rowspan");
+        } else if (tagIs("col") || tagIs("colgroup")) {
+            surfaceSpan("span");
+        }
+    }
 
     return style;
 }

@@ -214,6 +214,20 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
     }
 
     auto& style = node->computedStyle();
+
+    // Tables size by columns, not by the widest descendant: a table-row lays
+    // its cells side by side, so the generic max-of-children walk below would
+    // report the widest single cell instead of the column sum. Run the real
+    // column algorithm (CSS2 §17.5.2.2) instead.
+    {
+        const std::string& d = styleVal(style, "display");
+        if (d == "table" || d == "inline-table") {
+            float minW = 0, maxW = 0;
+            computeTableIntrinsicWidths(node, metrics, minW, maxW);
+            return minW;
+        }
+    }
+
     float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
     if (fontSize <= 0.0f) fontSize = 16.0f;
     const std::string& fontFamily = styleVal(style, "font-family");
@@ -274,6 +288,17 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
                 bh += resolveLength(styleVal(cs, "border-left-width"), 0, childFontSize);
             if (styleVal(cs, "border-right-style") != "none")
                 bh += resolveLength(styleVal(cs, "border-right-width"), 0, childFontSize);
+            // A border-collapse table's used border is zero: the collapsed
+            // edge half-borders live inside its content width (they're part
+            // of computeTableIntrinsicWidths' result), so adding the computed
+            // border widths on top would double-count them.
+            {
+                const std::string& cd = styleVal(cs, "display");
+                if ((cd == "table" || cd == "inline-table") &&
+                    styleVal(cs, "border-collapse") == "collapse") {
+                    bh = 0;
+                }
+            }
             float mh = resolveLength(styleVal(cs, "margin-left"), 0, childFontSize) +
                        resolveLength(styleVal(cs, "margin-right"), 0, childFontSize);
             // A child with a definite (non-percentage) width contributes that
@@ -333,6 +358,17 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     }
 
     auto& style = node->computedStyle();
+
+    // Tables size by columns — see the matching note in computeMinContentWidth.
+    {
+        const std::string& d = styleVal(style, "display");
+        if (d == "table" || d == "inline-table") {
+            float minW = 0, maxW = 0;
+            computeTableIntrinsicWidths(node, metrics, minW, maxW);
+            return maxW;
+        }
+    }
+
     float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
     if (fontSize <= 0.0f) fontSize = 16.0f;
     const std::string& fontFamily = styleVal(style, "font-family");
@@ -409,6 +445,15 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
                 bh += resolveLength(styleVal(cs, "border-left-width"), 0, childFontSize);
             if (styleVal(cs, "border-right-style") != "none")
                 bh += resolveLength(styleVal(cs, "border-right-width"), 0, childFontSize);
+            // A border-collapse table's used border is zero — see the
+            // matching note in computeMinContentWidth.
+            {
+                const std::string& cd = styleVal(cs, "display");
+                if ((cd == "table" || cd == "inline-table") &&
+                    styleVal(cs, "border-collapse") == "collapse") {
+                    bh = 0;
+                }
+            }
             float mh = resolveLength(styleVal(cs, "margin-left"), 0, childFontSize) +
                        resolveLength(styleVal(cs, "margin-right"), 0, childFontSize);
             // Use explicit width if set, otherwise recurse for intrinsic size

@@ -5,6 +5,7 @@
 #include "test_helpers.h"
 #include "layout/box.h"
 #include "layout/formatting_context.h"
+#include "layout/table.h"
 #include <cmath>
 #include <string>
 #include <unordered_map>
@@ -336,6 +337,217 @@ static void testTableEmptyRowGroup() {
     LxMetrics m;
     layoutTree(&table, 400, m);
     check(true, "empty row group does not crash");
+}
+
+// A spanning cell whose min/max content fits within the spanned columns'
+// sums must not widen them (CSS2 §17.5.2.2: only the EXCESS over the
+// current sum is distributed).
+static void testTableColspanNoExcessNoWiden() {
+    printf("--- Table: colspan fits spanned columns ---\n");
+    LxNode table; table.initBase();
+    table.style_["display"] = "table";
+    table.style_["border-collapse"] = "separate";
+    table.style_["border-spacing"] = "0";
+
+    // Row 1: [colspan=2 "spans" (50px)] ["r1c3" (40px)]
+    LxNode row1; row1.initBase(); row1.style_["display"] = "table-row";
+    LxNode a; a.initBase(); a.style_["display"] = "table-cell";
+    a.attrs["colspan"] = "2";
+    LxNode aText; aText.initBase(); aText.isText = true; aText.text = "spans";
+    a.addChild(&aText);
+    LxNode b; b.initBase(); b.style_["display"] = "table-cell";
+    LxNode bText; bText.initBase(); bText.isText = true; bText.text = "r1c3";
+    b.addChild(&bText);
+    row1.addChild(&a); row1.addChild(&b);
+
+    // Row 2: three 40px cells
+    LxNode row2; row2.initBase(); row2.style_["display"] = "table-row";
+    LxNode c1, c2, c3; LxNode t1, t2, t3;
+    LxNode* cells[] = {&c1, &c2, &c3};
+    LxNode* texts[] = {&t1, &t2, &t3};
+    for (int i = 0; i < 3; i++) {
+        cells[i]->initBase();
+        cells[i]->style_["display"] = "table-cell";
+        texts[i]->initBase();
+        texts[i]->isText = true;
+        texts[i]->text = "r2cX";
+        cells[i]->addChild(texts[i]);
+        row2.addChild(cells[i]);
+    }
+    table.addChild(&row1); table.addChild(&row2);
+
+    LxMetrics m;
+    layoutTree(&table, 800, m);
+
+    // "spans" (50) fits in col0+col1 (40+40) → all columns stay 40.
+    check(approx(table.box.contentRect.width, 120.0f, 0.5f),
+          "colspan within columns: table width is column sums");
+    check(approx(a.box.contentRect.width, 80.0f, 0.5f),
+          "colspan within columns: spanning cell covers both tracks");
+    check(approx(b.box.contentRect.x, 80.0f, 0.5f),
+          "colspan within columns: next cell sits in third column");
+    check(approx(c1.box.contentRect.width, 40.0f, 0.5f),
+          "colspan within columns: first column not widened");
+}
+
+// A spanning cell wider than the spanned columns distributes only the
+// excess, split across the spanned columns.
+static void testTableColspanExcessDistribution() {
+    printf("--- Table: colspan excess distribution ---\n");
+    LxNode table; table.initBase();
+    table.style_["display"] = "table";
+    table.style_["border-collapse"] = "separate";
+    table.style_["border-spacing"] = "0";
+
+    LxNode row1; row1.initBase(); row1.style_["display"] = "table-row";
+    LxNode a; a.initBase(); a.style_["display"] = "table-cell";
+    a.attrs["colspan"] = "2";
+    LxNode aText; aText.initBase(); aText.isText = true;
+    aText.text = "aaaaaaaaaaaa"; // 120px
+    a.addChild(&aText);
+    LxNode b; b.initBase(); b.style_["display"] = "table-cell";
+    LxNode bText; bText.initBase(); bText.isText = true; bText.text = "r1c3";
+    b.addChild(&bText);
+    row1.addChild(&a); row1.addChild(&b);
+
+    LxNode row2; row2.initBase(); row2.style_["display"] = "table-row";
+    LxNode c1, c2, c3; LxNode t1, t2, t3;
+    LxNode* cells[] = {&c1, &c2, &c3};
+    LxNode* texts[] = {&t1, &t2, &t3};
+    for (int i = 0; i < 3; i++) {
+        cells[i]->initBase();
+        cells[i]->style_["display"] = "table-cell";
+        texts[i]->initBase();
+        texts[i]->isText = true;
+        texts[i]->text = "r2cX";
+        cells[i]->addChild(texts[i]);
+        row2.addChild(cells[i]);
+    }
+    table.addChild(&row1); table.addChild(&row2);
+
+    LxMetrics m;
+    layoutTree(&table, 800, m);
+
+    // Excess = 120 - (40+40) = 40, split 20/20 → columns 60, 60, 40.
+    check(approx(table.box.contentRect.width, 160.0f, 0.5f),
+          "colspan excess: table width grows by the excess only");
+    check(approx(c1.box.contentRect.width, 60.0f, 0.5f),
+          "colspan excess: spanned column got half the excess");
+    check(approx(c3.box.contentRect.width, 40.0f, 0.5f),
+          "colspan excess: unspanned column unchanged");
+}
+
+// computeMin/MaxContentWidth on a table run the real column algorithm:
+// column sums + border-spacing, not the widest descendant.
+static void testTableIntrinsicWidths() {
+    printf("--- Table: intrinsic min/max content widths ---\n");
+    LxNode table; table.initBase();
+    table.style_["display"] = "table";
+    table.style_["border-collapse"] = "separate";
+    table.style_["border-spacing"] = "4px";
+
+    LxNode row; row.initBase(); row.style_["display"] = "table-row";
+    LxNode a; a.initBase(); a.style_["display"] = "table-cell";
+    LxNode aText; aText.initBase(); aText.isText = true;
+    aText.text = "aa aa"; // max 50, min 20
+    a.addChild(&aText);
+    LxNode b; b.initBase(); b.style_["display"] = "table-cell";
+    LxNode bText; bText.initBase(); bText.isText = true; bText.text = "bbb"; // 30
+    b.addChild(&bText);
+    row.addChild(&a); row.addChild(&b);
+    table.addChild(&row);
+
+    LxMetrics m;
+    // spacing: 3 gaps of 4px = 12.
+    check(approx(computeMinContentWidth(&table, m), 62.0f, 0.5f),
+          "table min-content = col mins + spacing");
+    check(approx(computeMaxContentWidth(&table, m), 92.0f, 0.5f),
+          "table max-content = col maxes + spacing");
+}
+
+// In border-collapse mode a cell's intrinsic contribution uses the SHARED
+// half-borders with its actual grid neighbors (half of max of the borders
+// meeting on each gridline), not its own full border.
+static void testTableCollapseSharedBorderIntrinsics() {
+    printf("--- Table: collapse shared-border intrinsics ---\n");
+    LxNode table; table.initBase();
+    table.style_["display"] = "table";
+    table.style_["border-collapse"] = "collapse";
+
+    LxNode row; row.initBase(); row.style_["display"] = "table-row";
+    LxNode thin; thin.initBase(); thin.style_["display"] = "table-cell";
+    for (const char* side : {"left", "right", "top", "bottom"}) {
+        thin.style_[std::string("border-") + side + "-style"] = "solid";
+        thin.style_[std::string("border-") + side + "-width"] = "2px";
+    }
+    LxNode thinText; thinText.initBase(); thinText.isText = true;
+    thinText.text = "aa"; // 20
+    thin.addChild(&thinText);
+    LxNode thick; thick.initBase(); thick.style_["display"] = "table-cell";
+    for (const char* side : {"left", "right", "top", "bottom"}) {
+        thick.style_[std::string("border-") + side + "-style"] = "solid";
+        thick.style_[std::string("border-") + side + "-width"] = "10px";
+    }
+    LxNode thickText; thickText.initBase(); thickText.isText = true;
+    thickText.text = "bb"; // 20
+    thick.addChild(&thickText);
+    row.addChild(&thin); row.addChild(&thick);
+    table.addChild(&row);
+
+    LxMetrics m;
+    layoutTree(&table, 800, m);
+
+    // Shared gridline = max(2,10) = 10 → 5 to each cell.
+    // col0 = 20 + 2/2 + 5 = 26; col1 = 20 + 5 + 10/2 = 30.
+    // Outer half-border insets: 2/2 + 10/2 = 6. Total 26 + 30 + 6 = 62.
+    check(approx(table.box.contentRect.width, 62.0f, 0.5f),
+          "collapse: intrinsic width uses shared half-borders");
+    check(approx(computeMaxContentWidth(&table, m), 62.0f, 0.5f),
+          "collapse: max-content matches layout width");
+}
+
+// A cell containing a nested table must reserve the nested table's full
+// column-sum width, not just its widest single cell.
+static void testTableNestedTableIntrinsic() {
+    printf("--- Table: nested table intrinsic width ---\n");
+    LxNode outer; outer.initBase();
+    outer.style_["display"] = "table";
+    outer.style_["border-collapse"] = "separate";
+    outer.style_["border-spacing"] = "0";
+
+    LxNode orow; orow.initBase(); orow.style_["display"] = "table-row";
+    LxNode ocell; ocell.initBase(); ocell.style_["display"] = "table-cell";
+
+    LxNode inner; inner.initBase();
+    inner.style_["display"] = "table";
+    inner.style_["border-collapse"] = "separate";
+    inner.style_["border-spacing"] = "0";
+    LxNode irow; irow.initBase(); irow.style_["display"] = "table-row";
+    LxNode i1; i1.initBase(); i1.style_["display"] = "table-cell";
+    LxNode i1Text; i1Text.initBase(); i1Text.isText = true;
+    i1Text.text = "aaaa"; // 40
+    i1.addChild(&i1Text);
+    LxNode i2; i2.initBase(); i2.style_["display"] = "table-cell";
+    LxNode i2Text; i2Text.initBase(); i2Text.isText = true;
+    i2Text.text = "bbbb"; // 40
+    i2.addChild(&i2Text);
+    irow.addChild(&i1); irow.addChild(&i2);
+    inner.addChild(&irow);
+
+    ocell.addChild(&inner);
+    orow.addChild(&ocell);
+    outer.addChild(&orow);
+
+    LxMetrics m;
+    layoutTree(&outer, 800, m);
+
+    // Inner table needs 40 + 40 = 80; the outer column must grant all of it.
+    check(approx(outer.box.contentRect.width, 80.0f, 0.5f),
+          "nested table: outer table fits inner column sums");
+    check(approx(ocell.box.contentRect.width, 80.0f, 0.5f),
+          "nested table: cell as wide as inner table");
+    check(approx(inner.box.contentRect.width, 80.0f, 0.5f),
+          "nested table: inner table keeps its intrinsic width");
 }
 
 // ===== Inline-block with text and br =====
@@ -967,6 +1179,11 @@ void testLayoutExtra() {
     testTablePercentColumns();
     testTableRowGroup();
     testTableEmptyRowGroup();
+    testTableColspanNoExcessNoWiden();
+    testTableColspanExcessDistribution();
+    testTableIntrinsicWidths();
+    testTableCollapseSharedBorderIntrinsics();
+    testTableNestedTableIntrinsic();
     testInlineBlockWithTextAndBr();
     testInlineBlockNestedInlineBlock();
     testInlineBlockWithBlockChild();
