@@ -27,6 +27,10 @@ struct TrackSize {
     float minValue = 0;    // for minmax: minimum
     float maxValue = -1;   // for minmax: maximum (-1 = auto)
     bool isMinmax = false;
+    // The track's min sizing function is auto/min-content: a flexible track's
+    // base size then floors at its items' min-content contributions (Grid
+    // §11.8 — the "automatic minimum"). Plain `1fr` means minmax(auto, 1fr).
+    bool minIsAuto = false;
 };
 
 // Parse a single track size token
@@ -47,6 +51,7 @@ TrackSize parseTrackSize(const std::string& token, float available, float fontSi
     // Check for fr unit
     if (token.size() > 2 && token.substr(token.size() - 2) == "fr") {
         ts.kind = TrackSize::Fractional;
+        ts.minIsAuto = true; // <flex> alone means minmax(auto, <flex>)
         try { ts.value = std::stof(token.substr(0, token.size() - 2)); } catch (...) { ts.value = 1; }
         return ts;
     }
@@ -77,6 +82,8 @@ TrackSize parseTrackSize(const std::string& token, float available, float fontSi
 
             if (minStr != "auto" && minStr != "min-content") {
                 ts.minValue = resolveLength(minStr, available, fontSize);
+            } else {
+                ts.minIsAuto = true;
             }
         }
         return ts;
@@ -259,9 +266,14 @@ std::vector<TrackSize> parseTrackList(const std::string& value, float available,
 
 // Resolve track sizes to actual pixel widths/heights.
 // Distributes fr units among remaining space after fixed tracks are resolved.
+// minContributions (parallel to tracks; may be empty) carries the items'
+// min-content contributions per track: a flexible track whose min sizing
+// function is auto cannot end up smaller than that (Grid §11.8/§12.7) —
+// even if that overflows the grid container, matching Chromium.
 std::vector<float> resolveTrackSizes(const std::vector<TrackSize>& tracks,
                                       float available, float gap,
-                                      const std::vector<float>& contentSizes) {
+                                      const std::vector<float>& contentSizes,
+                                      const std::vector<float>& minContributions = std::vector<float>()) {
     size_t n = tracks.size();
     std::vector<float> sizes(n, 0);
 
@@ -297,18 +309,104 @@ std::vector<float> resolveTrackSizes(const std::vector<TrackSize>& tracks,
     if (freeSpace < 0) freeSpace = 0;
 
     if (totalFr > 0) {
-        float frUnit = freeSpace / totalFr;
+        // Each flexible track has a floor: an explicit minmax() minimum, or —
+        // when its min sizing function is auto — its items' min-content
+        // contributions. Find the fr unit iteratively (Grid §12.7.1): any
+        // track whose fr share falls below its floor is frozen at the floor
+        // and removed from the distribution, then the unit is recomputed.
+        std::vector<float> floors(n, 0.0f);
         for (size_t i = 0; i < n; i++) {
-            if (tracks[i].kind == TrackSize::Fractional) {
-                sizes[i] = tracks[i].value * frUnit;
-                if (tracks[i].isMinmax && sizes[i] < tracks[i].minValue) {
-                    sizes[i] = tracks[i].minValue;
+            if (tracks[i].kind != TrackSize::Fractional) continue;
+            if (tracks[i].isMinmax && !tracks[i].minIsAuto)
+                floors[i] = std::max(0.0f, tracks[i].minValue);
+            else if (i < minContributions.size())
+                floors[i] = std::max(0.0f, minContributions[i]);
+        }
+        std::vector<bool> frozen(n, false);
+        float space = freeSpace;
+        float activeFr = totalFr;
+        bool changed = true;
+        while (changed) {
+            changed = false;
+            float frUnit = (activeFr > 0) ? space / activeFr : 0.0f;
+            for (size_t i = 0; i < n; i++) {
+                if (tracks[i].kind != TrackSize::Fractional || frozen[i]) continue;
+                if (tracks[i].value * frUnit < floors[i]) {
+                    sizes[i] = floors[i];
+                    frozen[i] = true;
+                    space -= floors[i];
+                    if (space < 0) space = 0;
+                    activeFr -= tracks[i].value;
+                    changed = true;
                 }
             }
+        }
+        float frUnit = (activeFr > 0) ? space / activeFr : 0.0f;
+        for (size_t i = 0; i < n; i++) {
+            if (tracks[i].kind == TrackSize::Fractional && !frozen[i])
+                sizes[i] = tracks[i].value * frUnit;
         }
     }
 
     return sizes;
+}
+
+// Outer min-content contribution of a grid item: content min-content width
+// plus its own padding, border, and margins. A definite width overrides the
+// content measurement; min/max-width clamp it (mirroring the contribution
+// rules in computeMinContentWidth's child walk). Items that are scroll
+// containers (overflow != visible) have an automatic minimum of zero, so
+// only their edges contribute.
+float itemMinContentContribution(LayoutNode* item, float parentFontSize, TextMetrics& metrics) {
+    auto& cs = item->computedStyle();
+    float cfs = resolveLength(styleVal(cs, "font-size"), parentFontSize, parentFontSize);
+    if (cfs <= 0) cfs = parentFontSize;
+    float ph = resolveLength(styleVal(cs, "padding-left"), 0, cfs) +
+               resolveLength(styleVal(cs, "padding-right"), 0, cfs);
+    float bh = 0;
+    if (styleVal(cs, "border-left-style") != "none")
+        bh += resolveLength(styleVal(cs, "border-left-width"), 0, cfs);
+    if (styleVal(cs, "border-right-style") != "none")
+        bh += resolveLength(styleVal(cs, "border-right-width"), 0, cfs);
+    float mh = resolveLength(styleVal(cs, "margin-left"), 0, cfs) +
+               resolveLength(styleVal(cs, "margin-right"), 0, cfs);
+
+    const std::string& ov = styleVal(cs, "overflow");
+    const std::string& ovx = styleVal(cs, "overflow-x");
+    bool scrollContainer = (!ov.empty() && ov != "visible") ||
+                           (!ovx.empty() && ovx != "visible");
+
+    const std::string& wVal = styleVal(cs, "width");
+    bool definiteW = !wVal.empty() && wVal != "auto" &&
+                     wVal.find('%') == std::string::npos &&
+                     !isIntrinsicSizingKeyword(wVal);
+    float contribution;
+    if (definiteW) {
+        float w = resolveLength(wVal, 0, cfs);
+        contribution = (styleVal(cs, "box-sizing") == "border-box")
+            ? w + mh : w + ph + bh + mh;
+    } else if (scrollContainer) {
+        contribution = ph + bh + mh;
+    } else {
+        contribution = computeMinContentWidth(item, metrics) + ph + bh + mh;
+    }
+    const std::string& minWVal = styleVal(cs, "min-width");
+    if (!minWVal.empty() && minWVal != "auto" &&
+        minWVal.find('%') == std::string::npos) {
+        float v = resolveLength(minWVal, 0, cfs);
+        float t = (styleVal(cs, "box-sizing") == "border-box")
+            ? v + mh : v + ph + bh + mh;
+        if (contribution < t) contribution = t;
+    }
+    const std::string& maxWVal = styleVal(cs, "max-width");
+    if (!maxWVal.empty() && maxWVal != "none" &&
+        maxWVal.find('%') == std::string::npos) {
+        float v = resolveLength(maxWVal, 0, cfs);
+        float t = (styleVal(cs, "box-sizing") == "border-box")
+            ? v + mh : v + ph + bh + mh;
+        if (contribution > t) contribution = t;
+    }
+    return contribution;
 }
 
 // Named grid area: 1-based line numbers
@@ -870,8 +968,22 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
+    // Min-content contributions of items in flexible columns: a 1fr track
+    // cannot shrink below its items' min-content contributions (Grid §11.8),
+    // even when that overflows the container — matching Chromium.
+    std::vector<float> colMinSizes(numCols, 0);
+    for (auto& item : items) {
+        if (item.colSpan != 1 || item.col < 0 || item.col >= static_cast<int>(numCols))
+            continue;
+        const auto& t = colTracks[item.col];
+        if (t.kind != TrackSize::Fractional || (t.isMinmax && !t.minIsAuto))
+            continue;
+        colMinSizes[item.col] = std::max(colMinSizes[item.col],
+            itemMinContentContribution(item.node, fontSize, metrics));
+    }
+
     // Resolve track sizes
-    auto colSizes = resolveTrackSizes(colTracks, containerWidth, colGap, colContentSizes);
+    auto colSizes = resolveTrackSizes(colTracks, containerWidth, colGap, colContentSizes, colMinSizes);
     // Determine the container's resolved content height for distributing 1fr
     // rows.  Prefer (in order): an explicit CSS height, a content height
     // pre-set by an outer pass (e.g. the parent flex container distributed
@@ -890,7 +1002,9 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
         if (rowAvailable < 0) rowAvailable = 0;
     }
-    auto rowSizes = resolveTrackSizes(rowTracks, rowAvailable, rowGap, rowContentSizes);
+    // Rows: the items' min-content block contribution is their laid-out
+    // height, so rowContentSizes doubles as the flexible-row floor.
+    auto rowSizes = resolveTrackSizes(rowTracks, rowAvailable, rowGap, rowContentSizes, rowContentSizes);
 
     // auto-fit: collapse empty tracks to 0
     if (hasAutoFitCols) {
@@ -961,7 +1075,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Re-resolve row sizes with updated content (use the same row available
     // as the first pass so 1fr tracks distribute the container's resolved
     // height, not just intrinsic content size).
-    rowSizes = resolveTrackSizes(rowTracks, rowAvailable, rowGap, rowContentSizes);
+    rowSizes = resolveTrackSizes(rowTracks, rowAvailable, rowGap, rowContentSizes, rowContentSizes);
 
     // CSS Grid stretch step: when the container has a definite resolved size
     // and there is leftover free space (no fr tracks consumed it), distribute

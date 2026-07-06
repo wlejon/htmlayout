@@ -134,6 +134,39 @@ static void testGridFrUnits() {
     check(approx(c2.box.contentRect.width, 200.0f), "2fr = 200px");
 }
 
+static void testGridFrMinContentFloor() {
+    printf("--- Grid: fr track floors at min-content ---\n");
+    GridNode grid;
+    grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-columns"] = "220px 1fr 220px";
+    grid.style_["width"] = "660px";
+    grid.style_["row-gap"] = "0";
+    grid.style_["column-gap"] = "0";
+
+    GridNode c1, c2, c3, inner;
+    c1.initBlock(); c1.style_["height"] = "40px";
+    c2.initBlock();
+    inner.initBlock();
+    inner.style_["width"] = "232px";
+    inner.style_["height"] = "40px";
+    c2.addChild(&inner);
+    c3.initBlock(); c3.style_["height"] = "40px";
+
+    grid.addChild(&c1);
+    grid.addChild(&c2);
+    grid.addChild(&c3);
+
+    GridMetrics metrics;
+    layoutTree(&grid, 800.0f, metrics);
+
+    // Free space would give the 1fr track 220px, but the middle item's
+    // min-content contribution (232px fixed-width child) floors the flexible
+    // track at 232 — overflowing the 660px grid by 12px, matching Chromium.
+    check(approx(c2.box.contentRect.width, 232.0f), "1fr track floored at min-content 232");
+    check(approx(c3.box.contentRect.x, 452.0f), "third track pushed to x=452");
+}
+
 static void testGridMultiRow() {
     printf("--- Grid: multiple rows ---\n");
     GridNode grid;
@@ -643,6 +676,7 @@ void testGridLayout() {
     printf("=== Grid, Color, Attribute, LineHeight, MarginCollapse, Sticky, @supports Tests ===\n");
     testGridFixedColumns();
     testGridFrUnits();
+    testGridFrMinContentFloor();
     testGridMultiRow();
     testGridWithGap();
     testGridRepeat();
