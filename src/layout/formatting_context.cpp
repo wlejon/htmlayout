@@ -367,6 +367,12 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
             computeTableIntrinsicWidths(node, metrics, minW, maxW);
             return maxW;
         }
+        // Grids size by column tracks: the generic "widest child" fallback
+        // below would collapse a fixed-track grid (auto-width items measure
+        // 0) or undercount a multi-column one.
+        if (d == "grid" || d == "inline-grid") {
+            return gridMaxContentWidth(node, metrics);
+        }
     }
 
     float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);

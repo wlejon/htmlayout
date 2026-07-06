@@ -630,7 +630,35 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 float grownContentH = item->finalMain - padV - borV;
                 if (grownContentH < 0) grownContentH = 0;
                 item->node->box.contentRect.height = grownContentH;
-                layoutNode(item->node, containerMain, metrics);
+                // Non-stretch cross alignment sizes an auto-width item to its
+                // fit-content width (CSS Flexbox §9.4 hypothetical cross
+                // size: min(max-content, container width)), not the full
+                // container width; the alignment pass below then positions
+                // the fitted box (center / flex-start / flex-end).
+                float itemAvailW = containerMain;
+                {
+                    const std::string& selfAlign = styleVal(cs, "align-self");
+                    const std::string& effAlign =
+                        (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign;
+                    bool stretches = (effAlign == "stretch" || effAlign == "normal" ||
+                                      effAlign.empty());
+                    const std::string& wVal = styleVal(cs, "width");
+                    if (!stretches && (wVal.empty() || wVal == "auto")) {
+                        float maxC = computeMaxContentWidth(item->node, metrics);
+                        float padH = resolveLength(styleVal(cs, "padding-left"), mainAvailable, ifs) +
+                                     resolveLength(styleVal(cs, "padding-right"), mainAvailable, ifs);
+                        float borH = 0;
+                        if (styleVal(cs, "border-left-style") != "none")
+                            borH += resolveLength(styleVal(cs, "border-left-width"), mainAvailable, ifs);
+                        if (styleVal(cs, "border-right-style") != "none")
+                            borH += resolveLength(styleVal(cs, "border-right-width"), mainAvailable, ifs);
+                        float marH = resolveLength(styleVal(cs, "margin-left"), mainAvailable, ifs) +
+                                     resolveLength(styleVal(cs, "margin-right"), mainAvailable, ifs);
+                        float fit = maxC + padH + borH + marH;
+                        if (fit < itemAvailW) itemAvailW = fit;
+                    }
+                }
+                layoutNode(item->node, itemAvailW, metrics);
                 // Re-apply (block/flex inner layout may have overwritten) — the
                 // flex contract is that the item is finalMain on the main axis.
                 item->node->box.contentRect.height = grownContentH;

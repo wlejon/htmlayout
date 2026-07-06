@@ -523,6 +523,66 @@ GridPlacement parseGridPlacement(const css::ComputedStyle& style,
 
 } // anonymous namespace
 
+float gridMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
+    if (!node) return 0.0f;
+    auto& style = node->computedStyle();
+    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    if (fontSize <= 0) fontSize = 16.0f;
+
+    // Widest in-flow item's outer max-content contribution — the stand-in
+    // for intrinsic (auto/fr/min-content/max-content) tracks. This is an
+    // approximation: proper track sizing distributes items per column, but
+    // for the common fit-content cases (fixed tracks, or a single intrinsic
+    // track) it matches.
+    float itemMax = 0.0f;
+    for (auto* child : getLayoutChildren(node)) {
+        if (child->isTextNode()) continue;
+        auto& cs = child->computedStyle();
+        if (styleVal(cs, "display") == "none") continue;
+        const std::string& cpos = styleVal(cs, "position");
+        if (cpos == "absolute" || cpos == "fixed") continue;
+        float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        if (cfs <= 0) cfs = fontSize;
+        float ph = resolveLength(styleVal(cs, "padding-left"), 0, cfs) +
+                   resolveLength(styleVal(cs, "padding-right"), 0, cfs);
+        float bh = 0;
+        if (styleVal(cs, "border-left-style") != "none")
+            bh += resolveLength(styleVal(cs, "border-left-width"), 0, cfs);
+        if (styleVal(cs, "border-right-style") != "none")
+            bh += resolveLength(styleVal(cs, "border-right-width"), 0, cfs);
+        float mh = resolveLength(styleVal(cs, "margin-left"), 0, cfs) +
+                   resolveLength(styleVal(cs, "margin-right"), 0, cfs);
+        const std::string& wVal = styleVal(cs, "width");
+        float contribution;
+        if (!wVal.empty() && wVal != "auto" && wVal.find('%') == std::string::npos) {
+            float w = resolveLength(wVal, 0, cfs);
+            contribution = (styleVal(cs, "box-sizing") == "border-box")
+                ? w + mh : w + ph + bh + mh;
+        } else {
+            contribution = computeMaxContentWidth(child, metrics) + ph + bh + mh;
+        }
+        itemMax = std::max(itemMax, contribution);
+    }
+
+    // Percentages and auto-fill/auto-fit resolve against an indefinite (0)
+    // available size under max-content sizing.
+    auto tracks = parseTrackList(styleVal(style, "grid-template-columns"), 0.0f, fontSize);
+    if (tracks.empty()) return itemMax;
+
+    float sum = 0.0f;
+    for (const auto& t : tracks) {
+        if (t.isMinmax)
+            sum += (t.maxValue >= 0) ? t.maxValue : itemMax;
+        else if (t.kind == TrackSize::Fixed)
+            sum += t.value;
+        else
+            sum += itemMax; // fr / auto / min-content / max-content
+    }
+    float gap = resolveLength(styleVal(style, "column-gap"), 0, fontSize);
+    if (gap > 0 && tracks.size() > 1) sum += gap * (tracks.size() - 1);
+    return sum;
+}
+
 void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (!node) return;
 
