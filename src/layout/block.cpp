@@ -61,6 +61,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     const std::string& position = styleVal(style, "position");
 
+    // Fresh layout pass: forget any baseline recorded by a previous layout.
+    node->box.baselineOffset = -1.0f;
+
     // Resolve margin, padding, border
     node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
     node->box.padding = resolveEdges(style, "padding", availableWidth, fontSize);
@@ -239,11 +242,44 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize,
             fontFamily, fontWeight, metrics);
 
+        // CSS2 §10.8: every line box starts with the block's strut — a
+        // zero-width inline box with the block's own font and line-height.
+        // A font's natural box (ascent A + descent D) is centered in its
+        // line-height by half-leading; the strut then reaches A + half
+        // above the baseline and D + half below it.
+        float strutNatural = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+        if (strutNatural <= 0) strutNatural = fontSize * 1.2f;
+        float strutAscent = metrics.ascent(fontFamily, fontSize, fontWeight);
+        if (strutAscent <= 0 || strutAscent >= strutNatural)
+            strutAscent = strutNatural * 0.8f;
+        float strutHalf = (lineHeight - strutNatural) * 0.5f;
+        float strutAbove = strutAscent + strutHalf;
+        float strutBelow = (strutNatural - strutAscent) + strutHalf;
+
         struct IFCItem {
             float width = 0, height = 0;
             LayoutNode* node = nullptr;
             bool isElement = false;
             bool forceBreak = false;
+            // CSS2 §10.8 vertical geometry. Every inline-level item spans
+            // [baseline - above, baseline + below] in the line box after
+            // baseline alignment; the line box height is the union of these
+            // extents (plus the block's strut). `baseline` is the distance
+            // from the item's positioned top (run top for text, margin-box
+            // top for atomic inlines, content top for non-replaced inline
+            // elements — see baselineFromContent) down to its baseline.
+            float above = 0;
+            float below = 0;
+            float baseline = 0;
+            // True when `baseline` is measured from the child's contentRect
+            // top (non-replaced inline elements — their padding/border sit
+            // outside the line-height geometry); false when measured from
+            // the margin-box top (inline-blocks and replaced elements).
+            bool baselineFromContent = false;
+            // vertical-align: 0 = baseline, 1 = top, 2 = middle, 3 = bottom.
+            // Non-baseline items don't move the line's baseline; they only
+            // grow the line box when taller than it.
+            int valign = 0;
             // For text runs: the post-processing display string and the
             // source byte range so we can record PlacedTextRun on the text
             // node after line layout.
@@ -299,7 +335,13 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     if (emitContent) {
                         IFCItem it{};
                         it.width = run.width;
-                        it.height = std::max(run.height, lineHeight);
+                        // The run's own box is the font's natural height
+                        // (ascent + descent); the line box grows to the
+                        // block's line-height via above/below instead.
+                        it.height = run.height;
+                        it.above = strutAbove;
+                        it.below = strutBelow;
+                        it.baseline = strutAscent;
                         it.node = child;
                         it.isElement = false;
                         it.forceBreak = false;
@@ -319,6 +361,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         IFCItem brk{};
                         brk.width = 0;
                         brk.height = lineHeight;
+                        brk.above = strutAbove;
+                        brk.below = strutBelow;
+                        brk.baseline = strutAscent;
                         brk.node = child;
                         brk.isElement = false;
                         brk.forceBreak = true;
@@ -337,14 +382,106 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     // returns the inline content height for the <br>, not 0.
                     child->box.contentRect.height = metrics.lineHeight(
                         fontFamily, fontSize, fontWeight);
-                    items.push_back({0.0f, lineHeight, child, false, true});
+                    IFCItem brit{};
+                    brit.width = 0.0f;
+                    brit.height = lineHeight;
+                    brit.above = strutAbove;
+                    brit.below = strutBelow;
+                    brit.baseline = strutAscent;
+                    brit.node = child;
+                    brit.isElement = false;
+                    brit.forceBreak = true;
+                    items.push_back(std::move(brit));
                     continue;
                 }
                 layoutNode(child, childAvailable, metrics);
-                items.push_back({
-                    child->box.fullWidth() + child->box.margin.left + child->box.margin.right,
-                    child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom,
-                    child, true, false});
+
+                IFCItem it{};
+                it.width = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
+                it.height = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
+                it.node = child;
+                it.isElement = true;
+
+                const std::string& va = styleVal(cs, "vertical-align");
+                if (va == "top" || va == "text-top") it.valign = 1;
+                else if (va == "middle") it.valign = 2;
+                else if (va == "bottom" || va == "text-bottom") it.valign = 3;
+
+                float iw = 0, ih = 0;
+                bool replaced = child->intrinsicSize(iw, ih, childAvailable);
+
+                if (replaced) {
+                    // Replaced elements keep their replaced-baseline rules
+                    // regardless of computed display (an <input> is
+                    // inline-block per the UA sheet but has no line boxes of
+                    // its own to take a baseline from).
+                    if (child->hasIntrinsicRatio()) {
+                        // Replaced media (img/canvas/video/svg): baseline is
+                        // the bottom margin edge.
+                        it.baseline = it.height;
+                        it.above = it.height;
+                        it.below = 0;
+                    } else {
+                        // Form controls (input/button/select…): browsers align
+                        // them by the control's internal text baseline, which
+                        // we approximate as sitting a strut-descent above the
+                        // bottom margin edge. This keeps a lone control from
+                        // adding descent space under the line (matching
+                        // Chromium's reported container heights).
+                        float below = std::min(strutBelow, it.height);
+                        if (below < 0) below = 0;
+                        it.baseline = it.height - below;
+                        it.above = it.baseline;
+                        it.below = below;
+                    }
+                } else if (d == "inline-block" || d == "inline-flex" || d == "inline-grid") {
+                    // Atomic inline: baseline is the last line box's baseline
+                    // when the box has in-flow inline content and visible
+                    // overflow; otherwise the bottom margin edge (CSS2
+                    // §10.8.1). The whole margin box participates in line
+                    // sizing — no half-leading.
+                    const std::string& ov = styleVal(cs, "overflow");
+                    bool visibleOv = ov.empty() || ov == "visible";
+                    if (visibleOv && child->box.baselineOffset >= 0) {
+                        it.baseline = child->box.margin.top + child->box.border.top +
+                            child->box.padding.top + child->box.baselineOffset;
+                        if (it.baseline > it.height) it.baseline = it.height;
+                    } else {
+                        it.baseline = it.height;
+                    }
+                    it.above = it.baseline;
+                    it.below = it.height - it.baseline;
+                } else {
+                    // Non-replaced inline element (span/strong/em/…): its
+                    // contribution to the line comes from its own font and
+                    // line-height (number values multiply the element's own
+                    // font-size), NOT from its box height — padding/border on
+                    // an inline never grow the line box. Its content is
+                    // positioned by aligning its first-line baseline with the
+                    // line's baseline.
+                    float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                    if (cfs <= 0) cfs = fontSize;
+                    const std::string& cff = styleVal(cs, "font-family");
+                    const std::string& cfw = styleVal(cs, "font-weight");
+                    float cNatural = metrics.lineHeight(cff, cfs, cfw);
+                    if (cNatural <= 0) cNatural = cfs * 1.2f;
+                    float cAscent = metrics.ascent(cff, cfs, cfw);
+                    if (cAscent <= 0 || cAscent >= cNatural) cAscent = cNatural * 0.8f;
+                    float cLH = resolveLineHeight(styleVal(cs, "line-height"),
+                        cfs, cff, cfw, metrics);
+                    float cHalf = (cLH - cNatural) * 0.5f;
+
+                    float b = (child->box.baselineOffset >= 0)
+                        ? child->box.baselineOffset : cAscent;
+                    it.baseline = b;
+                    it.baselineFromContent = true;
+                    // Nested content taller than the element's own font
+                    // (e.g. a bigger-font span inside) still has to fit.
+                    it.above = std::max(cAscent + cHalf, b);
+                    it.below = std::max((cNatural - cAscent) + cHalf,
+                                        child->box.contentRect.height - b);
+                }
+                items.push_back(std::move(it));
             }
         }
 
@@ -402,32 +539,29 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             return itemEndsInSpace(items[prev]) || itemStartsInSpace(items[next]);
         };
 
-        struct LineBounds { size_t start; size_t end; float totalWidth; float maxHeight; };
+        struct LineBounds {
+            size_t start; size_t end; float totalWidth;
+            float maxHeight = 0;   // final line box height
+            float above = 0;       // distance from line top to the baseline
+        };
         std::vector<LineBounds> lines;
         {
             size_t lineStart = 0;
-            float cursorX = 0, lineMaxH = 0;
+            float cursorX = 0;
             auto emitLine = [&](size_t endIdx) {
-                float w = 0, h = 0;
-                for (size_t k = lineStart; k < endIdx; ++k) {
-                    w += items[k].width;
-                    h = std::max(h, items[k].height);
-                }
-                if (lineStart == endIdx && h == 0) h = lineMaxH;
-                lines.push_back({lineStart, endIdx, w, h});
+                float w = 0;
+                for (size_t k = lineStart; k < endIdx; ++k) w += items[k].width;
+                lines.push_back({lineStart, endIdx, w});
                 lineStart = endIdx;
                 cursorX = 0;
-                lineMaxH = 0;
             };
             for (size_t i = 0; i < items.size(); i++) {
                 if (items[i].forceBreak) {
                     // <br>: terminate line after including the break marker so it
-                    // advances cursorY by lineHeight even if the line was empty.
-                    if (cursorX == 0 && lineMaxH == 0) lineMaxH = items[i].height;
-                    lines.push_back({lineStart, i + 1, cursorX, lineMaxH});
+                    // advances cursorY by a full line even if the line was empty.
+                    lines.push_back({lineStart, i + 1, cursorX});
                     lineStart = i + 1;
                     cursorX = 0;
-                    lineMaxH = 0;
                     continue;
                 }
                 if (whiteSpace != "nowrap" && cursorX > 0 && cursorX + items[i].width > childAvailable) {
@@ -445,15 +579,63 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     emitLine(breakIdx);
                     for (size_t k = breakIdx; k < i; ++k) {
                         cursorX += items[k].width;
-                        lineMaxH = std::max(lineMaxH, items[k].height);
                     }
                 }
                 cursorX += items[i].width;
-                lineMaxH = std::max(lineMaxH, items[i].height);
             }
             if (lineStart < items.size()) {
-                lines.push_back({lineStart, items.size(), cursorX, lineMaxH});
+                lines.push_back({lineStart, items.size(), cursorX});
             }
+        }
+
+        // Collapsible whitespace at a soft-wrap boundary is removed: a run
+        // that starts a wrapped line drops its leading space and a run that
+        // ends any line drops its trailing space (CSS Text §white-space
+        // processing). Adjust the line's width so alignment math matches.
+        if (whiteSpace != "pre" && whiteSpace != "pre-wrap") {
+            float spW = spaceWidth;
+            for (auto& line : lines) {
+                if (line.start >= line.end) continue;
+                IFCItem& first = items[line.start];
+                if (!first.isElement && !first.forceBreak) {
+                    while (!first.text.empty() && first.text.front() == ' ') {
+                        first.text.erase(first.text.begin());
+                        first.width = std::max(0.0f, first.width - spW);
+                        line.totalWidth = std::max(0.0f, line.totalWidth - spW);
+                    }
+                }
+                IFCItem& last = items[line.end - 1];
+                if (!last.isElement && !last.forceBreak) {
+                    while (!last.text.empty() && last.text.back() == ' ') {
+                        last.text.pop_back();
+                        last.width = std::max(0.0f, last.width - spW);
+                        line.totalWidth = std::max(0.0f, line.totalWidth - spW);
+                    }
+                }
+            }
+        }
+
+        // Resolve each line's vertical geometry (CSS2 §10.8): baseline-align
+        // the items, take the union of their [baseline-above, baseline+below]
+        // extents together with the block's strut, then let any top/middle/
+        // bottom-aligned item that is still taller than the line grow it
+        // downward (the baseline does not move).
+        for (auto& line : lines) {
+            float above = strutAbove;
+            float below = strutBelow;
+            for (size_t k = line.start; k < line.end; ++k) {
+                const IFCItem& it = items[k];
+                if (it.valign != 0) continue;
+                above = std::max(above, it.above);
+                below = std::max(below, it.below);
+            }
+            for (size_t k = line.start; k < line.end; ++k) {
+                const IFCItem& it = items[k];
+                if (it.valign == 0) continue;
+                if (it.height > above + below) below = it.height - above;
+            }
+            line.above = above;
+            line.maxHeight = above + below;
         }
 
         // Resolve text-indent (first line only)
@@ -478,34 +660,52 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             float cursorX = xOffset;
             if (lineIdx == 0) cursorX += textIndent;
 
+            float lineBaseline = cursorY + line.above;
+
             for (size_t i = line.start; i < line.end; i++) {
                 auto& item = items[i];
                 if (item.forceBreak) {
                     if (item.node) {
-                        // Position the <br> at line-end x and vertically
-                        // centered within the line box so its rect matches
-                        // Chromium's getBoundingClientRect.
-                        float brH = item.node->box.contentRect.height;
-                        float halfLeading = (line.maxHeight - brH) * 0.5f;
-                        if (halfLeading < 0) halfLeading = 0;
+                        // Position the <br> at line-end x with its natural
+                        // font box hung on the line's baseline so its rect
+                        // matches Chromium's getBoundingClientRect.
+                        float brY = lineBaseline - strutAscent;
+                        if (brY < cursorY) brY = cursorY;
                         item.node->box.contentRect.x = cursorX;
-                        item.node->box.contentRect.y = cursorY + halfLeading;
+                        item.node->box.contentRect.y = brY;
                         item.node->box.contentRect.width = 0;
                     }
                     continue;
                 }
                 if (item.node) {
                     if (item.isElement) {
+                        // Vertical position: align baselines by default;
+                        // vertical-align top/middle/bottom position the
+                        // margin box against the line box instead.
+                        float yTop;
+                        switch (item.valign) {
+                            case 1: yTop = cursorY; break;
+                            case 2: yTop = cursorY + (line.maxHeight - item.height) * 0.5f; break;
+                            case 3: yTop = cursorY + line.maxHeight - item.height; break;
+                            default: yTop = lineBaseline - item.baseline; break;
+                        }
                         item.node->box.contentRect.x = cursorX + item.node->box.margin.left +
                             item.node->box.padding.left + item.node->box.border.left;
-                        item.node->box.contentRect.y = cursorY + item.node->box.margin.top +
-                            item.node->box.padding.top + item.node->box.border.top;
+                        if (item.baselineFromContent && item.valign == 0) {
+                            // Non-replaced inline: `baseline` is measured
+                            // from the content top — padding/border sit
+                            // outside the line geometry and don't shift it.
+                            item.node->box.contentRect.y = yTop;
+                        } else {
+                            item.node->box.contentRect.y = yTop + item.node->box.margin.top +
+                                item.node->box.padding.top + item.node->box.border.top;
+                        }
                     } else {
                         // Record the placed run so caret/selection geometry
                         // queries can map DOM offsets back to (x, y, w, h).
                         PlacedTextRun placed;
                         placed.x = cursorX;
-                        placed.y = cursorY;
+                        placed.y = lineBaseline - item.baseline;
                         placed.width = item.width;
                         placed.height = item.height;
                         placed.text = item.text;
@@ -513,19 +713,19 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         placed.srcEnd = item.srcEnd;
                         auto& trs = item.node->box.textRuns;
                         if (trs.empty()) {
-                            item.node->box.contentRect.x = cursorX;
-                            item.node->box.contentRect.y = cursorY;
-                            item.node->box.contentRect.width = item.width;
-                            item.node->box.contentRect.height = item.height;
+                            item.node->box.contentRect.x = placed.x;
+                            item.node->box.contentRect.y = placed.y;
+                            item.node->box.contentRect.width = placed.width;
+                            item.node->box.contentRect.height = placed.height;
                         } else {
-                            float left = std::min(item.node->box.contentRect.x, cursorX);
-                            float top  = std::min(item.node->box.contentRect.y, cursorY);
+                            float left = std::min(item.node->box.contentRect.x, placed.x);
+                            float top  = std::min(item.node->box.contentRect.y, placed.y);
                             float right = std::max(
                                 item.node->box.contentRect.x + item.node->box.contentRect.width,
-                                cursorX + item.width);
+                                placed.x + placed.width);
                             float bottom = std::max(
                                 item.node->box.contentRect.y + item.node->box.contentRect.height,
-                                cursorY + item.height);
+                                placed.y + placed.height);
                             item.node->box.contentRect.x = left;
                             item.node->box.contentRect.y = top;
                             item.node->box.contentRect.width = right - left;
@@ -537,6 +737,14 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 cursorX += item.width + gap;
             }
             cursorY += line.maxHeight;
+        }
+
+        // The block's own baseline: the last line box's baseline, measured
+        // from the content top (used when this block is an inline-block
+        // child of another IFC).
+        if (!lines.empty()) {
+            node->box.baselineOffset =
+                (cursorY - lines.back().maxHeight) + lines.back().above;
         }
     } else {
     // Block formatting context: layout children vertically

@@ -486,6 +486,145 @@ static void testTextIndent() {
     check(approx(textNode.box.contentRect.x, 30, 2), "text-indent: first line indented 30px");
 }
 
+// ========== Line box vertical geometry (CSS2 §10.8) ==========
+
+// Metrics whose vertical values scale with font-size so mixed-size line
+// geometry is observable: natural line box = 1.25 * fontSize, and the
+// default TextMetrics::ascent (0.8 * natural) = exactly fontSize.
+// Width stays 10px/char regardless of size.
+struct ScaledTextMetrics : public TextMetrics {
+    float measureWidth(std::string_view text,
+                       std::string_view, float,
+                       std::string_view) override {
+        return static_cast<float>(text.size()) * 10.0f;
+    }
+    float lineHeight(std::string_view, float fontSize,
+                     std::string_view) override {
+        return fontSize * 1.25f;
+    }
+};
+
+static void testMixedFontSizeLineBox() {
+    printf("--- Line box: mixed font sizes, per-box line-height ---\n");
+    // <div style="width:150; font-size:16px; line-height:1.5">
+    //   "aaaa"<span style="font-size:32px">BB</span>" ccccc ddddd"
+    // Block font: natural 20, ascent 16, LH 24 -> strut above 18 / below 6.
+    // Big span:   natural 40, ascent 32, LH 48 -> above 36 / below 12.
+    // Line 1 ("aaaa" + span, 60px): above 36, below 12 -> 48px tall.
+    // Line 2 (wrapped text only):   24px tall. Total 72.
+    InlineMockNode root;
+    initBlock(root);
+    root.style["width"] = "150px";
+    root.style["line-height"] = "1.5";
+
+    InlineMockNode t1;
+    t1.isText = true;
+    t1.text = "aaaa";
+    root.addChild(&t1);
+
+    InlineMockNode big;
+    initInline(big);
+    big.style["font-size"] = "32px";
+    big.style["line-height"] = "1.5";
+    root.addChild(&big);
+
+    InlineMockNode bigText;
+    bigText.isText = true;
+    bigText.text = "BB";
+    big.addChild(&bigText);
+
+    InlineMockNode t2;
+    t2.isText = true;
+    t2.text = " ccccc ddddd";
+    root.addChild(&t2);
+
+    ScaledTextMetrics m;
+    layoutTree(&root, 500, m);
+
+    check(approx(root.box.contentRect.height, 72),
+          "mixed sizes: block height = 48 + 24 (big span grows only its line)");
+    // Baseline of line 1 sits at max-above = 36. Text hangs ascent above it.
+    check(t1.box.textRuns.size() == 1 && approx(t1.box.textRuns[0].y, 20),
+          "mixed sizes: 16px run top = baseline(36) - ascent(16)");
+    check(approx(big.box.contentRect.y, 4),
+          "mixed sizes: 32px span top = baseline(36) - ascent(32)");
+    check(approx(big.box.contentRect.height, 40),
+          "mixed sizes: inline span rect is its natural font box, not line-height");
+    // Wrapped line: leading collapsible space is dropped, run starts at x=0,
+    // and sits on line 2's baseline (48 + 18 - 16 = 50).
+    check(t2.box.textRuns.size() == 1 && approx(t2.box.textRuns[0].x, 0),
+          "wrap: leading space trimmed from wrapped line");
+    check(approx(t2.box.textRuns[0].width, 110),
+          "wrap: trimmed run width excludes the leading space");
+    check(approx(t2.box.textRuns[0].y, 50),
+          "wrap: line 2 run top = 48 + strutAbove(18) - ascent(16)");
+}
+
+static void testInlineBlockBaselineAlignment() {
+    printf("--- Line box: inline-block aligns by last-line baseline ---\n");
+    // <div style="font-size:16px; line-height:1.5">
+    //   "xx"<ib style="width:50;height:30">yy</ib>
+    // ib internal line: h = max(natural 20, LH 24) = 24, half-leading 2,
+    // baseline = 2 + 16 = 18 from its content top. In the outer line the ib
+    // spans [18 above, 12 below]; strut is [18, 6] -> line 30px tall.
+    InlineMockNode root;
+    initBlock(root);
+    root.style["width"] = "300px";
+    root.style["line-height"] = "1.5";
+
+    InlineMockNode t1;
+    t1.isText = true;
+    t1.text = "xx";
+    root.addChild(&t1);
+
+    InlineMockNode ib;
+    initInline(ib);
+    ib.style["display"] = "inline-block";
+    ib.style["width"] = "50px";
+    ib.style["height"] = "30px";
+    ib.style["line-height"] = "1.5";
+    root.addChild(&ib);
+
+    InlineMockNode ibText;
+    ibText.isText = true;
+    ibText.text = "yy";
+    ib.addChild(&ibText);
+
+    ScaledTextMetrics m;
+    layoutTree(&root, 500, m);
+
+    check(approx(ib.box.baselineOffset, 18),
+          "ib: internal baseline = half-leading(2) + ascent(16)");
+    check(approx(root.box.contentRect.height, 30),
+          "ib: line height = ib above(18) + ib below(12)");
+    check(approx(ib.box.contentRect.y, 0),
+          "ib: top of box at line top (its baseline defines max-above)");
+    check(t1.box.textRuns.size() == 1 && approx(t1.box.textRuns[0].y, 2),
+          "ib: sibling text top = shared baseline(18) - ascent(16)");
+}
+
+static void testPlainTextLineUsesLineHeight() {
+    printf("--- Line box: text-only line respects CSS line-height ---\n");
+    InlineMockNode root;
+    initBlock(root);
+    root.style["width"] = "300px";
+    root.style["line-height"] = "2";   // 32px lines from 16px font
+
+    InlineMockNode t1;
+    t1.isText = true;
+    t1.text = "hello";
+    root.addChild(&t1);
+
+    ScaledTextMetrics m;
+    layoutTree(&root, 500, m);
+
+    check(approx(root.box.contentRect.height, 32),
+          "line-height 2: block height = 32");
+    // Half-leading = (32 - 20) / 2 = 6; run top = 6.
+    check(t1.box.textRuns.size() == 1 && approx(t1.box.textRuns[0].y, 6),
+          "line-height 2: run centered by half-leading");
+}
+
 // ========== Entry point ==========
 
 void testInlineLayout() {
@@ -516,4 +655,9 @@ void testInlineLayout() {
     testLetterSpacing();
     testWordSpacing();
     testTextIndent();
+
+    // Line box vertical geometry (CSS2 §10.8)
+    testMixedFontSizeLineBox();
+    testInlineBlockBaselineAlignment();
+    testPlainTextLineUsesLineHeight();
 }

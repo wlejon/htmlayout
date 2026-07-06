@@ -61,6 +61,15 @@ struct LayoutBox {
     // for every other kind of node. Cleared on each relayout.
     std::vector<PlacedTextRun> textRuns;
 
+    // Distance from the top of contentRect to the box's text baseline, set
+    // by inline layout when the box has inline-level content. Inline boxes
+    // record their first-line baseline (the parent line box aligns an inline
+    // child by its first line); blocks and inline-blocks record their last
+    // in-flow line's baseline (CSS2 §10.8.1: the baseline of an inline-block
+    // is the baseline of its last line box). Negative means "no baseline" —
+    // per spec the parent then synthesizes one from the bottom margin edge.
+    float baselineOffset = -1.0f;
+
     // Full box dimensions including padding + border
     float fullWidth() const { return contentRect.width + padding.left + padding.right + border.left + border.right; }
     float fullHeight() const { return contentRect.height + padding.top + padding.bottom + border.top + border.bottom; }
@@ -148,6 +157,17 @@ struct TextMetrics {
     virtual float lineHeight(std::string_view fontFamily,
                               float fontSize,
                               std::string_view fontWeight) = 0;
+    // Distance from the top of the font's natural line box (ascent+descent
+    // (+leading)) to the alphabetic baseline. Used for CSS2 §10.8 baseline
+    // alignment of line-box contents. The default approximates the ascent as
+    // 80% of the natural line height — close to the ascent share of common
+    // UI fonts — so consumers that only implement the two pure virtuals keep
+    // working; override to supply exact metrics from the font backend.
+    virtual float ascent(std::string_view fontFamily,
+                         float fontSize,
+                         std::string_view fontWeight) {
+        return 0.8f * lineHeight(fontFamily, fontSize, fontWeight);
+    }
 };
 
 // Viewport dimensions for layout

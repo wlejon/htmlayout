@@ -41,6 +41,10 @@ struct LineBox {
     float totalWidth = 0;
     float maxHeight = 0;
     float maxBaseline = 0;
+    // Deepest extent below the baseline among the items (height - baseline).
+    // After baseline alignment the line box must span
+    // maxBaseline + maxDescent, which can exceed the tallest single item.
+    float maxDescent = 0;
 };
 
 // Distribute items into line boxes that fit within availableWidth.
@@ -71,11 +75,14 @@ std::vector<LineBox> buildLineBoxes(
         line.totalWidth = 0;
         line.maxHeight = 0;
         line.maxBaseline = 0;
+        line.maxDescent = 0;
         for (auto& it : line.items) {
             line.totalWidth += it.width;
             line.maxHeight   = std::max(line.maxHeight, it.height);
             line.maxBaseline = std::max(line.maxBaseline, it.baseline);
+            line.maxDescent  = std::max(line.maxDescent, it.height - it.baseline);
         }
+        line.maxHeight = std::max(line.maxHeight, line.maxBaseline + line.maxDescent);
     };
 
     std::vector<LineBox> lines;
@@ -130,6 +137,9 @@ std::vector<LineBox> buildLineBoxes(
         currentLine.totalWidth += item.width;
         currentLine.maxHeight = std::max(currentLine.maxHeight, item.height);
         currentLine.maxBaseline = std::max(currentLine.maxBaseline, item.baseline);
+        currentLine.maxDescent = std::max(currentLine.maxDescent, item.height - item.baseline);
+        currentLine.maxHeight = std::max(currentLine.maxHeight,
+                                         currentLine.maxBaseline + currentLine.maxDescent);
     }
 
     if (!currentLine.items.empty()) {
@@ -177,6 +187,9 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     const std::string& direction = styleVal(style, "direction");
     bool isRtl = (direction == "rtl");
     const std::string& display = styleVal(style, "display");
+
+    // Fresh layout pass: forget any baseline recorded by a previous layout.
+    node->box.baselineOffset = -1.0f;
 
     // Resolve margin, padding, border for the node itself
     node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
@@ -288,6 +301,9 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             // Inline content in inline-block: measure text and inline children
             float ibLineHeight = resolveLineHeight(lineHeightVal, fontSize,
                 fontFamily, fontWeight, metrics);
+            // Font ascent for baseline bookkeeping: text runs are hung on a
+            // baseline that sits half-leading + ascent below the line top.
+            float ibAscent = metrics.ascent(fontFamily, fontSize, fontWeight);
             float cursorX = 0, lineMaxH = 0;
             for (auto* child : getLayoutChildren(node)) {
                 if (child->isTextNode()) {
@@ -307,30 +323,41 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                             cursorX = 0;
                             lineMaxH = 0;
                         }
+                        // Center the font's natural box in the line via
+                        // half-leading; the glyph baseline then sits at
+                        // placed.y + ascent, and the box's reported baseline
+                        // (for the parent line box to align against) tracks
+                        // the LAST placed run — CSS2 §10.8.1 gives an
+                        // inline-block the baseline of its last line box.
+                        float halfLead = (h - run.height) * 0.5f;
+                        if (halfLead < 0) halfLead = 0;
                         PlacedTextRun placed;
                         placed.x = cursorX;
-                        placed.y = cursorY;
+                        placed.y = cursorY + halfLead;
                         placed.width = run.width;
-                        placed.height = h;
+                        placed.height = run.height;
                         placed.text = run.text;
                         placed.srcStart = run.srcStart;
                         placed.srcEnd   = run.srcEnd;
+                        float runAscent = (ibAscent > 0 && ibAscent < run.height)
+                            ? ibAscent : run.height * 0.8f;
+                        node->box.baselineOffset = placed.y + runAscent;
                         // Record first run's position on contentRect so the
                         // draw traversal knows the text node's origin.
                         if (firstRun) {
-                            child->box.contentRect.x = cursorX;
-                            child->box.contentRect.y = cursorY;
-                            child->box.contentRect.width = run.width;
-                            child->box.contentRect.height = h;
+                            child->box.contentRect.x = placed.x;
+                            child->box.contentRect.y = placed.y;
+                            child->box.contentRect.width = placed.width;
+                            child->box.contentRect.height = placed.height;
                             firstRun = false;
                         } else {
                             // Extend to union of placed runs.
                             float right = std::max(
                                 child->box.contentRect.x + child->box.contentRect.width,
-                                cursorX + run.width);
+                                placed.x + placed.width);
                             float bottom = std::max(
                                 child->box.contentRect.y + child->box.contentRect.height,
-                                cursorY + h);
+                                placed.y + placed.height);
                             child->box.contentRect.width  = right  - child->box.contentRect.x;
                             child->box.contentRect.height = bottom - child->box.contentRect.y;
                         }
@@ -428,6 +455,10 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     float contentAvail = availableWidth - paddingH - borderH;
     std::vector<LineItem> allItems;
 
+    // Font ascent for this element's own text runs: their baseline within
+    // the run box (natural font height) sits `ascent` below the run top.
+    float ownAscent = metrics.ascent(fontFamily, fontSize, fontWeight);
+
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
             // Break text into runs
@@ -448,7 +479,8 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 item.text = run.text;
                 item.width = run.width;
                 item.height = run.height;
-                item.baseline = run.height * 0.8f; // approximate baseline at 80% of height
+                item.baseline = (ownAscent > 0 && ownAscent < run.height)
+                    ? ownAscent : run.height * 0.8f;
                 item.node = child;
                 item.srcStart = run.srcStart;
                 item.srcEnd   = run.srcEnd;
@@ -497,7 +529,18 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 LineItem item;
                 item.width = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
                 item.height = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
-                item.baseline = item.height * 0.8f;
+                // CSS2 §10.8.1: an inline-block's baseline is its last line
+                // box's baseline when it has in-flow content and visible
+                // overflow, else its bottom margin edge.
+                const std::string& ov = styleVal(childStyle, "overflow");
+                bool visibleOv = ov.empty() || ov == "visible";
+                if (visibleOv && child->box.baselineOffset >= 0) {
+                    item.baseline = std::min(item.height,
+                        child->box.margin.top + child->box.border.top +
+                        child->box.padding.top + child->box.baselineOffset);
+                } else {
+                    item.baseline = item.height;
+                }
                 item.node = child;
                 item.isInlineBlock = true;
                 allItems.push_back(std::move(item));
@@ -507,7 +550,8 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 LineItem item;
                 item.width = child->box.fullWidth();
                 item.height = child->box.fullHeight();
-                item.baseline = item.height * 0.8f;
+                item.baseline = (child->box.baselineOffset >= 0)
+                    ? child->box.baselineOffset : item.height * 0.8f;
                 item.node = child;
                 allItems.push_back(std::move(item));
             } else {
@@ -629,6 +673,12 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     }
     node->box.contentRect.width = maxLineWidth;
     node->box.contentRect.height = cursorY;
+
+    // Record the first-line baseline: a parent line box aligns an inline
+    // element by the baseline of its first line box.
+    if (!lineBoxes.empty()) {
+        node->box.baselineOffset = lineBoxes.front().maxBaseline;
+    }
 
     // Text-overflow detection: mark if content was truncated
     const std::string& textOverflow = styleVal(style, "text-overflow");
