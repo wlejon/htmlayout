@@ -1502,6 +1502,34 @@ static void testAbsNegativeOffsets() {
     check(approx(b.box.contentRect.y, 130.0f), "bottom:-60px hangs below the container");
 }
 
+// ===== Flex items are independent FCs: child margins stay inside =====
+static void testFlexItemMarginContained() {
+    printf("--- Flex item: child margins don't collapse through ---\n");
+    LxNode flex; flex.initBase();
+    flex.style_["display"] = "flex";
+    flex.style_["width"] = "400px";
+
+    LxNode item; item.initBase();
+    item.style_["width"] = "200px"; // block-level flex item
+
+    LxNode p; p.initBase();
+    p.style_["height"] = "20px";
+    p.style_["margin-top"] = "8px";
+    p.style_["margin-bottom"] = "10px";
+    item.addChild(&p);
+    flex.addChild(&item);
+
+    LxMetrics m;
+    layoutTree(&flex, 800, m);
+
+    check(approx(item.box.contentRect.height, 38.0f),
+          "flex item height contains child margins (8+20+10)");
+    check(approx(item.box.margin.bottom, 0.0f),
+          "child's margin-bottom does not escape the flex item");
+    check(approx(p.box.contentRect.y, 8.0f),
+          "child margin-top stays inside the flex item");
+}
+
 void testLayoutExtra() {
     printf("=== Extra Layout Tests ===\n");
     testBlockReplacedMaxWidthRatio();
@@ -1556,4 +1584,5 @@ void testLayoutExtra() {
     testMidRunFloatKeepsLine();
     testShapeOutsideCircleWrap();
     testAbsNegativeOffsets();
+    testFlexItemMarginContained();
 }

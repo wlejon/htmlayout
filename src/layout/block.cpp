@@ -897,6 +897,15 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         const std::string& flt = styleVal(style, "float");
         if (flt == "left" || flt == "right")
             establishesBFC = true;
+        // A flex or grid item establishes an independent formatting context
+        // (Flexbox §4, Grid §6.1): its children's margins never collapse
+        // with it and it contains its floats.
+        if (LayoutNode* p = node->parent()) {
+            const std::string& pd = styleVal(p->computedStyle(), "display");
+            if (pd == "flex" || pd == "inline-flex" ||
+                pd == "grid" || pd == "inline-grid")
+                establishesBFC = true;
+        }
         // Multi-column containers are formatting-context roots too.
         const std::string& mcCount = styleVal(style, "column-count");
         const std::string& mcWidth = styleVal(style, "column-width");
