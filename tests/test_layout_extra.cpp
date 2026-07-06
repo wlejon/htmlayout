@@ -1530,6 +1530,29 @@ static void testFlexItemMarginContained() {
           "child margin-top stays inside the flex item");
 }
 
+// ===== naturalHeight(): text rects vs line-height:normal =====
+static void testNaturalHeightTextRects() {
+    printf("--- naturalHeight(): text rect uses ascent+descent, line advance uses line-height ---\n");
+    // lineHeight (normal) = 20 from LxMetrics; naturalHeight = 17 like a
+    // font whose round(ascent)+round(descent) excludes the line gap.
+    struct NHMetrics : LxMetrics {
+        float naturalHeight(std::string_view, float, std::string_view) override {
+            return 17.0f;
+        }
+    };
+
+    LxNode root; root.initBase();
+    root.style_["width"] = "200px";
+    LxNode t; t.initBase(); t.isText = true; t.text = "hi";
+    root.addChild(&t);
+
+    NHMetrics m;
+    layoutTree(&root, 800, m);
+
+    check(approx(t.box.contentRect.height, 17.0f), "text run rect height = naturalHeight");
+    check(approx(root.box.contentRect.height, 20.0f), "line box still advances by line-height");
+}
+
 void testLayoutExtra() {
     printf("=== Extra Layout Tests ===\n");
     testBlockReplacedMaxWidthRatio();
@@ -1585,4 +1608,5 @@ void testLayoutExtra() {
     testShapeOutsideCircleWrap();
     testAbsNegativeOffsets();
     testFlexItemMarginContained();
+    testNaturalHeightTextRects();
 }

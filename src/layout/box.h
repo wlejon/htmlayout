@@ -193,6 +193,18 @@ struct TextMetrics {
         (void)fontFamily; (void)fontWeight;
         return 0.5f * fontSize;
     }
+    // Natural height of a text run's rect: round(ascent) + round(descent),
+    // WITHOUT the font's line gap. Chromium reports inline/text-run rects
+    // at this height (17 for 16px Arial) while line-height:normal — what
+    // lineHeight() returns — additionally includes round(lineGap) (18).
+    // The default returns lineHeight() so existing TextMetrics
+    // implementations keep their current behavior; override to supply the
+    // exact metric from the font backend.
+    virtual float naturalHeight(std::string_view fontFamily,
+                                float fontSize,
+                                std::string_view fontWeight) {
+        return lineHeight(fontFamily, fontSize, fontWeight);
+    }
 };
 
 // Viewport dimensions for layout

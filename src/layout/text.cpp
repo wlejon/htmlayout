@@ -86,7 +86,10 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
     // the srcStart/srcEnd offsets still index the original DOM text.
     const std::string text = applyTextTransform(srcText, textTransform);
 
-    float lineH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+    // Runs carry the font's natural rect height (ascent+descent, no line
+    // gap) — the height Chromium reports for text/inline rects. Line boxes
+    // still advance by line-height via the strut in block.cpp.
+    float lineH = metrics.naturalHeight(fontFamily, fontSize, fontWeight);
 
     // Helper: measure text width with letter-spacing applied between glyphs.
     // CSS spec adds letter-spacing as advance after every character including
