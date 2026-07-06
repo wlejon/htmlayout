@@ -1258,6 +1258,98 @@ static void testVerticalAlignMiddleBaselineCentered() {
     check(approx(root.box.contentRect.height, 46.5f, 0.1f), "container is 3 x 15.5");
 }
 
+// ===== Multi-column balancing =====
+static void testMulticolBalanceMinHeight() {
+    printf("--- multicol: balance to the minimal feasible column height ---\n");
+    // 6 paragraphs (h8, margin-bottom 9) into 3 columns: two per column,
+    // margins truncated at each column top -> H = 8 + 9 + 8 = 25.
+    LxNode root; root.initBase();
+    root.style_["column-count"] = "3";
+    root.style_["width"] = "300px";
+
+    LxNode p[6];
+    for (auto& n : p) {
+        n.initBase();
+        n.style_["height"] = "8px";
+        n.style_["margin-bottom"] = "9px";
+        root.addChild(&n);
+    }
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  h=%.1f (expect 25); p2 at (%.1f,%.1f) expect (100,0); p3 at (%.1f,%.1f) expect (100,17)\n",
+           root.box.contentRect.height,
+           p[2].box.contentRect.x, p[2].box.contentRect.y,
+           p[3].box.contentRect.x, p[3].box.contentRect.y);
+    check(approx(root.box.contentRect.height, 25, 0.1f), "balanced height is 25");
+    check(approx(p[0].box.contentRect.y, 0, 0.1f), "col1 first item at top");
+    check(approx(p[1].box.contentRect.y, 17, 0.1f), "second item stacks with its margin");
+    check(approx(p[2].box.contentRect.x, 100, 0.1f) && approx(p[2].box.contentRect.y, 0, 0.1f),
+          "col2 starts with the third item, margin truncated at the break");
+    check(approx(p[4].box.contentRect.x, 200, 0.1f), "col3 gets the last two items");
+}
+
+static void testMulticolTallUnbreakable() {
+    printf("--- multicol: tallest unbreakable item floors the balance ---\n");
+    // 40 + 40 + 120 into 3 columns: H = 120 (the unbreakable item), filled
+    // Chromium-style -> col1 {40,40}, col2 {120}, not one item per column.
+    LxNode root; root.initBase();
+    root.style_["column-count"] = "3";
+    root.style_["width"] = "300px";
+
+    LxNode a; a.initBase(); a.style_["height"] = "40px";
+    LxNode b; b.initBase(); b.style_["height"] = "40px";
+    LxNode c; c.initBase(); c.style_["height"] = "120px";
+    root.addChild(&a); root.addChild(&b); root.addChild(&c);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  h=%.1f (expect 120); b at (%.1f,%.1f) expect (0,40); c at (%.1f,%.1f) expect (100,0)\n",
+           root.box.contentRect.height,
+           b.box.contentRect.x, b.box.contentRect.y,
+           c.box.contentRect.x, c.box.contentRect.y);
+    check(approx(root.box.contentRect.height, 120, 0.1f), "container height = tallest item");
+    check(approx(b.box.contentRect.x, 0, 0.1f) && approx(b.box.contentRect.y, 40, 0.1f),
+          "second item stays in column 1");
+    check(approx(c.box.contentRect.x, 100, 0.1f) && approx(c.box.contentRect.y, 0, 0.1f),
+          "tall item opens column 2");
+}
+
+static void testMulticolInlineLines() {
+    printf("--- multicol: inline content fragments by line boxes ---\n");
+    // 6 inline-blocks (40px + 5px margin) in 2 columns of 100px: two per
+    // line, three lines, balanced 2/1 across the columns.
+    LxNode root; root.initBase();
+    root.style_["column-count"] = "2";
+    root.style_["width"] = "200px";
+
+    LxNode w[6];
+    for (auto& n : w) {
+        n.initBase();
+        n.style_["display"] = "inline-block";
+        n.style_["width"] = "40px";
+        n.style_["height"] = "10px";
+        n.style_["margin-right"] = "5px";
+        root.addChild(&n);
+    }
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    // Lines are 20px (the strut); a baseline-aligned 10px item hangs at
+    // y = ascent 16 - 10 = 6 within its line.
+    printf("  w0 (%.1f,%.1f) w2 (%.1f,%.1f) w4 (%.1f,%.1f); h=%.1f (expect 40)\n",
+           w[0].box.contentRect.x, w[0].box.contentRect.y,
+           w[2].box.contentRect.x, w[2].box.contentRect.y,
+           w[4].box.contentRect.x, w[4].box.contentRect.y,
+           root.box.contentRect.height);
+    check(approx(w[0].box.contentRect.x, 0, 0.1f) && approx(w[0].box.contentRect.y, 6, 0.1f),
+          "line 1 starts column 1");
+    check(approx(w[2].box.contentRect.y, 26, 0.1f), "line 2 below line 1 (20px lines)");
+    check(approx(w[4].box.contentRect.x, 100, 0.1f) && approx(w[4].box.contentRect.y, 6, 0.1f),
+          "line 3 fragments into column 2");
+    check(approx(root.box.contentRect.height, 40, 0.1f), "balanced to two lines per column");
+}
+
 // ===== Floats: containment and escape (CSS2 §10.6.3 / §9.4.1) =====
 static void testFloatNotContainedByAutoHeight() {
     printf("--- float: does not extend a non-BFC parent's auto height ---\n");
@@ -1421,6 +1513,9 @@ void testLayoutExtra() {
     testLeadingSplitFloorZeroFont();
     testLeadingSplitFloorRealFont();
     testVerticalAlignMiddleBaselineCentered();
+    testMulticolBalanceMinHeight();
+    testMulticolTallUnbreakable();
+    testMulticolInlineLines();
     testFloatNotContainedByAutoHeight();
     testFloatContainedByBFC();
     testMidRunFloatKeepsLine();

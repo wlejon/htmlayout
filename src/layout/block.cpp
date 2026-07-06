@@ -1637,77 +1637,206 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     child->box.margin.bottom;
                 totalY += childFullH;
             } else {
-                // Layout segment children into columns
-                // First compute total height to determine target
-                float segTotalH = 0;
-                for (auto* child : seg.children) {
-                    layoutNode(child, actualColWidth, metrics);
-                    segTotalH += child->box.margin.top + child->box.border.top +
-                        child->box.padding.top + child->box.contentRect.height +
-                        child->box.padding.bottom + child->box.border.bottom +
-                        child->box.margin.bottom;
+                // Lay the segment out as a sequence of fragmentation-atomic
+                // items — block children stay whole (htmlayout never splits
+                // a box across columns, which also satisfies break-inside:
+                // avoid), and runs of atomic inline-level children are
+                // packed into line boxes at the column width so inline
+                // content fragments by lines like Chromium.
+                struct FragItem {
+                    std::vector<LayoutNode*> nodes; // 1 for blocks, n per line
+                    std::vector<float> nodeX;       // line: margin-box x in column
+                    std::vector<float> nodeY;       // line: margin-box y in item
+                    float height = 0;               // border-box / line height
+                    float marginTop = 0, marginBottom = 0; // blocks only
+                    bool isLine = false;
+                    bool breakBefore = false, breakAfter = false;
+                };
+                std::vector<FragItem> frag;
+                StrutMetrics colStrut = computeStrut(style, fontSize, metrics);
+
+                auto isInlineLevel = [](LayoutNode* c) {
+                    const std::string& d = styleVal(c->computedStyle(), "display");
+                    return d == "inline" || d == "inline-block" ||
+                           d == "inline-flex" || d == "inline-grid";
+                };
+
+                size_t ci = 0;
+                while (ci < seg.children.size()) {
+                    LayoutNode* child = seg.children[ci];
+                    if (isInlineLevel(child)) {
+                        size_t cj = ci;
+                        while (cj < seg.children.size() &&
+                               isInlineLevel(seg.children[cj])) ++cj;
+                        struct LItem { LayoutNode* n; float w, h; AtomicInlineGeom g; };
+                        std::vector<LItem> li;
+                        for (size_t k = ci; k < cj; ++k) {
+                            LayoutNode* c = seg.children[k];
+                            layoutNode(c, actualColWidth, metrics);
+                            float cw = c->box.fullWidth() + c->box.margin.left + c->box.margin.right;
+                            float ch = c->box.fullHeight() + c->box.margin.top + c->box.margin.bottom;
+                            li.push_back({c, cw, ch,
+                                atomicInlineGeometry(c, ch, colStrut.below, actualColWidth)});
+                        }
+                        size_t ls = 0;
+                        while (ls < li.size()) {
+                            float cx = 0;
+                            size_t le = ls;
+                            while (le < li.size()) {
+                                if (le > ls && cx + li[le].w > actualColWidth) break;
+                                cx += li[le].w;
+                                ++le;
+                            }
+                            // Line vertical geometry: union of the strut and
+                            // the items' baseline-aligned extents (same model
+                            // as the IFC path).
+                            float a = colStrut.above, b = colStrut.below;
+                            for (size_t k = ls; k < le; ++k) {
+                                if (li[k].g.valign == 0) {
+                                    a = std::max(a, li[k].g.baseline);
+                                    b = std::max(b, li[k].h - li[k].g.baseline);
+                                } else if (li[k].g.valign == 2) {
+                                    float ia = li[k].h * 0.5f + colStrut.xHeight * 0.5f;
+                                    a = std::max(a, ia);
+                                    b = std::max(b, li[k].h - ia);
+                                }
+                            }
+                            for (size_t k = ls; k < le; ++k) {
+                                if ((li[k].g.valign == 1 || li[k].g.valign == 3) &&
+                                    li[k].h > a + b) b = li[k].h - a;
+                            }
+                            FragItem fi;
+                            fi.isLine = true;
+                            fi.height = a + b;
+                            float x = 0;
+                            for (size_t k = ls; k < le; ++k) {
+                                float yTop;
+                                switch (li[k].g.valign) {
+                                    case 1: yTop = 0; break;
+                                    case 2: yTop = a - (li[k].h * 0.5f +
+                                        colStrut.xHeight * 0.5f); break;
+                                    case 3: yTop = (a + b) - li[k].h; break;
+                                    default: yTop = a - li[k].g.baseline; break;
+                                }
+                                fi.nodes.push_back(li[k].n);
+                                fi.nodeX.push_back(x);
+                                fi.nodeY.push_back(yTop);
+                                x += li[k].w;
+                            }
+                            frag.push_back(std::move(fi));
+                            ls = le;
+                        }
+                        ci = cj;
+                    } else {
+                        layoutNode(child, actualColWidth, metrics);
+                        auto& cs = child->computedStyle();
+                        FragItem fi;
+                        fi.nodes.push_back(child);
+                        fi.height = child->box.fullHeight();
+                        fi.marginTop = child->box.margin.top;
+                        fi.marginBottom = child->box.margin.bottom;
+                        const std::string& bb = styleVal(cs, "break-before");
+                        const std::string& ba = styleVal(cs, "break-after");
+                        fi.breakBefore = (bb == "column" || bb == "always");
+                        fi.breakAfter = (ba == "column" || ba == "always");
+                        frag.push_back(std::move(fi));
+                        ++ci;
+                    }
                 }
-                float segTargetH = segTotalH / columnCount;
-                if (segTargetH < 1.0f) segTargetH = 1.0f;
 
-                int currentCol = 0;
-                float colY = 0.0f;
-                float maxColHeight = 0.0f;
-
-                for (auto* child : seg.children) {
-                    auto& cs = child->computedStyle();
-
-                    // break-before: column
-                    const std::string& breakBefore = styleVal(cs, "break-before");
-                    if ((breakBefore == "column" || breakBefore == "always") &&
-                        colY > 0 && currentCol < columnCount - 1) {
-                        maxColHeight = std::max(maxColHeight, colY);
-                        currentCol++;
-                        colY = 0.0f;
+                // Greedy fragmentation at column height H: items stack with
+                // collapsed sibling margins; margins are truncated at a
+                // column top (CSS Fragmentation §adjoining margins). Returns
+                // {columns used, tallest column content height}.
+                std::vector<int> itemCol(frag.size(), 0);
+                std::vector<float> itemY(frag.size(), 0.0f);
+                auto fill = [&](float H, bool commit) {
+                    int col = 0;
+                    float y = 0, maxBottom = 0, prevMB = 0;
+                    bool colEmpty = true;
+                    for (size_t k = 0; k < frag.size(); ++k) {
+                        auto& it = frag[k];
+                        if (it.breakBefore && !colEmpty) {
+                            ++col; y = 0; colEmpty = true; prevMB = 0;
+                        }
+                        float spacing = colEmpty ? 0.0f :
+                            std::max({prevMB, it.marginTop, 0.0f}) +
+                            std::min({prevMB, it.marginTop, 0.0f});
+                        float top = y + spacing;
+                        if (!colEmpty && top + it.height > H + 0.001f) {
+                            ++col; top = 0; colEmpty = true;
+                        }
+                        if (commit) { itemCol[k] = col; itemY[k] = top; }
+                        y = top + it.height;
+                        maxBottom = std::max(maxBottom, y);
+                        colEmpty = false;
+                        prevMB = it.marginBottom;
+                        if (it.breakAfter) {
+                            ++col; y = 0; colEmpty = true; prevMB = 0;
+                        }
                     }
+                    int used = frag.empty() ? 1 : (colEmpty ? col : col + 1);
+                    return std::pair<int, float>{used, maxBottom};
+                };
 
-                    layoutNode(child, actualColWidth, metrics);
-
-                    float childFullH = child->box.margin.top + child->box.border.top +
-                        child->box.padding.top + child->box.contentRect.height +
-                        child->box.padding.bottom + child->box.border.bottom +
-                        child->box.margin.bottom;
-
-                    // Check if child would overflow current column
-                    if (colY > 0 && colY + childFullH > segTargetH && currentCol < columnCount - 1) {
-                        // break-inside: avoid — keep element whole if possible
-                        maxColHeight = std::max(maxColHeight, colY);
-                        currentCol++;
-                        colY = 0.0f;
+                const float unbounded = std::numeric_limits<float>::max() * 0.25f;
+                float H;
+                if (specifiedHeight >= 0.0f) {
+                    // Definite height: columns fill to it and overflow into
+                    // extra columns when the content doesn't fit.
+                    H = std::max(1.0f, node->box.contentRect.height);
+                } else if (columnCount <= 1) {
+                    H = fill(unbounded, false).second;
+                } else {
+                    // column-fill: balance (the default) — find the minimal
+                    // column height that still fits within columnCount
+                    // columns. Feasibility is monotonic in H, so bisect,
+                    // then tighten H to the tallest column actually used.
+                    // The floor is the tallest unbreakable item: a smaller H
+                    // can look "feasible" by spreading one oversized item
+                    // per column, but the container gets no shorter and the
+                    // distribution stops matching Chromium's.
+                    float total = fill(unbounded, false).second;
+                    float tallest = 0.0f;
+                    for (auto& it : frag) tallest = std::max(tallest, it.height);
+                    float lo = tallest, hi = std::max({total, tallest, 1.0f});
+                    for (int iter = 0; iter < 60 && hi - lo > 0.0005f; ++iter) {
+                        float mid = (lo + hi) * 0.5f;
+                        if (fill(mid, false).first <= columnCount) hi = mid;
+                        else lo = mid;
                     }
+                    H = hi;
+                }
+                float maxBottom = fill(H, true).second;
 
-                    float colX = currentCol * (actualColWidth + columnGap);
-
-                    child->box.contentRect.x = colX + child->box.margin.left +
-                        child->box.padding.left + child->box.border.left;
-                    child->box.contentRect.y = totalY + colY + child->box.margin.top +
-                        child->box.padding.top + child->box.border.top;
-
-                    if (child->box.contentRect.width > actualColWidth) {
-                        child->box.contentRect.width = actualColWidth;
-                    }
-
-                    colY += childFullH;
-
-                    // break-after: column
-                    const std::string& breakAfter = styleVal(cs, "break-after");
-                    if ((breakAfter == "column" || breakAfter == "always") &&
-                        currentCol < columnCount - 1) {
-                        maxColHeight = std::max(maxColHeight, colY);
-                        currentCol++;
-                        colY = 0.0f;
+                for (size_t k = 0; k < frag.size(); ++k) {
+                    auto& it = frag[k];
+                    float colX = itemCol[k] * (actualColWidth + columnGap);
+                    if (it.isLine) {
+                        for (size_t m = 0; m < it.nodes.size(); ++m) {
+                            LayoutNode* c = it.nodes[m];
+                            c->box.contentRect.x = colX + it.nodeX[m] +
+                                c->box.margin.left + c->box.padding.left +
+                                c->box.border.left;
+                            c->box.contentRect.y = totalY + itemY[k] + it.nodeY[m] +
+                                c->box.margin.top + c->box.padding.top +
+                                c->box.border.top;
+                        }
+                    } else {
+                        LayoutNode* c = it.nodes[0];
+                        c->box.contentRect.x = colX + c->box.margin.left +
+                            c->box.padding.left + c->box.border.left;
+                        c->box.contentRect.y = totalY + itemY[k] +
+                            c->box.padding.top + c->box.border.top;
+                        if (c->box.contentRect.width > actualColWidth) {
+                            c->box.contentRect.width = actualColWidth;
+                        }
                     }
                 }
-                maxColHeight = std::max(maxColHeight, colY);
-                totalY += maxColHeight;
+                totalY += maxBottom;
             }
         }
-        node->box.contentRect.height = totalY;
+        if (specifiedHeight < 0.0f) node->box.contentRect.height = totalY;
     }
 }
 
