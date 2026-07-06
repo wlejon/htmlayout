@@ -565,6 +565,11 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
+    // Whether this element itself carries a font-size declaration (as opposed
+    // to inheriting one in step 8) — the monospace default-size quirk below
+    // needs the distinction.
+    const bool fontSizeSpecifiedHere = style.find("font-size") != style.end();
+
     // 8. Inherit inherited properties from parent.
     //    Only iterate the small set of inherited property names (~25) rather
     //    than all ~317 known properties.  Look each one up in the parent and,
@@ -585,6 +590,48 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
                     style[name] = it->second;
                 }
             }
+        }
+    }
+
+    // 8b. Monospace default-size quirk (Blink behavior): the font-size
+    //     keyword `medium` — also font-size's initial value — resolves
+    //     against the font family's default size: 16px normally, 13px when
+    //     the computed family's FIRST entry is the generic `monospace`.
+    //     The KEYWORD inherits, not the px value (in Chromium a sans-serif
+    //     child of a <pre> is back at 16px), so the active keyword is
+    //     tracked in an internal, manually-inherited key and materialized
+    //     as a px font-size per element.
+    {
+        static constexpr const char* kFsKeyword = "-hl-font-size-keyword";
+        std::string keyword;
+        if (fontSizeSpecifiedHere) {
+            auto it = style.find("font-size");
+            if (it != style.end() && it->second == "medium")
+                keyword = it->second;
+        } else if (parentStyle) {
+            auto pk = parentStyle->find(kFsKeyword);
+            if (pk != parentStyle->end())
+                keyword = pk->second;
+        } else {
+            keyword = "medium"; // initial value of font-size
+        }
+        if (!keyword.empty()) {
+            style[kFsKeyword] = keyword;
+            // First family of the computed list, trimmed of space/quotes,
+            // lowercased. The quirk keys off the generic keyword alone:
+            // `Menlo, monospace` does NOT trigger it (matches Blink).
+            std::string fam;
+            auto ff = style.find("font-family");
+            if (ff != style.end()) {
+                fam = ff->second.substr(0, ff->second.find(','));
+                size_t b = fam.find_first_not_of(" \t\"'");
+                size_t e = fam.find_last_not_of(" \t\"'");
+                fam = (b == std::string::npos) ? std::string()
+                                               : fam.substr(b, e - b + 1);
+                for (char& c : fam)
+                    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            style["font-size"] = (fam == "monospace") ? "13px" : "16px";
         }
     }
 

@@ -690,6 +690,41 @@ static void testBlockification() {
           "cascade: child of block parent stays inline");
 }
 
+static void testMonospaceDefaultFontSize() {
+    printf("--- Cascade: monospace default font-size quirk ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        "body { font-family: monospace; }\n"
+        ".mono14 { font-size: 14px; }\n"
+        ".sans { font-family: sans-serif; }\n"
+        ".stack { font-family: Menlo, monospace; }\n"));
+
+    MockElement html; html.tag = "html";
+    MockElement body; body.tag = "body";
+    MockElement pre14; pre14.tag = "pre"; pre14.classes = "mono14";
+    MockElement mono; mono.tag = "span";
+    MockElement sans; sans.tag = "span"; sans.classes = "sans";
+    MockElement stack; stack.tag = "span"; stack.classes = "stack";
+    html.addChild(&body);
+    body.addChild(&pre14);
+    body.addChild(&mono);
+    body.addChild(&sans);
+    body.addChild(&stack);
+
+    auto htmlStyle = cascade.resolve(html);
+    check(sv(htmlStyle, "font-size") == "16px", "cascade: default medium = 16px");
+    auto bodyStyle = cascade.resolve(body, {}, &htmlStyle);
+    check(sv(bodyStyle, "font-size") == "13px", "cascade: monospace body medium = 13px");
+    check(sv(cascade.resolve(pre14, {}, &bodyStyle), "font-size") == "14px",
+          "cascade: explicit px overrides the monospace quirk");
+    check(sv(cascade.resolve(mono, {}, &bodyStyle), "font-size") == "13px",
+          "cascade: monospace child keeps 13px");
+    check(sv(cascade.resolve(sans, {}, &bodyStyle), "font-size") == "16px",
+          "cascade: sans child of monospace re-expands to 16px (keyword inherits)");
+    check(sv(cascade.resolve(stack, {}, &bodyStyle), "font-size") == "16px",
+          "cascade: 'Menlo, monospace' stack does not trigger the quirk");
+}
+
 void testCascade() {
     testBasicResolve();
     testSpecificityOrder();
@@ -719,4 +754,5 @@ void testCascade() {
     testImportWithLayer();
     testTableSpanAttributes();
     testBlockification();
+    testMonospaceDefaultFontSize();
 }
