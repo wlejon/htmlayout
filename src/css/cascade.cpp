@@ -588,12 +588,37 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
-    // 9. Non-inherited defaults are NOT stored in the map.  Layout's styleVal()
+    // 9. Blockification (CSS Display §2.7): a flex or grid item's computed
+    //    display is block-level. Inline-level display values on children of
+    //    flex/grid containers compute to their block-level equivalents
+    //    (inline → block, inline-flex → flex, ...). display:none and
+    //    display:contents are unaffected. This happens at computed-value time,
+    //    so getComputedStyle reports the blockified value (matches Chromium),
+    //    and layout routes the item through block/flex/grid/table layout —
+    //    which is what lets e.g. a percentage height on a <span> flex item
+    //    resolve instead of being ignored by inline layout.
+    if (parentStyle) {
+        auto pd = parentStyle->find("display");
+        if (pd != parentStyle->end() &&
+            (pd->second == "flex" || pd->second == "inline-flex" ||
+             pd->second == "grid" || pd->second == "inline-grid")) {
+            auto it = style.find("display");
+            // Absent key = initial value "inline" (non-inherited defaults are
+            // not stored in the map — see the note below).
+            const std::string d = (it != style.end()) ? it->second : "inline";
+            if (d == "inline" || d == "inline-block") style["display"] = "block";
+            else if (d == "inline-table") style["display"] = "table";
+            else if (d == "inline-flex") style["display"] = "flex";
+            else if (d == "inline-grid") style["display"] = "grid";
+        }
+    }
+
+    // 10. Non-inherited defaults are NOT stored in the map.  Layout's styleVal()
     //    falls back to initialValueRef() for missing keys, so the map only
     //    contains properties that were explicitly set or inherited — typically
     //    ~10-30 entries instead of ~317.
 
-    // 10. HTML table structure attributes: colspan/rowspan on cells and span
+    // 11. HTML table structure attributes: colspan/rowspan on cells and span
     //     on <col>/<colgroup> are structural inputs to table layout rather
     //     than CSS properties. Surface them as computed-style keys so table
     //     layout still sees spans when the consumer's LayoutNode doesn't

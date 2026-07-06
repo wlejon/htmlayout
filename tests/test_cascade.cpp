@@ -620,6 +620,76 @@ static void testTableSpanAttributes() {
           "cascade: colspan below 1 ignored");
 }
 
+static void testBlockification() {
+    printf("--- Cascade: flex/grid item blockification ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        ".flex { display: flex; }\n"
+        ".iflex { display: inline-flex; }\n"
+        ".grid { display: grid; }\n"
+        ".ib { display: inline-block; }\n"
+        ".it { display: inline-table; }\n"
+        ".childiflex { display: inline-flex; }\n"
+        ".childigrid { display: inline-grid; }\n"
+        ".none { display: none; }\n"
+        ".contents { display: contents; }\n"
+    ));
+
+    MockElement flexParent; flexParent.tag = "div"; flexParent.classes = "flex";
+    auto flexStyle = cascade.resolve(flexParent);
+
+    // Default inline (no display declaration) blockifies to block
+    MockElement span; span.tag = "span";
+    auto s = cascade.resolve(span, {}, &flexStyle);
+    check(sv(s, "display") == "block", "cascade: inline flex item blockified to block");
+
+    MockElement ib; ib.tag = "span"; ib.classes = "ib";
+    check(sv(cascade.resolve(ib, {}, &flexStyle), "display") == "block",
+          "cascade: inline-block flex item blockified to block");
+
+    MockElement it; it.tag = "span"; it.classes = "it";
+    check(sv(cascade.resolve(it, {}, &flexStyle), "display") == "table",
+          "cascade: inline-table flex item blockified to table");
+
+    MockElement cif; cif.tag = "span"; cif.classes = "childiflex";
+    check(sv(cascade.resolve(cif, {}, &flexStyle), "display") == "flex",
+          "cascade: inline-flex flex item blockified to flex");
+    MockElement cig; cig.tag = "span"; cig.classes = "childigrid";
+    check(sv(cascade.resolve(cig, {}, &flexStyle), "display") == "grid",
+          "cascade: inline-grid flex item blockified to grid");
+
+    MockElement none; none.tag = "span"; none.classes = "none";
+    check(sv(cascade.resolve(none, {}, &flexStyle), "display") == "none",
+          "cascade: display:none flex child not blockified");
+    MockElement cont; cont.tag = "span"; cont.classes = "contents";
+    check(sv(cascade.resolve(cont, {}, &flexStyle), "display") == "contents",
+          "cascade: display:contents flex child not blockified");
+
+    MockElement blk; blk.tag = "div";
+    check(sv(cascade.resolve(blk, {}, &flexStyle), "display") == "block",
+          "cascade: block flex item stays block");
+
+    // Grid and inline-flex containers blockify their items too
+    MockElement gridParent; gridParent.tag = "div"; gridParent.classes = "grid";
+    auto gridStyle = cascade.resolve(gridParent);
+    MockElement gchild; gchild.tag = "span";
+    check(sv(cascade.resolve(gchild, {}, &gridStyle), "display") == "block",
+          "cascade: inline grid item blockified to block");
+
+    MockElement iflexParent; iflexParent.tag = "div"; iflexParent.classes = "iflex";
+    auto iflexStyle = cascade.resolve(iflexParent);
+    MockElement ichild; ichild.tag = "span";
+    check(sv(cascade.resolve(ichild, {}, &iflexStyle), "display") == "block",
+          "cascade: item of inline-flex container blockified to block");
+
+    // Children of a non-flex/grid parent keep inline display
+    MockElement blockParent; blockParent.tag = "div";
+    auto blockStyle = cascade.resolve(blockParent);
+    MockElement bchild; bchild.tag = "span";
+    check(sv(cascade.resolve(bchild, {}, &blockStyle), "display") == "inline",
+          "cascade: child of block parent stays inline");
+}
+
 void testCascade() {
     testBasicResolve();
     testSpecificityOrder();
@@ -648,4 +718,5 @@ void testCascade() {
     testImportWithMediaCondition();
     testImportWithLayer();
     testTableSpanAttributes();
+    testBlockification();
 }
