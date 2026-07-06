@@ -11,6 +11,7 @@
 #include <charconv>
 #include <cmath>
 #include <algorithm>
+#include <optional>
 
 namespace htmlayout::layout {
 
@@ -683,9 +684,11 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
 namespace {
 
-// Resolve a dimension that returns -1 for auto/none/empty (sentinel)
-float resolveDimAbs(const std::string& value, float available, float fontSize) {
-    if (value.empty() || value == "auto" || value == "none") return -1.0f;
+// Resolve a dimension: nullopt means auto/none/empty (unspecified).
+// Specified-ness must be kept separate from the value — offsets like
+// top:-40px are valid negative lengths and must not read as "auto".
+std::optional<float> resolveDimAbs(const std::string& value, float available, float fontSize) {
+    if (value.empty() || value == "auto" || value == "none") return std::nullopt;
     return resolveLength(value, available, fontSize);
 }
 
@@ -744,17 +747,17 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     child->availableHeight = cbHeight;
 
     // Resolve offsets and explicit dimensions
-    float left = resolveDimAbs(styleVal(childStyle, "left"), cbWidth, fontSize);
-    float right = resolveDimAbs(styleVal(childStyle, "right"), cbWidth, fontSize);
-    float specW = resolveDimAbs(styleVal(childStyle, "width"), cbWidth, fontSize);
-    float top = resolveDimAbs(styleVal(childStyle, "top"), cbHeight, fontSize);
-    float bottom = resolveDimAbs(styleVal(childStyle, "bottom"), cbHeight, fontSize);
-    float specH = resolveDimAbs(styleVal(childStyle, "height"), cbHeight, fontSize);
+    std::optional<float> left = resolveDimAbs(styleVal(childStyle, "left"), cbWidth, fontSize);
+    std::optional<float> right = resolveDimAbs(styleVal(childStyle, "right"), cbWidth, fontSize);
+    std::optional<float> specW = resolveDimAbs(styleVal(childStyle, "width"), cbWidth, fontSize);
+    std::optional<float> top = resolveDimAbs(styleVal(childStyle, "top"), cbHeight, fontSize);
+    std::optional<float> bottom = resolveDimAbs(styleVal(childStyle, "bottom"), cbHeight, fontSize);
+    std::optional<float> specH = resolveDimAbs(styleVal(childStyle, "height"), cbHeight, fontSize);
 
     // Determine available width for layout
     // Shrink-wrap if width:auto and not both left+right set
-    bool shrinkWrap = (specW < 0 && !(left >= 0 && right >= 0));
-    bool stretchW = (specW < 0 && left >= 0 && right >= 0);
+    bool shrinkWrap = (!specW && !(left && right));
+    bool stretchW = (!specW && left && right);
 
     // Pre-compute the stretched height when both top+bottom are pinned and
     // height is auto. Setting box.contentRect.height up front lets the inner
@@ -763,7 +766,7 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     // content height.  Resolve margin/padding/border from the child's own
     // style — child->box may not yet contain resolved values (the in-flow
     // layout pass skips absolute/fixed children).
-    bool stretchH = (specH < 0 && top >= 0 && bottom >= 0);
+    bool stretchH = (!specH && top && bottom);
     if (stretchH) {
         float marginTop = resolveLength(styleVal(childStyle, "margin-top"), cbHeight, fontSize);
         float marginBottom = resolveLength(styleVal(childStyle, "margin-bottom"), cbHeight, fontSize);
@@ -773,7 +776,7 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
             ? resolveLength(styleVal(childStyle, "border-top-width"), cbHeight, fontSize) : 0.0f;
         float borBottom = (styleVal(childStyle, "border-bottom-style") != "none")
             ? resolveLength(styleVal(childStyle, "border-bottom-width"), cbHeight, fontSize) : 0.0f;
-        float h = cbHeight - top - bottom - marginTop - marginBottom -
+        float h = cbHeight - *top - *bottom - marginTop - marginBottom -
                   padTop - padBottom - borTop - borBottom;
         if (h > 0) child->box.contentRect.height = h;
     }
@@ -784,7 +787,7 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     // (cbWidth - left - right) rather than the raw cbWidth.
     float availW = cbWidth;
     if (stretchW) {
-        float w = cbWidth - left - right -
+        float w = cbWidth - *left - *right -
                   child->box.margin.left - child->box.margin.right;
         // layoutNode treats availW as the parent content width including
         // padding+border for this child; subtract only the margins here.
@@ -817,7 +820,7 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
 
     // Stretch width if both left and right are set and width is auto
     if (stretchW) {
-        float w = cbWidth - left - right -
+        float w = cbWidth - *left - *right -
                   child->box.margin.left - child->box.margin.right -
                   child->box.padding.left - child->box.padding.right -
                   child->box.border.left - child->box.border.right;
@@ -828,7 +831,7 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     // content size (block layout typically does); the absolute-position
     // contract is that top+bottom together pin the box.
     if (stretchH) {
-        float h = cbHeight - top - bottom -
+        float h = cbHeight - *top - *bottom -
                   child->box.margin.top - child->box.margin.bottom -
                   child->box.padding.top - child->box.padding.bottom -
                   child->box.border.top - child->box.border.bottom;
@@ -839,17 +842,17 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     float xInCB = child->box.margin.left + child->box.padding.left + child->box.border.left;
     float yInCB = child->box.margin.top + child->box.padding.top + child->box.border.top;
 
-    if (left >= 0) {
-        xInCB = left + child->box.margin.left + child->box.padding.left + child->box.border.left;
-    } else if (right >= 0) {
-        xInCB = cbWidth - right - child->box.margin.right -
+    if (left) {
+        xInCB = *left + child->box.margin.left + child->box.padding.left + child->box.border.left;
+    } else if (right) {
+        xInCB = cbWidth - *right - child->box.margin.right -
                 child->box.padding.right - child->box.border.right - child->box.contentRect.width;
     }
 
-    if (top >= 0) {
-        yInCB = top + child->box.margin.top + child->box.padding.top + child->box.border.top;
-    } else if (bottom >= 0) {
-        yInCB = cbHeight - bottom - child->box.margin.bottom -
+    if (top) {
+        yInCB = *top + child->box.margin.top + child->box.padding.top + child->box.border.top;
+    } else if (bottom) {
+        yInCB = cbHeight - *bottom - child->box.margin.bottom -
                 child->box.padding.bottom - child->box.border.bottom - child->box.contentRect.height;
     }
 

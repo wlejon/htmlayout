@@ -1467,6 +1467,41 @@ static void testShapeOutsideCircleWrap() {
     check(approx(ib2.box.contentRect.x, 52, 0.1f), "packed after the first item");
 }
 
+// ===== Absolute positioning: negative offsets are specified, not auto =====
+static void testAbsNegativeOffsets() {
+    printf("--- Abs: negative top/left/bottom offsets ---\n");
+    LxNode wrap; wrap.initBase();
+    wrap.style_["position"] = "relative";
+    wrap.style_["width"] = "200px";
+    wrap.style_["height"] = "100px";
+
+    LxNode a; a.initBase();
+    a.style_["position"] = "absolute";
+    a.style_["top"] = "-40px";
+    a.style_["left"] = "-10px";
+    a.style_["width"] = "50px";
+    a.style_["height"] = "30px";
+
+    LxNode b; b.initBase();
+    b.style_["position"] = "absolute";
+    b.style_["bottom"] = "-60px";
+    b.style_["left"] = "0px";
+    b.style_["width"] = "50px";
+    b.style_["height"] = "30px";
+
+    wrap.addChild(&a);
+    wrap.addChild(&b);
+
+    LxMetrics m;
+    layoutTree(&wrap, 800, m);
+
+    check(approx(a.box.contentRect.y, -40.0f), "top:-40px places above the container");
+    check(approx(a.box.contentRect.x, -10.0f), "left:-10px places left of the container");
+    check(approx(a.box.contentRect.width, 50.0f), "negative offsets keep explicit width");
+    // bottom:-60px: y = cbHeight(100) - (-60) - height(30) = 130
+    check(approx(b.box.contentRect.y, 130.0f), "bottom:-60px hangs below the container");
+}
+
 void testLayoutExtra() {
     printf("=== Extra Layout Tests ===\n");
     testBlockReplacedMaxWidthRatio();
@@ -1520,4 +1555,5 @@ void testLayoutExtra() {
     testFloatContainedByBFC();
     testMidRunFloatKeepsLine();
     testShapeOutsideCircleWrap();
+    testAbsNegativeOffsets();
 }
