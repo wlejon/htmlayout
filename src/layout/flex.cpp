@@ -29,6 +29,11 @@ struct FlexItem {
     int order;
     bool frozen = false;
     float finalMain = 0;
+    // Column flex only: min-main is auto (min-height:auto) with visible overflow,
+    // so its content-based minimum can only be resolved once the item is laid out
+    // (its block-axis content height depends on the definite cross size). Deferred
+    // to the hypothetical-size loop where that layout happens.
+    bool colAutoMinPending = false;
 };
 
 struct FlexLine {
@@ -260,6 +265,16 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 if (basisFromMainDim && item.flexBasis >= 0 && item.minMain > item.flexBasis)
                     item.minMain = item.flexBasis;
             }
+        } else if (minMainAuto && !isRow) {
+            // Column flex: the automatic minimum on the main (block) axis is the
+            // item's content-based min-content height. Unlike the inline axis it
+            // depends on the item's definite cross size, so it can't be measured
+            // until the item is laid out — defer to the hypothetical-size loop.
+            // (Overflow != visible resolves auto-min to 0, so items with their own
+            // scroll container are still allowed to shrink.)
+            const std::string& overflow = styleVal(cs, "overflow");
+            if (overflow == "visible" || overflow.empty())
+                item.colAutoMinPending = true;
         }
         if (item.minMain < 0) item.minMain = 0;
 
@@ -328,6 +343,12 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 item.hypotheticalMain = item.node->box.contentRect.height +
                                          item.node->box.padding.top + item.node->box.padding.bottom +
                                          item.node->box.border.top + item.node->box.border.bottom;
+                // Resolve the deferred column auto-min: with the cross size definite
+                // (containerMain), the item's laid-out outer height is its block-axis
+                // content-min, so it must not be shrunk below it in a height-limited
+                // container (content overflows and scrolls instead of collapsing).
+                if (item.colAutoMinPending && item.hypotheticalMain > item.minMain)
+                    item.minMain = item.hypotheticalMain;
             }
         }
         // Clamp to min/max

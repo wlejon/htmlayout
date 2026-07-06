@@ -598,6 +598,43 @@ static void testFlexReplacedBorderBox() {
     check(approx(outer, 300, 1), "border-box replaced flex item outer width == 300");
 }
 
+// Regression: a column flex container with a *definite* height whose children
+// overflow must NOT shrink them below their content height. min-height:auto on a
+// column flex item resolves to its content-based (min-content) block size, so the
+// content overflows (and scrolls) instead of every row collapsing to fit — the bug
+// that flattened every panel in the krea2-lab left rail to a fraction of its height.
+static void testFlexColumnAutoMinNoShrink() {
+    printf("--- flex column: definite height, children keep content height ---\n");
+    LxNode root; root.initBase();
+    root.style_["display"] = "flex";
+    root.style_["flex-direction"] = "column";
+    root.style_["height"] = "80px";           // definite, smaller than content
+    root.style_["overflow"] = "auto";
+
+    LxNode* kids[4];
+    LxNode* texts[4];
+    for (int i = 0; i < 4; i++) {
+        LxNode* k = new LxNode(); k->initBase();
+        k->style_["min-height"] = "auto";       // the automatic-minimum trigger
+        k->style_["padding-top"] = "30px";
+        k->style_["padding-bottom"] = "30px";   // content height >= 60px each
+        LxNode* t = new LxNode(); t->initBase(); t->isText = true; t->text = "row";
+        k->addChild(t);
+        root.addChild(k);
+        kids[i] = k; texts[i] = t;
+    }
+
+    LxMetrics m;
+    layoutTree(&root, 400, m);
+    float h0 = kids[0]->box.contentRect.height + kids[0]->box.padding.top + kids[0]->box.padding.bottom;
+    printf("  child0 outer height=%.1f (shrink-to-fit would be ~20, content is >=60)\n", h0);
+    check(h0 >= 55, "column flex item not shrunk below its content height");
+    // The stack overflows its 80px container rather than collapsing to fit it.
+    float last = kids[3]->box.contentRect.y + kids[3]->box.contentRect.height;
+    check(last > 80, "overflowing column content extends past the definite container height");
+    for (int i = 0; i < 4; i++) { delete texts[i]; delete kids[i]; }
+}
+
 // A block-level replaced element with a fixed intrinsic ratio (e.g. <canvas
 // width=1120 height=240>) and max-width:100% must scale its auto height to keep
 // the ratio when the container clamps its width — not keep the raw intrinsic
@@ -652,6 +689,7 @@ void testLayoutExtra() {
     printf("=== Extra Layout Tests ===\n");
     testBlockReplacedMaxWidthRatio();
     testFlexReplacedBorderBox();
+    testFlexColumnAutoMinNoShrink();
     testTableColspan();
     testTableRowspan();
     testTableColgroup();
