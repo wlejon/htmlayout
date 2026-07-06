@@ -259,13 +259,57 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
         } else {
             auto& cs = child->computedStyle();
             if (styleVal(cs, "display") == "none") continue;
-            float childMin = computeMinContentWidth(child, metrics);
-            // Add padding/border
-            float ph = resolveLength(styleVal(cs, "padding-left"), 0, fontSize) +
-                       resolveLength(styleVal(cs, "padding-right"), 0, fontSize);
-            float bh = resolveLength(styleVal(cs, "border-left-width"), 0, fontSize) +
-                       resolveLength(styleVal(cs, "border-right-width"), 0, fontSize);
-            maxChildMin = std::max(maxChildMin, childMin + ph + bh);
+            // Out-of-flow children contribute nothing to intrinsic sizes.
+            const std::string& cpos = styleVal(cs, "position");
+            if (cpos == "absolute" || cpos == "fixed") continue;
+            float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+            if (childFontSize <= 0) childFontSize = fontSize;
+            float ph = resolveLength(styleVal(cs, "padding-left"), 0, childFontSize) +
+                       resolveLength(styleVal(cs, "padding-right"), 0, childFontSize);
+            // Border widths only count when the side has a style (a styleless
+            // border's used width is 0 even though the computed width is
+            // "medium" = 3px).
+            float bh = 0;
+            if (styleVal(cs, "border-left-style") != "none")
+                bh += resolveLength(styleVal(cs, "border-left-width"), 0, childFontSize);
+            if (styleVal(cs, "border-right-style") != "none")
+                bh += resolveLength(styleVal(cs, "border-right-width"), 0, childFontSize);
+            float mh = resolveLength(styleVal(cs, "margin-left"), 0, childFontSize) +
+                       resolveLength(styleVal(cs, "margin-right"), 0, childFontSize);
+            // A child with a definite (non-percentage) width contributes that
+            // width, not its content's min-content — same rule as the
+            // max-content path below. Percentages can't be resolved against an
+            // intrinsic size, so they fall back to the content measurement.
+            const std::string& wVal = styleVal(cs, "width");
+            bool definiteW = !wVal.empty() && wVal != "auto" &&
+                             wVal.find('%') == std::string::npos &&
+                             !isIntrinsicSizingKeyword(wVal);
+            float childMin;
+            if (definiteW) {
+                float w = resolveLength(wVal, 0, childFontSize);
+                childMin = (styleVal(cs, "box-sizing") == "border-box")
+                    ? w + mh : w + ph + bh + mh;
+            } else {
+                childMin = computeMinContentWidth(child, metrics) + ph + bh + mh;
+            }
+            // Definite min-width floors the contribution; max-width caps it.
+            const std::string& minWVal = styleVal(cs, "min-width");
+            if (!minWVal.empty() && minWVal != "auto" &&
+                minWVal.find('%') == std::string::npos) {
+                float v = resolveLength(minWVal, 0, childFontSize);
+                float t = (styleVal(cs, "box-sizing") == "border-box")
+                    ? v + mh : v + ph + bh + mh;
+                if (childMin < t) childMin = t;
+            }
+            const std::string& maxWVal = styleVal(cs, "max-width");
+            if (!maxWVal.empty() && maxWVal != "none" &&
+                maxWVal.find('%') == std::string::npos) {
+                float v = resolveLength(maxWVal, 0, childFontSize);
+                float t = (styleVal(cs, "box-sizing") == "border-box")
+                    ? v + mh : v + ph + bh + mh;
+                if (childMin > t) childMin = t;
+            }
+            maxChildMin = std::max(maxChildMin, childMin);
         }
     }
     return maxChildMin;
@@ -351,12 +395,20 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
         } else {
             auto& cs = child->computedStyle();
             if (styleVal(cs, "display") == "none") continue;
+            // Out-of-flow children contribute nothing to intrinsic sizes.
+            const std::string& cpos = styleVal(cs, "position");
+            if (cpos == "absolute" || cpos == "fixed") continue;
             float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;
             float ph = resolveLength(styleVal(cs, "padding-left"), 0, childFontSize) +
                        resolveLength(styleVal(cs, "padding-right"), 0, childFontSize);
-            float bh = resolveLength(styleVal(cs, "border-left-width"), 0, childFontSize) +
-                       resolveLength(styleVal(cs, "border-right-width"), 0, childFontSize);
+            // Styleless borders have used width 0 (computed "medium" = 3px
+            // must not inflate the contribution).
+            float bh = 0;
+            if (styleVal(cs, "border-left-style") != "none")
+                bh += resolveLength(styleVal(cs, "border-left-width"), 0, childFontSize);
+            if (styleVal(cs, "border-right-style") != "none")
+                bh += resolveLength(styleVal(cs, "border-right-width"), 0, childFontSize);
             float mh = resolveLength(styleVal(cs, "margin-left"), 0, childFontSize) +
                        resolveLength(styleVal(cs, "margin-right"), 0, childFontSize);
             // Use explicit width if set, otherwise recurse for intrinsic size
@@ -392,7 +444,10 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
         for (auto* child : getLayoutChildren(node)) {
             if (!child->isTextNode()) {
                 auto& cs = child->computedStyle();
-                if (styleVal(cs, "display") != "none") childCount++;
+                if (styleVal(cs, "display") == "none") continue;
+                const std::string& cpos = styleVal(cs, "position");
+                if (cpos == "absolute" || cpos == "fixed") continue;
+                childCount++;
             } else if (!isFlexContainer || !isWhitespaceOnly(child->textContent())) {
                 childCount++;
             }

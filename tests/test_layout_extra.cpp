@@ -635,6 +635,264 @@ static void testFlexColumnAutoMinNoShrink() {
     for (int i = 0; i < 4; i++) { delete texts[i]; delete kids[i]; }
 }
 
+// CSS Flexbox §4.5: min-width:auto on a row flex item resolves to the item's
+// min-content width. An explicit flex-basis does NOT cap it (only the width
+// *property* provides the "specified size suggestion"), so an item with
+// `flex: 0 0 240px` whose content min is 244 is floored at 244 — Chromium
+// gives the flexed sibling the remainder.
+static void testFlexRowAutoMinFloorsBasis() {
+    printf("--- flex row: min-width:auto floors an explicit flex-basis ---\n");
+    LxNode root; root.initBase();
+    root.style_["display"] = "flex";
+    root.style_["width"] = "700px";
+
+    LxNode left; left.initBase();
+    left.style_["display"] = "flex";
+    left.style_["flex-direction"] = "column";
+    left.style_["flex-grow"] = "0";
+    left.style_["flex-shrink"] = "0";
+    left.style_["flex-basis"] = "240px";
+    left.style_["min-width"] = "auto";
+
+    LxNode portrait; portrait.initBase();
+    portrait.style_["width"] = "240px";
+    portrait.style_["border-left-width"] = "2px";
+    portrait.style_["border-right-width"] = "2px";
+    portrait.style_["border-left-style"] = "solid";
+    portrait.style_["border-right-style"] = "solid";
+    left.addChild(&portrait);
+
+    LxNode right; right.initBase();
+    right.style_["flex-grow"] = "1";
+    right.style_["flex-basis"] = "0px";
+    root.addChild(&left);
+    root.addChild(&right);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  left=%.1f right=%.1f (expect 244 / 456)\n",
+           left.box.contentRect.width, right.box.contentRect.width);
+    check(approx(left.box.contentRect.width, 244, 1),
+          "flex-basis item floored at min-content (244), basis does not cap auto min");
+    check(approx(right.box.contentRect.width, 456, 1),
+          "flex:1 sibling receives the remaining space after the floor");
+}
+
+// The automatic minimum only applies while overflow is visible: a scroll
+// container (overflow hidden/auto/scroll) resolves min-width:auto to 0 and
+// keeps its flex-basis.
+static void testFlexRowAutoMinOverflowHidden() {
+    printf("--- flex row: overflow:hidden disables the auto minimum ---\n");
+    LxNode root; root.initBase();
+    root.style_["display"] = "flex";
+    root.style_["width"] = "700px";
+
+    LxNode left; left.initBase();
+    left.style_["flex-grow"] = "0";
+    left.style_["flex-shrink"] = "0";
+    left.style_["flex-basis"] = "240px";
+    left.style_["min-width"] = "auto";
+    left.style_["overflow"] = "hidden";
+
+    LxNode wide; wide.initBase();
+    wide.style_["width"] = "300px";
+    left.addChild(&wide);
+
+    LxNode right; right.initBase();
+    right.style_["flex-grow"] = "1";
+    right.style_["flex-basis"] = "0px";
+    root.addChild(&left);
+    root.addChild(&right);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  left=%.1f right=%.1f (expect 240 / 460)\n",
+           left.box.contentRect.width, right.box.contentRect.width);
+    check(approx(left.box.contentRect.width, 240, 1),
+          "overflow:hidden item keeps its flex-basis (auto min resolves to 0)");
+    check(approx(right.box.contentRect.width, 460, 1),
+          "sibling sized against the unfloored basis");
+}
+
+// An explicit min-width replaces the automatic minimum entirely: the
+// content-based floor must not apply when min-width is a length.
+static void testFlexRowExplicitMinWidth() {
+    printf("--- flex row: explicit min-width overrides the auto minimum ---\n");
+    LxMetrics m;
+    for (int variant = 0; variant < 2; variant++) {
+        LxNode root; root.initBase();
+        root.style_["display"] = "flex";
+        root.style_["width"] = "700px";
+
+        LxNode left; left.initBase();
+        left.style_["flex-grow"] = "0";
+        left.style_["flex-shrink"] = "0";
+        left.style_["flex-basis"] = "240px";
+        left.style_["min-width"] = (variant == 0) ? "120px" : "260px";
+
+        LxNode wide; wide.initBase();
+        wide.style_["width"] = "300px";
+        left.addChild(&wide);
+
+        LxNode right; right.initBase();
+        right.style_["flex-grow"] = "1";
+        right.style_["flex-basis"] = "0px";
+        root.addChild(&left);
+        root.addChild(&right);
+
+        layoutTree(&root, 800, m);
+        float expectL = (variant == 0) ? 240.0f : 260.0f;
+        printf("  min-width:%s -> left=%.1f (expect %.0f)\n",
+               left.style_["min-width"].c_str(), left.box.contentRect.width, expectL);
+        check(approx(left.box.contentRect.width, expectL, 1),
+              variant == 0 ? "explicit min-width below basis: no content floor applied"
+                           : "explicit min-width above basis wins");
+    }
+}
+
+// The "specified size suggestion" (a definite width property) caps the
+// automatic minimum: an item with width:100px and 150px-wide content may be
+// shrunk to 100, but not below it.
+static void testFlexRowSpecifiedSizeCapsAutoMin() {
+    printf("--- flex row: definite width caps the auto minimum ---\n");
+    LxNode root; root.initBase();
+    root.style_["display"] = "flex";
+    root.style_["width"] = "150px";
+
+    LxNode a; a.initBase();
+    a.style_["width"] = "100px";
+    a.style_["flex-shrink"] = "1";
+    a.style_["min-width"] = "auto";
+    LxNode wide; wide.initBase();
+    wide.style_["width"] = "150px";
+    a.addChild(&wide);
+
+    LxNode b; b.initBase();
+    b.style_["width"] = "100px";
+    b.style_["flex-shrink"] = "1";
+    root.addChild(&a);
+    root.addChild(&b);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  a=%.1f (expect 100: shrinks to its width, not to 75, not floored at 150)\n",
+           a.box.contentRect.width);
+    check(approx(a.box.contentRect.width, 100, 1),
+          "auto min = min(content suggestion, specified width)");
+}
+
+// The automatic minimum is clamped by the max main size property: content min
+// 150 with max-width:120 gives an auto minimum of 120.
+static void testFlexRowAutoMinMaxWidthClamp() {
+    printf("--- flex row: max-width clamps the auto minimum ---\n");
+    LxNode root; root.initBase();
+    root.style_["display"] = "flex";
+    root.style_["width"] = "100px";
+
+    LxNode a; a.initBase();
+    a.style_["min-width"] = "auto";
+    a.style_["max-width"] = "120px";
+    a.style_["flex-shrink"] = "1";
+    LxNode wide; wide.initBase();
+    wide.style_["width"] = "150px";
+    a.addChild(&wide);
+
+    LxNode b; b.initBase();
+    b.style_["width"] = "100px";
+    b.style_["flex-shrink"] = "1";
+    root.addChild(&a);
+    root.addChild(&b);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  a=%.1f (expect 120: content min 150 clamped by max-width)\n",
+           a.box.contentRect.width);
+    check(approx(a.box.contentRect.width, 120, 1),
+          "auto min clamped by max-width");
+}
+
+// Column-axis mirror: the deferred content-based minimum on a column flex
+// item is clamped by max-height.
+static void testFlexColumnAutoMinMaxHeightClamp() {
+    printf("--- flex column: max-height clamps the auto minimum ---\n");
+    LxNode root; root.initBase();
+    root.style_["display"] = "flex";
+    root.style_["flex-direction"] = "column";
+    root.style_["height"] = "20px";
+
+    LxNode* kids[2];
+    LxNode* texts[2];
+    for (int i = 0; i < 2; i++) {
+        LxNode* k = new LxNode(); k->initBase();
+        k->style_["min-height"] = "auto";
+        k->style_["flex-shrink"] = "1";
+        k->style_["padding-top"] = "10px";
+        k->style_["padding-bottom"] = "10px";  // text line 20 + 20 padding = 40 outer
+        LxNode* t = new LxNode(); t->initBase(); t->isText = true; t->text = "row";
+        k->addChild(t);
+        root.addChild(k);
+        kids[i] = k; texts[i] = t;
+    }
+    kids[0]->style_["max-height"] = "30px";
+
+    LxMetrics m;
+    layoutTree(&root, 400, m);
+    float h0 = kids[0]->box.contentRect.height + kids[0]->box.padding.top + kids[0]->box.padding.bottom;
+    float h1 = kids[1]->box.contentRect.height + kids[1]->box.padding.top + kids[1]->box.padding.bottom;
+    printf("  child0 outer=%.1f (expect 30: content min 40 clamped by max-height), child1 outer=%.1f (expect 40)\n", h0, h1);
+    check(approx(h0, 30, 1), "column auto min clamped by max-height");
+    check(approx(h1, 40, 1), "unclamped sibling keeps its content min");
+    for (int i = 0; i < 2; i++) { delete texts[i]; delete kids[i]; }
+}
+
+// Anonymous flex items (raw text) also get the automatic minimum: text may
+// not be shrunk below its widest unbreakable word.
+static void testFlexAnonymousTextAutoMin() {
+    printf("--- flex row: anonymous text item floored at widest word ---\n");
+    LxNode root; root.initBase();
+    root.style_["display"] = "flex";
+    root.style_["width"] = "30px";
+
+    LxNode t; t.initBase(); t.isText = true;
+    t.text = "aaaa bb";   // mock metrics: 10px/char -> max-content 70, widest word 40
+    root.addChild(&t);
+
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  text width=%.1f (expect 40, not 30)\n", t.box.contentRect.width);
+    check(approx(t.box.contentRect.width, 40, 1),
+          "anonymous text item not shrunk below its widest word");
+}
+
+// Re-layout must not treat previously *resolved* auto margins as real
+// margins: a second pass at a narrower width used to count the stale
+// margin-left:auto value in the free-space computation and spuriously
+// shrink every item (shop/product-grid .p-foot in broparity).
+static void testFlexRelayoutAutoMarginStable() {
+    printf("--- flex row: re-layout with resolved auto margins does not shrink ---\n");
+    LxNode root; root.initBase();
+    root.style_["display"] = "flex";
+
+    LxNode a; a.initBase();
+    a.style_["width"] = "50px";
+    a.style_["flex-shrink"] = "1";
+    LxNode b; b.initBase();
+    b.style_["width"] = "30px";
+    b.style_["flex-shrink"] = "1";
+    b.style_["margin-left"] = "auto";
+    root.addChild(&a);
+    root.addChild(&b);
+
+    LxMetrics m;
+    layoutTree(&root, 240, m);   // first pass resolves b's margin-left to 160
+    layoutTree(&root, 200, m);   // second, narrower pass must start from auto=0
+    printf("  a=%.1f b=%.1f b.x=%.1f (expect 50 / 30 / 170)\n",
+           a.box.contentRect.width, b.box.contentRect.width, b.box.contentRect.x);
+    check(approx(a.box.contentRect.width, 50, 1), "item a keeps its width on re-layout");
+    check(approx(b.box.contentRect.width, 30, 1), "item b keeps its width on re-layout");
+    check(approx(b.box.contentRect.x, 170, 1), "margin-left:auto re-resolved against the new width");
+}
+
 // A block-level replaced element with a fixed intrinsic ratio (e.g. <canvas
 // width=1120 height=240>) and max-width:100% must scale its auto height to keep
 // the ratio when the container clamps its width — not keep the raw intrinsic
@@ -690,6 +948,14 @@ void testLayoutExtra() {
     testBlockReplacedMaxWidthRatio();
     testFlexReplacedBorderBox();
     testFlexColumnAutoMinNoShrink();
+    testFlexRowAutoMinFloorsBasis();
+    testFlexRowAutoMinOverflowHidden();
+    testFlexRowExplicitMinWidth();
+    testFlexRowSpecifiedSizeCapsAutoMin();
+    testFlexRowAutoMinMaxWidthClamp();
+    testFlexColumnAutoMinMaxHeightClamp();
+    testFlexAnonymousTextAutoMin();
+    testFlexRelayoutAutoMarginStable();
     testTableColspan();
     testTableRowspan();
     testTableColgroup();
