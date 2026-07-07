@@ -275,6 +275,12 @@ const std::vector<PropertyDef>& knownProperties() {
         {"paint-order",       "normal",     true},
         {"stop-color",        "black",      false},
         {"stop-opacity",      "1",          false},
+        // SVG text: text-anchor is inherited (a value on <text> flows to its
+        // <tspan> chunks); the baseline properties are per-element.
+        {"text-anchor",        "start",     true},
+        {"dominant-baseline",  "auto",      false},
+        {"alignment-baseline", "auto",      false},
+        {"baseline-shift",     "baseline",  false},
     };
     return props;
 }

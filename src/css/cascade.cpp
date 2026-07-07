@@ -375,10 +375,25 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             "stroke-dasharray", "stroke-dashoffset",
             "clip-rule", "clip-path", "paint-order", "color", "opacity",
             "stop-color", "stop-opacity",
+            "font-family", "font-size", "font-weight", "font-style",
+            "text-anchor", "dominant-baseline", "alignment-baseline",
+            "baseline-shift",
         };
         for (const char* attr : kSvgPresAttrs) {
             std::string_view v = elem.getAttribute(attr);
-            if (!v.empty()) presDecls.push_back({std::string(attr), std::string(v), false});
+            if (v.empty()) continue;
+            std::string value(v);
+            // SVG lengths are unitless user units (= px). font-size is resolved
+            // as a CSS <length>, where a bare number is invalid-at-computed-
+            // value-time and would reset to `medium`; append px so e.g.
+            // font-size="34" computes to 34px like Chromium.
+            if (std::string_view(attr) == "font-size") {
+                const char* b = value.c_str();
+                char* e = nullptr;
+                std::strtod(b, &e);
+                if (e != b && *e == '\0') value += "px";
+            }
+            presDecls.push_back({std::string(attr), std::move(value), false});
         }
         for (auto& decl : presDecls) {
             matched.push_back({
