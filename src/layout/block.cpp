@@ -1649,8 +1649,48 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         pendingInline.clear();
     };
 
+    // Fieldset with a rendered legend (CSS rendering §fieldset): the first
+    // in-flow legend child straddles the block-start border — shrink-to-fit,
+    // positioned at the fieldset's border-box top — and the fieldset content
+    // is pushed down below it (the legend's margin box replaces the block-
+    // start border in the flow). Laid out here, then skipped in the loop.
+    LayoutNode* fieldsetLegend = nullptr;
+    {
+        std::string_view ntag = node->tagName();
+        if (ntag == "fieldset" || ntag == "FIELDSET") {
+            for (auto* c : getLayoutChildren(node)) {
+                if (c->isTextNode()) continue;
+                if (styleVal(c->computedStyle(), "display") == "none") continue;
+                std::string_view ctag = c->tagName();
+                if (ctag == "legend" || ctag == "LEGEND") fieldsetLegend = c;
+                break; // only the first in-flow child can be the legend
+            }
+        }
+        if (fieldsetLegend) {
+            layoutNode(fieldsetLegend, childAvailable, metrics);
+            auto& lb = fieldsetLegend->box;
+            float padBorderH = lb.padding.left + lb.padding.right +
+                               lb.border.left + lb.border.right;
+            float legMax = computeMaxContentWidth(fieldsetLegend, metrics);
+            float legContent = std::min(legMax,
+                std::max(0.0f, childAvailable - padBorderH));
+            if (legContent < 0) legContent = 0;
+            lb.contentRect.width = legContent;
+            // Inset horizontally to the fieldset's content-left; pull the
+            // border-box top up to the fieldset border-box top.
+            lb.contentRect.x = lb.margin.left + lb.border.left + lb.padding.left;
+            lb.contentRect.y = -(node->box.border.top + node->box.padding.top) +
+                               lb.margin.top + lb.border.top + lb.padding.top;
+            float legMarginH = lb.fullHeight() + lb.margin.top + lb.margin.bottom;
+            float push = legMarginH - node->box.border.top;
+            if (push > 0.0f) cursorY += push;
+        }
+    }
+
     for (auto* child : getLayoutChildren(node)) {
         auto& childStyle = child->computedStyle();
+
+        if (child == fieldsetLegend) continue; // already placed above
 
         if (child->isTextNode()) {
             pendingInline.push_back(child);
