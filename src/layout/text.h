@@ -40,6 +40,36 @@ struct TextRun {
 std::string applyTextTransform(const std::string& text,
                                const std::string& transform);
 
+// Intrinsic widths of a collapsing-whitespace (white-space: normal) text string,
+// measured the SAME way block.cpp's word-granularity IFC builder reconstructs a
+// line: each word's advance is measured on its own (letter-spacing applied to
+// every slot INCLUDING the trailing one, matching breakTextIntoRuns'
+// measureWithSpacing), and adjacent words are separated by one synthetic space
+// advance (space glyph + letter-spacing + word-spacing, matching block.cpp's
+// spaceWidth). Because the whole-string measurement and the per-word sum differ
+// by sub-pixel font accumulation, sizing a box to the whole-string width can
+// leave its own reconstructed line a hair too wide and force a spurious wrap;
+// computing max-content this way keeps the intrinsic-sizing and layout paths in
+// lockstep so a box sized to max-content always fits its text on one line.
+//
+//   outMin — widest single word (words never share a line, so no space advance).
+//   outMax — the whole string on one line: Σ word advances + (n-1) space advances.
+//
+// Only the collapsing/wrapping path uses this; nowrap/pre and break-word/
+// break-all are measured elsewhere (they don't build word+space items).
+// Keep this in lockstep with layoutBlock's word-mode item construction in
+// block.cpp.
+void measureWordModeIntrinsics(const std::string& text,
+                               const std::string& fontFamily,
+                               float fontSize,
+                               const std::string& fontWeight,
+                               float letterSpacing,
+                               float wordSpacing,
+                               const std::string& textTransform,
+                               TextMetrics& metrics,
+                               float& outMin,
+                               float& outMax);
+
 // Break text into runs that fit within availableWidth.
 // Uses TextMetrics for measurement.
 // textTransform: CSS text-transform applied before measuring (so the box and

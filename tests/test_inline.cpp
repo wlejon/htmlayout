@@ -358,10 +358,12 @@ static void testInlineTextAlignJustify() {
     FixedTextMetrics metrics;
     layoutTree(&root, 350, metrics);
 
-    // Line 1: ib1(0), ib2(100+25=125), ib3(225+100=225+25=250)
+    // Justify expands the collapsed inter-word SPACES only (like Chromium).
+    // Adjacent inline-blocks with no whitespace between them offer no
+    // justification opportunities, so line 1 stays left-packed.
     check(approx(ib1.box.contentRect.x, 0), "justify: line1 first item at x=0");
-    check(approx(ib2.box.contentRect.x, 125), "justify: line1 second item at x=125 (25px gap)");
-    check(approx(ib3.box.contentRect.x, 250), "justify: line1 third item at x=250");
+    check(approx(ib2.box.contentRect.x, 100), "justify: no synthetic gap without spaces (x=100)");
+    check(approx(ib3.box.contentRect.x, 200), "justify: line1 third item at x=200");
     // Line 2 (last line): ib4 at x=0 (not justified)
     check(approx(ib4.box.contentRect.x, 0), "justify: last line not justified (x=0)");
 }
@@ -424,14 +426,14 @@ static void testInlineAbsoluteBottomRight() {
 
 static void testLetterSpacing() {
     printf("--- Inline: letter-spacing ---\n");
-    // Letter-spacing is added BETWEEN glyphs (n - 1 times). For "abc" at
-    // 10px/char with 2px spacing, the box is 3*10 + 2*2 = 34, matching the
-    // visible glyph extent so text-align: center centers symmetrically.
+    // Letter-spacing is added after EVERY character including the last
+    // (CSS Text; Chromium's measured box carries the trailing slot). For
+    // "abc" at 10px/char with 2px spacing, the box is 3*10 + 3*2 = 36.
     FixedTextMetrics m;
     auto runs = breakTextIntoRuns("abc", 200, "serif", 16, "normal", "normal", m,
                                   "normal", "normal", 2.0f, 0);
     check(runs.size() == 1, "letter-spacing: single run");
-    check(approx(runs[0].width, 34, 1), "letter-spacing: width includes spacing");
+    check(approx(runs[0].width, 36, 1), "letter-spacing: width includes spacing");
 }
 
 static void testWordSpacing() {
@@ -550,13 +552,17 @@ static void testMixedFontSizeLineBox() {
           "mixed sizes: 32px span top = baseline(36) - ascent(32)");
     check(approx(big.box.contentRect.height, 40),
           "mixed sizes: inline span rect is its natural font box, not line-height");
-    // Wrapped line: leading collapsible space is dropped, run starts at x=0,
-    // and sits on line 2's baseline (48 + 18 - 16 = 50).
-    check(t2.box.textRuns.size() == 1 && approx(t2.box.textRuns[0].x, 0),
-          "wrap: leading space trimmed from wrapped line");
-    check(approx(t2.box.textRuns[0].width, 110),
-          "wrap: trimmed run width excludes the leading space");
-    check(approx(t2.box.textRuns[0].y, 50),
+    // Word-granularity wrapping: " ccccc" still fits on line 1 after the big
+    // span (40 + 20 + 60 = 120 <= 150), so only "ddddd" wraps to line 2. On
+    // the wrapped line its leading collapsible space is dropped, the run
+    // starts at x=0, and it sits on line 2's baseline (48 + 18 - 16 = 50).
+    check(!t2.box.textRuns.empty(), "wrap: wrapped text produced runs");
+    const auto& wrapped = t2.box.textRuns.back();
+    check(approx(wrapped.x, 0),
+          "wrap: wrapped-line run starts at x=0 (leading space trimmed)");
+    check(approx(wrapped.width, 50),
+          "wrap: wrapped run is 'ddddd' (50px), the leading space excluded");
+    check(approx(wrapped.y, 50),
           "wrap: line 2 run top = 48 + strutAbove(18) - ascent(16)");
 }
 
@@ -698,6 +704,67 @@ static void testSubSuperBaselineShift() {
     }
 }
 
+// ========== Max-content ↔ layout consistency (regression guard) ==========
+
+// Super-additive metric: each measureWidth() call rounds its result UP, so
+// measuring a whole string is strictly narrower than the sum of its words'
+// individual measurements plus per-space measurements. This reproduces the
+// real-font behaviour where a table cell sized to a single whole-string
+// max-content measurement can't fit the word-by-word line the IFC builder
+// reconstructs — the exact table-cell double-wrap regression this guards.
+struct RoundUpTextMetrics : public TextMetrics {
+    float measureWidth(std::string_view text,
+                       std::string_view, float,
+                       std::string_view) override {
+        return std::ceil(static_cast<float>(text.size()) * 10.4f);
+    }
+    float lineHeight(std::string_view, float,
+                     std::string_view) override {
+        return 20.0f;
+    }
+};
+
+static void testMaxContentSingleLineConsistency() {
+    printf("--- Max-content: box sized to max-content fits on one line ---\n");
+    InlineMockNode root;
+    initBlock(root);
+
+    InlineMockNode textNode;
+    textNode.isText = true;
+    // Several words so the per-word rounding accumulates past the whole-string
+    // measurement — a naive whole-string max-content would be too small.
+    textNode.text = "this column has substantially more text";
+    root.addChild(&textNode);
+
+    RoundUpTextMetrics metrics;
+
+    // Sanity: the whole-string measurement really is narrower than the word-mode
+    // reconstruction, so this metric exercises the bug.
+    float mn = 0, mx = 0;
+    measureWordModeIntrinsics(textNode.text, "serif", 16.0f, "normal", 0, 0,
+                              "none", metrics, mn, mx);
+    float whole = metrics.measureWidth(
+        "this column has substantially more text", "serif", 16.0f, "normal");
+    check(mx > whole,
+          "max-content: word-mode reconstruction exceeds whole-string measure");
+
+    // Size the block to its own max-content and lay it out.
+    float maxc = computeMaxContentWidth(&root, metrics);
+    root.style["width"] = std::to_string(maxc) + "px";
+    layoutTree(&root, 1000, metrics);
+
+    check(approx(root.box.contentRect.height, 20),
+          "max-content: text stays on ONE line (height = one line-height)");
+    // Every placed run sits on the same line (single y).
+    bool oneLine = true;
+    if (!textNode.box.textRuns.empty()) {
+        float y0 = textNode.box.textRuns.front().y;
+        for (const auto& r : textNode.box.textRuns)
+            if (!approx(r.y, y0)) oneLine = false;
+    }
+    check(oneLine, "max-content: all text runs share one baseline (no wrap)");
+}
+
 // ========== Entry point ==========
 
 void testInlineLayout() {
@@ -734,4 +801,7 @@ void testInlineLayout() {
     testInlineBlockBaselineAlignment();
     testPlainTextLineUsesLineHeight();
     testSubSuperBaselineShift();
+
+    // Intrinsic-sizing ↔ layout consistency
+    testMaxContentSingleLineConsistency();
 }

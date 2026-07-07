@@ -836,7 +836,29 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto& ci : cellInfos) {
         float cw = borderSpacing * (ci.colspan - 1);
         for (size_t c = 0; c < ci.colspan; c++) cw += colWidths[ci.gridCol + c];
-        layoutNode(ci.node, cw, metrics);
+        // In border-collapse mode a cell's border box carries HALF of each
+        // collapsed gridline border (the other half belongs to its neighbour) —
+        // exactly the padding+border the column algorithm reserved for it via
+        // cellPadBorderH. layoutBlock, however, resolves the cell's FULL
+        // computed border when it flows the content (the collapsed half-border
+        // is written to box.border only afterwards, below). Uncorrected, that
+        // extra half-border shrinks the flowed content area below the reserved
+        // max-content width, so a column sized exactly to max-content wraps the
+        // cell's last word. Widen the width handed to layoutNode by
+        // (full - half) so the content area it computes equals the collapsed
+        // content box the column was sized for; the cell's final rendered width
+        // is still pinned to its track span at the box.contentRect.width
+        // assignment below.
+        float layoutW = cw;
+        if (collapse) {
+            float hL, hR, hT, hB;
+            cellSharedHalfBorders(ts, ci.node, ci.gridRow, ci.gridCol,
+                                  ci.colspan, ci.rowspan, hL, hR, hT, hB);
+            float fullB = getCellBorderL(ci.node, ts.fontSize) +
+                          getCellBorderR(ci.node, ts.fontSize);
+            layoutW = cw + (fullB - (hL + hR));
+        }
+        layoutNode(ci.node, layoutW, metrics);
 
         // Per CSS, percentage padding/margin on a table cell resolves against
         // the table's containing block (its content width), not the cell's

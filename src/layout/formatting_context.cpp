@@ -261,8 +261,13 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
                 if (std::isspace(static_cast<unsigned char>(c))) {
                     if (!word.empty()) {
                         float w = metrics.measureWidth(word, fontFamily, fontSize, fontWeight);
-                        if (letterSpacing != 0 && word.size() > 1)
-                            w += letterSpacing * static_cast<float>(word.size() - 1);
+                        // Letter-spacing on every slot incl. the trailing one,
+                        // matching breakTextIntoRuns' measureWithSpacing (the
+                        // width block.cpp gives each word item). A word measured
+                        // narrower here than the item it becomes would let a box
+                        // sized to min-content wrap its own widest word.
+                        if (letterSpacing != 0 && !word.empty())
+                            w += letterSpacing * static_cast<float>(word.size());
                         widestWord = std::max(widestWord, w);
                         word.clear();
                     }
@@ -406,33 +411,56 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
         if (child->isTextNode()) {
             // Flex containers discard whitespace-only text nodes (CSS Flexbox §4)
             if (isFlexContainer && isWhitespaceOnly(child->textContent())) continue;
-            // Max-content: no wrapping, measure the whole text as one line
             std::string_view text = child->textContent();
-            // Collapse whitespace
-            std::string collapsed;
-            bool lastSpace = false;
-            int spaceCount = 0;
-            for (char c : text) {
-                if (std::isspace(static_cast<unsigned char>(c))) {
-                    if (!lastSpace && !collapsed.empty()) {
-                        collapsed += ' '; lastSpace = true; ++spaceCount;
+            // The container's white-space mode decides how the FINAL layout
+            // sizes this text. When it collapses and wraps at word boundaries
+            // (white-space: normal, not break-word/break-all), block.cpp lays
+            // the line out as per-word runs + synthetic space items; its
+            // reconstructed single-line width is a hair wider than one whole-
+            // string measurement, so max-content must be reconstructed the same
+            // way or a cell sized to it wraps its own text (see block.cpp's
+            // word-mode item construction / measureWordModeIntrinsics).
+            const std::string& wsMode = styleVal(style, "white-space");
+            const std::string& oWrap  = styleVal(style, "overflow-wrap");
+            const std::string& wBreak = styleVal(style, "word-break");
+            bool wordMode = (wsMode.empty() || wsMode == "normal") &&
+                            !(oWrap == "break-word" || oWrap == "anywhere" ||
+                              wBreak == "break-all");
+            float w;
+            if (wordMode) {
+                float mn, mx;
+                measureWordModeIntrinsics(std::string(text), fontFamily,
+                    fontSize, fontWeight, letterSpacing, wordSpacing,
+                    styleVal(style, "text-transform"), metrics, mn, mx);
+                w = mx;
+            } else {
+                // nowrap / pre*: the line is a single whole-string measurement,
+                // so measure the collapsed string as one piece.
+                std::string collapsed;
+                bool lastSpace = false;
+                int spaceCount = 0;
+                for (char c : text) {
+                    if (std::isspace(static_cast<unsigned char>(c))) {
+                        if (!lastSpace && !collapsed.empty()) {
+                            collapsed += ' '; lastSpace = true; ++spaceCount;
+                        }
+                    } else {
+                        collapsed += c; lastSpace = false;
                     }
-                } else {
-                    collapsed += c; lastSpace = false;
                 }
+                if (!collapsed.empty() && collapsed.back() == ' ') {
+                    collapsed.pop_back();
+                    --spaceCount;
+                }
+                // Match the painted glyphs: intrinsic width must use the
+                // text-transformed string, same as breakTextIntoRuns does.
+                collapsed = applyTextTransform(collapsed, styleVal(style, "text-transform"));
+                w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
+                if (letterSpacing != 0 && collapsed.size() > 1)
+                    w += letterSpacing * static_cast<float>(collapsed.size() - 1);
+                if (wordSpacing != 0 && spaceCount > 0)
+                    w += wordSpacing * static_cast<float>(spaceCount);
             }
-            if (!collapsed.empty() && collapsed.back() == ' ') {
-                collapsed.pop_back();
-                --spaceCount;
-            }
-            // Match the painted glyphs: intrinsic width must use the
-            // text-transformed string, same as breakTextIntoRuns does.
-            collapsed = applyTextTransform(collapsed, styleVal(style, "text-transform"));
-            float w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
-            if (letterSpacing != 0 && collapsed.size() > 1)
-                w += letterSpacing * static_cast<float>(collapsed.size() - 1);
-            if (wordSpacing != 0 && spaceCount > 0)
-                w += wordSpacing * static_cast<float>(spaceCount);
             maxChildMax = std::max(maxChildMax, w);
             sumChildMax += w;
         } else {
@@ -541,6 +569,11 @@ float resolveLineHeight(const std::string& value, float fontSize) {
         if (unit.empty()) {
             // Unitless: treat as multiplier
             return num * fontSize;
+        }
+        if (unit == "%") {
+            // Percentage line-height resolves against the element's own
+            // font-size (CSS2 10.8.1).
+            return num / 100.0f * fontSize;
         }
     }
 

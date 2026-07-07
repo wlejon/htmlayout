@@ -66,6 +66,45 @@ std::string applyTextTransform(const std::string& text,
     return text;
 }
 
+void measureWordModeIntrinsics(const std::string& srcText,
+                               const std::string& fontFamily,
+                               float fontSize,
+                               const std::string& fontWeight,
+                               float letterSpacing,
+                               float wordSpacing,
+                               const std::string& textTransform,
+                               TextMetrics& metrics,
+                               float& outMin,
+                               float& outMax) {
+    outMin = 0.0f;
+    outMax = 0.0f;
+    // text-transform first so measurements use the painted glyphs, exactly as
+    // breakTextIntoRuns does before scanning words.
+    const std::string text = applyTextTransform(srcText, textTransform);
+    std::vector<SourceWord> words = scanWords(text);
+    if (words.empty()) return;
+
+    // Per-word advance — mirrors breakTextIntoRuns' measureWithSpacing (n slots,
+    // trailing included).
+    auto measureWord = [&](const std::string& s) -> float {
+        float w = metrics.measureWidth(s, fontFamily, fontSize, fontWeight);
+        if (letterSpacing != 0 && !s.empty())
+            w += letterSpacing * static_cast<float>(s.size());
+        return w;
+    };
+    // Inter-word space advance — mirrors block.cpp's
+    // spaceWidth = measureWidth(" ") + letter-spacing + word-spacing.
+    float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight)
+                       + letterSpacing + wordSpacing;
+
+    for (const auto& word : words) {
+        float w = measureWord(word.text);
+        outMin = std::max(outMin, w);
+        outMax += w;
+    }
+    outMax += static_cast<float>(words.size() - 1) * spaceWidth;
+}
+
 std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
                                         float availableWidth,
                                         const std::string& fontFamily,
@@ -92,14 +131,13 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
     float lineH = metrics.naturalHeight(fontFamily, fontSize, fontWeight);
 
     // Helper: measure text width with letter-spacing applied between glyphs.
-    // CSS spec adds letter-spacing as advance after every character including
-    // the last, but the trailing slot is empty space that pushes centered
-    // text visibly leftward. Apply (n - 1) so the box matches the visible
-    // glyph extent and text-align: center centers symmetrically.
+    // CSS adds letter-spacing as advance after every character INCLUDING the
+    // last — Chromium's measured box carries the trailing slot too, so apply
+    // n spacings to match its geometry.
     auto measureWithSpacing = [&](const std::string& s) -> float {
         float w = metrics.measureWidth(s, fontFamily, fontSize, fontWeight);
-        if (letterSpacing != 0 && s.size() > 1) {
-            w += letterSpacing * static_cast<float>(s.size() - 1);
+        if (letterSpacing != 0 && !s.empty()) {
+            w += letterSpacing * static_cast<float>(s.size());
         }
         return w;
     };

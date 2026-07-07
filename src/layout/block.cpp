@@ -105,6 +105,7 @@ struct StrutMetrics {
     float above = 0;      // line-top to baseline when only the strut is present
     float below = 0;      // baseline to line-bottom
     float ascent = 0;     // font natural ascent (no leading)
+    float descent = 0;    // font natural descent (no leading)
     float xHeight = 0;    // for vertical-align: middle
     float lineHeight = 0; // used line-height
 };
@@ -123,6 +124,7 @@ StrutMetrics computeStrut(const css::ComputedStyle& style, float fontSize,
     float leading = s.lineHeight - natural;
     float half = std::floor(leading * 0.5f);
     s.ascent = asc;
+    s.descent = natural - asc;
     s.above = asc + half;
     s.below = (natural - asc) + (leading - half);
     s.xHeight = fontSize > 0 ? metrics.xHeight(fam, fontSize, wt) : 0.0f;
@@ -445,17 +447,36 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         };
         std::vector<IFCItem> items;
 
+        // Letter/word-spacing for the block's own text (a collapsed space
+        // between words carries letter-spacing after it plus word-spacing).
+        float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
+        float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
         // Cached space width for synthetic whitespace runs between
-        // inline-level siblings (e.g. <ib> <ib> separated by " \n ").
-        float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
+        // inline-level siblings (e.g. <ib> <ib> separated by " \n ") and for
+        // the word-separator items emitted below.
+        float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight)
+            + ls + ws;
+
+        const std::string& oWrap = styleVal(style, "overflow-wrap");
+        const std::string& wBreak = styleVal(style, "word-break");
+        bool canBreakWord = oWrap == "break-word" || oWrap == "anywhere" ||
+                            wBreak == "break-all";
 
         for (auto* child : getLayoutChildren(node)) {
             if (child->isTextNode()) {
-                float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
-                float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
-                auto runs = breakTextIntoRuns(std::string(child->textContent()), childAvailable,
+                // Collapsing white-space wraps in the line builder below --
+                // request word-granularity runs (the splitter greedily packs
+                // to the given width, so a tiny width yields one word per
+                // run) and re-insert the collapsed inter-word spaces as
+                // separate items. Break-word / break-all and non-collapsing
+                // modes keep the splitter's own line packing (it owns
+                // mid-word break decisions).
+                bool wordMode = (whiteSpace.empty() || whiteSpace == "normal") &&
+                                !canBreakWord;
+                auto runs = breakTextIntoRuns(std::string(child->textContent()),
+                    wordMode ? 0.5f : childAvailable,
                     fontFamily, fontSize, fontWeight, whiteSpace, metrics,
-                    "normal", "normal", ls, ws, styleVal(style, "text-transform"));
+                    oWrap, wBreak, ls, ws, styleVal(style, "text-transform"));
                 // Fresh layout pass — clear any previously placed runs.
                 child->box.textRuns.clear();
                 // Pure-whitespace text node (scanWords returned no words):
@@ -480,9 +501,31 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         items.push_back(std::move(it));
                     }
                 }
+                size_t emitted = 0;
+                int prevSrcEnd = 0;
                 for (auto& run : runs) {
                     bool emitContent = !(run.text.empty() && run.width == 0);
                     if (emitContent) {
+                        if (wordMode && emitted > 0 && run.canBreakBefore) {
+                            // The collapsed whitespace between two words:
+                            // its own item so wrap decisions exclude the
+                            // trailing space, line-edge trimming can drop
+                            // it, and justify can expand it.
+                            IFCItem sp{};
+                            sp.width = spaceWidth;
+                            sp.height = 0.0f; // doesn't grow the line
+                            sp.above = strutAbove;
+                            sp.below = strutBelow;
+                            sp.baseline = strutAscent;
+                            sp.node = child;
+                            sp.isElement = false;
+                            sp.text = " ";
+                            sp.srcStart = prevSrcEnd;
+                            sp.srcEnd = run.srcStart;
+                            sp.canBreakBefore = true;
+                            sp.canBreakAfter  = true;
+                            items.push_back(std::move(sp));
+                        }
                         IFCItem it{};
                         it.width = run.width;
                         // The run's own box is the font's natural height
@@ -500,7 +543,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         it.srcEnd = run.srcEnd;
                         it.canBreakBefore = run.canBreakBefore;
                         it.canBreakAfter  = run.canBreakAfter;
+                        prevSrcEnd = run.srcEnd;
                         items.push_back(std::move(it));
+                        ++emitted;
                     }
                     // A preserved newline (white-space: pre/pre-wrap/
                     // pre-line) becomes a synthetic break-only item AFTER
@@ -553,9 +598,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 it.isElement = true;
 
                 const std::string& va = styleVal(cs, "vertical-align");
-                if (va == "top" || va == "text-top") it.valign = 1;
+                if (va == "top") it.valign = 1;
                 else if (va == "middle") it.valign = 2;
-                else if (va == "bottom" || va == "text-bottom") it.valign = 3;
+                else if (va == "bottom") it.valign = 3;
                 else if (va == "super") it.shift = fontSize / 3.0f + 1.0f;
                 else if (va == "sub") it.shift = -(fontSize / 5.0f + 1.0f);
 
@@ -636,6 +681,43 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     it.above = std::max(cAscent + cHalf, b);
                     it.below = std::max((cNatural - cAscent) + (cLead - cHalf),
                                         child->box.contentRect.height - b);
+                    if (va == "middle") {
+                        // Non-replaced inline: Blink centers the child's
+                        // LEADED inline box (its line-height) on
+                        // baseline + xHeight/2 of the parent; the margin-box
+                        // form (valign == 2) stays for atomic inlines.
+                        it.valign = 0;
+                        it.shift = strut.xHeight * 0.5f + cLH * 0.5f -
+                                   (cAscent + cHalf);
+                    }
+                }
+                if (va == "text-top") {
+                    // Top of the child's inline box meets the parent's
+                    // content-area top: natural ascent above the baseline
+                    // (CSS2 §10.8.1) - a baseline shift, so the line box
+                    // still grows through the shifted extents.
+                    it.valign = 0;
+                    it.shift = strut.ascent - it.above;
+                } else if (va == "text-bottom") {
+                    // Bottom of the child's inline box meets the parent's
+                    // content-area bottom (natural descent below baseline).
+                    it.valign = 0;
+                    it.shift = it.below - strut.descent;
+                } else if (!va.empty() && va != "baseline" && va != "top" &&
+                           va != "middle" && va != "bottom" &&
+                           va != "sub" && va != "super") {
+                    // <length> / <percentage>: raise the baseline by the
+                    // value (negative lowers). Percentages resolve against
+                    // the element's own line-height.
+                    float vfs = resolveLength(styleVal(cs, "font-size"),
+                                              fontSize, fontSize);
+                    if (vfs <= 0) vfs = fontSize;
+                    float vlh = resolveLineHeight(
+                        styleVal(cs, "line-height"), vfs,
+                        styleVal(cs, "font-family"),
+                        styleVal(cs, "font-weight"), metrics);
+                    it.valign = 0;
+                    it.shift = resolveLength(va, vlh, vfs);
                 }
                 // Atomic inlines (inline-block, replaced media, controls)
                 // always offer a soft-wrap opportunity on both sides (CSS
@@ -666,9 +748,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             auto& front = items.front();
             if (!front.isElement && !front.forceBreak && !front.text.empty() &&
                 front.text.front() == ' ') {
-                float spW = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
                 front.text.erase(front.text.begin());
-                front.width = std::max(0.0f, front.width - spW);
+                front.width = std::max(0.0f, front.width - spaceWidth);
             }
         }
 
@@ -711,6 +792,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             float above = 0;       // distance from line top to the baseline
         };
         std::vector<LineBounds> lines;
+
+        // Resolve text-indent up front: the first line's usable width is
+        // reduced (or, for a negative indent, extended) by it, and the
+        // positioning pass below offsets the first line's start by it.
+        float textIndent = resolveLength(styleVal(style, "text-indent"),
+                                         childAvailable, fontSize);
         {
             size_t lineStart = 0;
             float cursorX = 0;
@@ -730,7 +817,20 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     cursorX = 0;
                     continue;
                 }
-                if (whiteSpace != "nowrap" && cursorX > 0 && cursorX + items[i].width > childAvailable) {
+                float lineAvail = lines.empty() ? childAvailable - textIndent
+                                                : childAvailable;
+                // A collapsible space never forces a wrap: trailing whitespace
+                // "hangs" past the line edge (CSS Text §white-space processing)
+                // rather than moving to the next line. If it wrapped it would
+                // become that line's leading space, inflate its width, and push
+                // a word that should fit onto the following line. The space is
+                // still added to cursorX so an interior space counts toward the
+                // next word's fit test; the trailing-space trim below zeroes it
+                // for the final line width.
+                bool curIsSpace = !items[i].isElement && !items[i].forceBreak &&
+                                  items[i].text == " ";
+                if (whiteSpace != "nowrap" && !curIsSpace && cursorX > 0 &&
+                    cursorX + items[i].width > lineAvail) {
                     // Find the latest in-range break point at or before i.
                     size_t breakIdx = i;
                     while (breakIdx > lineStart &&
@@ -811,23 +911,32 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             line.maxHeight = above + below;
         }
 
-        // Resolve text-indent (first line only)
-        float textIndent = resolveLength(styleVal(style, "text-indent"), childAvailable, fontSize);
-
         // Position items per line with text-align offset
         for (size_t lineIdx = 0; lineIdx < lines.size(); lineIdx++) {
             auto& line = lines[lineIdx];
             bool isLastLine = (lineIdx == lines.size() - 1);
             float extraSpace = childAvailable - line.totalWidth;
+            if (lineIdx == 0) extraSpace -= textIndent;
             float xOffset = 0;
-            float gap = 0;
+            float spaceExtra = 0;
             if (extraSpace > 0) {
                 if (resolvedAlign == "center") xOffset = extraSpace / 2.0f;
                 else if (resolvedAlign == "right" || resolvedAlign == "end") xOffset = extraSpace;
                 else if (resolvedAlign == "justify" && !isLastLine) {
-                    size_t itemCount = line.end - line.start;
-                    if (itemCount > 1)
-                        gap = extraSpace / static_cast<float>(itemCount - 1);
+                    bool endsForced = line.end > line.start &&
+                                      items[line.end - 1].forceBreak;
+                    if (!endsForced) {
+                        size_t nGaps = 0;
+                        for (size_t k = line.start; k < line.end; ++k) {
+                            const IFCItem& sp = items[k];
+                            if (!sp.isElement && !sp.forceBreak &&
+                                sp.text == " ")
+                                ++nGaps;
+                        }
+                        if (nGaps > 0)
+                            spaceExtra = extraSpace /
+                                static_cast<float>(nGaps);
+                    }
                 }
             }
             float cursorX = xOffset;
@@ -908,7 +1017,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         trs.push_back(std::move(placed));
                     }
                 }
-                cursorX += item.width + gap;
+                cursorX += item.width;
+                if (spaceExtra != 0 && !item.isElement && !item.forceBreak &&
+                    item.text == " ")
+                    cursorX += spaceExtra;
             }
             cursorY += line.maxHeight;
         }
@@ -1115,12 +1227,17 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // spaces as separate items below. Non-wrapping modes keep
                 // the splitter's own line packing.
                 const std::string& wsMode = styleVal(style, "white-space");
-                bool wordMode = wsMode.empty() || wsMode == "normal";
+                const std::string& oWrap2 = styleVal(style, "overflow-wrap");
+                const std::string& wBreak2 = styleVal(style, "word-break");
+                bool canBreakWord2 = oWrap2 == "break-word" ||
+                    oWrap2 == "anywhere" || wBreak2 == "break-all";
+                bool wordMode = (wsMode.empty() || wsMode == "normal") &&
+                                !canBreakWord2;
                 auto runs = breakTextIntoRuns(std::string(inl->textContent()),
                     wordMode ? 0.5f : childAvailable,
                     styleVal(style, "font-family"), fontSize, styleVal(style, "font-weight"),
                     wsMode, metrics,
-                    "normal", "normal", ls2, ws2, styleVal(style, "text-transform"));
+                    oWrap2, wBreak2, ls2, ws2, styleVal(style, "text-transform"));
                 inl->box = LayoutBox{};
                 // Pure-whitespace text node: collapses to a single space
                 // between inline-level siblings (skipped at the run's start,

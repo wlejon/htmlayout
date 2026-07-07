@@ -2,6 +2,7 @@
 #include "css/properties.h"
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <sstream>
 #include <unordered_set>
@@ -632,6 +633,32 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
                     c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
             }
             style["font-size"] = (fam == "monospace") ? "13px" : "16px";
+        }
+    }
+
+    // 8c. Percentage line-height computes to an absolute length at
+    //     computed-value time (CSS2 §10.8.1): the percentage resolves against
+    //     the element's own font-size and the RESOLVED value inherits (a
+    //     child with a different font-size keeps the parent's px, unlike a
+    //     unitless number). Only convertible when the computed font-size is
+    //     already in px — otherwise layout's resolver handles it.
+    {
+        auto lh = style.find("line-height");
+        if (lh != style.end() && !lh->second.empty() &&
+            lh->second.back() == '%') {
+            auto fs = style.find("font-size");
+            if (fs != style.end() && fs->second.size() > 2 &&
+                fs->second.compare(fs->second.size() - 2, 2, "px") == 0) {
+                char* endp = nullptr;
+                double pct = std::strtod(lh->second.c_str(), &endp);
+                if (endp && *endp == '%') {
+                    double fpx = std::strtod(fs->second.c_str(), nullptr);
+                    double px = pct / 100.0 * fpx;
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "%g", px);
+                    lh->second = std::string(buf) + "px";
+                }
+            }
         }
     }
 
