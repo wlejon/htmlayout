@@ -188,6 +188,31 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     bool isRtl = (direction == "rtl");
     const std::string& display = styleVal(style, "display");
 
+    // An inline-block with block-level children is a full block formatting
+    // context: floats, clear/clearance, and margin collapsing all apply
+    // inside it. Delegate to the block engine (which shrink-to-fits an
+    // auto-width inline-block) instead of the simple vertical stacker below.
+    if (display == "inline-block") {
+        float iw = 0, ih = 0;
+        bool intrinsic = node->intrinsicSize(iw, ih, availableWidth);
+        bool hasBlockChild = false;
+        for (auto* child : getLayoutChildren(node)) {
+            if (child->isTextNode()) continue;
+            auto& cs = child->computedStyle();
+            const std::string& d = styleVal(cs, "display");
+            if (d == "none") continue;
+            const std::string& cp = styleVal(cs, "position");
+            if (cp == "absolute" || cp == "fixed") continue;
+            if (d != "inline" && d != "inline-block" &&
+                d != "inline-flex" && d != "inline-grid")
+                hasBlockChild = true;
+        }
+        if (!intrinsic && hasBlockChild) {
+            layoutBlock(node, availableWidth, metrics);
+            return;
+        }
+    }
+
     // Fresh layout pass: forget any baseline recorded by a previous layout.
     node->box.baselineOffset = -1.0f;
 

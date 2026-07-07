@@ -623,9 +623,10 @@ static void testFloatLeft() {
     // Float is at top-left
     check(approx(floater.box.contentRect.x, 0.0f), "float left: x=0");
     check(approx(floater.box.contentRect.y, 0.0f), "float left: y=0");
-    // Content flows beside the float
-    check(approx(content.box.contentRect.x, 100.0f), "float left: content shifted right");
-    check(approx(content.box.contentRect.width, 300.0f), "float left: content width reduced");
+    // An in-flow block box keeps the containing block's full width — its
+    // border box may overlap the float; only line boxes shorten (CSS2 §9.5)
+    check(approx(content.box.contentRect.x, 0.0f), "float left: block box keeps x=0");
+    check(approx(content.box.contentRect.width, 400.0f), "float left: block box keeps full width");
 }
 
 static void testFloatRight() {
@@ -653,9 +654,9 @@ static void testFloatRight() {
     // Float is at top-right
     check(approx(floater.box.contentRect.x, 300.0f), "float right: x=300");
     check(approx(floater.box.contentRect.y, 0.0f), "float right: y=0");
-    // Content at left, width reduced
+    // In-flow block box keeps the full width (only line boxes shorten)
     check(approx(content.box.contentRect.x, 0.0f), "float right: content at x=0");
-    check(approx(content.box.contentRect.width, 300.0f), "float right: content width reduced");
+    check(approx(content.box.contentRect.width, 400.0f), "float right: block box keeps full width");
 }
 
 static void testClearBoth() {

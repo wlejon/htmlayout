@@ -1045,7 +1045,8 @@ static void testBlockFloatMultiple() {
     // Two left floats side by side
     check(approx(f1.box.contentRect.x, 0.0f), "float: f1 at x=0");
     check(approx(f2.box.contentRect.x, 100.0f), "float: f2 at x=100");
-    check(approx(content.box.contentRect.x, 200.0f), "float: content shifted past both floats");
+    // In-flow block box overlaps the floats — only line boxes shorten
+    check(approx(content.box.contentRect.x, 0.0f), "float: block box keeps x=0 beside floats");
 }
 
 static void testBlockClearLeft() {

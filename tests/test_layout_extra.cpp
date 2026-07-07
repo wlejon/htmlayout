@@ -1372,15 +1372,15 @@ static void testFloatNotContainedByAutoHeight() {
 
     LxMetrics m;
     layoutTree(&root, 800, m);
-    printf("  wrap h=%.1f (expect 20); sib x=%.1f w=%.1f (expect 50 / 150); root h=%.1f (expect 90)\n",
+    printf("  wrap h=%.1f (expect 20); sib x=%.1f w=%.1f (expect 0 / 200); root h=%.1f (expect 90)\n",
            wrap.box.contentRect.height, sib.box.contentRect.x,
            sib.box.contentRect.width, root.box.contentRect.height);
     check(approx(wrap.box.contentRect.height, 20, 0.1f),
           "auto height ignores the protruding float");
-    check(approx(sib.box.contentRect.x, 50, 0.1f),
-          "escaped float still excludes the following sibling");
-    check(approx(sib.box.contentRect.width, 150, 0.1f),
-          "sibling is narrowed beside the escaped float");
+    check(approx(sib.box.contentRect.x, 0, 0.1f),
+          "sibling block box is not shifted by the escaped float");
+    check(approx(sib.box.contentRect.width, 200, 0.1f),
+          "sibling block box keeps full width (only line boxes shorten)");
     check(approx(root.box.contentRect.height, 90, 0.1f),
           "the BFC root contains the adopted float");
 }
@@ -1404,6 +1404,183 @@ static void testFloatContainedByBFC() {
     printf("  wrap h=%.1f (expect 90)\n", wrap.box.contentRect.height);
     check(approx(wrap.box.contentRect.height, 90, 0.1f),
           "overflow:hidden container wraps its float");
+}
+
+// ===== Floats: placement rules (CSS2 §9.5.1) =====
+static void testFloatStackingWrapsToNextLine() {
+    printf("--- float: fourth float wraps below the first float line ---\n");
+    LxNode root; root.initBase();
+    root.style_["width"] = "500px";
+    root.style_["overflow"] = "hidden";
+    LxNode f[5];
+    for (int i = 0; i < 5; ++i) {
+        f[i].initBase();
+        f[i].style_["float"] = "left";
+        f[i].style_["width"] = "150px";
+        f[i].style_["height"] = "60px";
+        root.addChild(&f[i]);
+    }
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  f4 (%.1f,%.1f) f5 (%.1f,%.1f) h=%.1f (expect (0,60) (150,60) 120)\n",
+           f[3].box.contentRect.x, f[3].box.contentRect.y,
+           f[4].box.contentRect.x, f[4].box.contentRect.y,
+           root.box.contentRect.height);
+    check(approx(f[2].box.contentRect.x, 300, 0.1f) &&
+          approx(f[2].box.contentRect.y, 0, 0.1f), "third float still on line one");
+    check(approx(f[3].box.contentRect.x, 0, 0.1f) &&
+          approx(f[3].box.contentRect.y, 60, 0.1f), "fourth float wraps to (0,60)");
+    check(approx(f[4].box.contentRect.x, 150, 0.1f) &&
+          approx(f[4].box.contentRect.y, 60, 0.1f), "fifth float follows at (150,60)");
+    check(approx(root.box.contentRect.height, 120, 0.1f),
+          "BFC height covers both float lines");
+}
+
+static void testFloatWiderThanRemainingSpace() {
+    printf("--- float: wider than the remaining line space drops below ---\n");
+    LxNode root; root.initBase();
+    root.style_["width"] = "500px";
+    root.style_["overflow"] = "hidden";
+    LxNode narrow; narrow.initBase();
+    narrow.style_["float"] = "left";
+    narrow.style_["width"] = "150px";
+    narrow.style_["height"] = "60px";
+    LxNode wide; wide.initBase();
+    wide.style_["float"] = "left";
+    wide.style_["width"] = "400px";
+    wide.style_["height"] = "60px";
+    LxNode small; small.initBase();
+    small.style_["float"] = "left";
+    small.style_["width"] = "80px";
+    small.style_["height"] = "60px";
+    root.addChild(&narrow); root.addChild(&wide); root.addChild(&small);
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  wide (%.1f,%.1f) small (%.1f,%.1f) (expect (0,60) (400,60))\n",
+           wide.box.contentRect.x, wide.box.contentRect.y,
+           small.box.contentRect.x, small.box.contentRect.y);
+    check(approx(wide.box.contentRect.x, 0, 0.1f) &&
+          approx(wide.box.contentRect.y, 60, 0.1f),
+          "400px float drops below the 150px float");
+    // Rule 5: the later float's top may not be higher than the wide float's
+    // top even though it would fit beside the first float.
+    check(approx(small.box.contentRect.x, 400, 0.1f) &&
+          approx(small.box.contentRect.y, 60, 0.1f),
+          "later float sits no higher than the earlier dropped float");
+}
+
+// ===== Clearance (CSS2 §9.5.2) =====
+static void testClearanceSwallowsMarginTop() {
+    printf("--- clear: clearance swallows the cleared box's margin-top ---\n");
+    LxNode root; root.initBase();
+    root.style_["width"] = "360px";
+    root.style_["overflow"] = "hidden";
+    LxNode fl; fl.initBase();
+    fl.style_["float"] = "left";
+    fl.style_["width"] = "100px";
+    fl.style_["height"] = "100px";
+    LxNode eaten; eaten.initBase();
+    eaten.style_["clear"] = "left";
+    eaten.style_["margin-top"] = "80px";
+    eaten.style_["height"] = "50px";
+    LxNode spacer; spacer.initBase();
+    spacer.style_["height"] = "20px";
+    root.addChild(&fl); root.addChild(&eaten); root.addChild(&spacer);
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  eaten y=%.1f (expect 100) root h=%.1f (expect 170)\n",
+           eaten.box.contentRect.y, root.box.contentRect.height);
+    check(approx(eaten.box.contentRect.y, 100, 0.1f),
+          "hypothetical top 80 < float bottom 100: clearance replaces the margin");
+    check(approx(root.box.contentRect.height, 170, 0.1f),
+          "content flows from the cleared position");
+}
+
+static void testClearWithoutClearanceKeepsMargin() {
+    printf("--- clear: no clearance when the margin already clears the float ---\n");
+    LxNode root; root.initBase();
+    root.style_["width"] = "360px";
+    root.style_["overflow"] = "hidden";
+    LxNode fl; fl.initBase();
+    fl.style_["float"] = "left";
+    fl.style_["width"] = "100px";
+    fl.style_["height"] = "100px";
+    LxNode kept; kept.initBase();
+    kept.style_["clear"] = "left";
+    kept.style_["margin-top"] = "150px";
+    kept.style_["height"] = "50px";
+    root.addChild(&fl); root.addChild(&kept);
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  kept y=%.1f (expect 150)\n", kept.box.contentRect.y);
+    check(approx(kept.box.contentRect.y, 150, 0.1f),
+          "hypothetical top 150 >= float bottom 100: margin applies in full");
+}
+
+static void testClearedBlockKeepsFullWidth() {
+    printf("--- clear: a cleared plain block keeps the full width ---\n");
+    LxNode root; root.initBase();
+    root.style_["width"] = "500px";
+    root.style_["overflow"] = "hidden";
+    LxNode fl; fl.initBase();
+    fl.style_["float"] = "left";
+    fl.style_["width"] = "120px";
+    fl.style_["height"] = "100px";
+    LxNode fr; fr.initBase();
+    fr.style_["float"] = "right";
+    fr.style_["width"] = "120px";
+    fr.style_["height"] = "160px";
+    LxNode cleft; cleft.initBase();
+    cleft.style_["clear"] = "left";
+    cleft.style_["height"] = "24px";
+    root.addChild(&fl); root.addChild(&fr); root.addChild(&cleft);
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    printf("  cleft (%.1f,%.1f) w=%.1f (expect (0,100) 500)\n",
+           cleft.box.contentRect.x, cleft.box.contentRect.y,
+           cleft.box.contentRect.width);
+    check(approx(cleft.box.contentRect.y, 100, 0.1f),
+          "clear:left lands at the left float's bottom");
+    check(approx(cleft.box.contentRect.x, 0, 0.1f) &&
+          approx(cleft.box.contentRect.width, 500, 0.1f),
+          "block box overlaps the remaining right float at full width");
+}
+
+// ===== Text wraps into shortened line boxes beside a float =====
+static void testTextWrapsBesideFloat() {
+    printf("--- float: text wraps in shortened lines and recovers below ---\n");
+    LxNode root; root.initBase();
+    root.style_["width"] = "500px";
+    LxNode fl; fl.initBase();
+    fl.style_["float"] = "left";
+    fl.style_["width"] = "120px";
+    fl.style_["height"] = "120px";
+    LxNode t; t.initBase();
+    t.isText = true;
+    // 48 four-char words (40px each + 10px space): beside the float a line
+    // holds 7 words (380px band), so 6 lines cover the float's 120px and
+    // the remaining words drop to a full-width line at x=0, y=120.
+    {
+        std::string s;
+        for (int i = 0; i < 48; ++i) { if (i) s += ' '; s += "word"; }
+        t.text = s;
+    }
+    root.addChild(&fl); root.addChild(&t);
+    LxMetrics m;
+    layoutTree(&root, 800, m);
+    const auto& runs = t.box.textRuns;
+    float firstX = runs.empty() ? -1.0f : runs.front().x;
+    bool recovered = false;
+    for (const auto& r : runs) {
+        if (r.y >= 119.0f && r.x <= 0.1f) recovered = true;
+    }
+    printf("  runs=%zu firstX=%.1f rootH=%.1f (expect >1 / 120 / >120)\n",
+           runs.size(), firstX, root.box.contentRect.height);
+    check(runs.size() > 1, "text wraps into multiple runs beside the float");
+    check(approx(firstX, 120, 0.1f), "first line starts at the float's right edge");
+    check(recovered, "a line below the float recovers to x=0");
+    check(root.box.contentRect.height > 120.0f,
+          "block height includes the wrapped lines");
 }
 
 // ===== Floats inside an inline run don't break the line (CSS2 §9.5) =====
@@ -1604,6 +1781,12 @@ void testLayoutExtra() {
     testMulticolInlineLines();
     testFloatNotContainedByAutoHeight();
     testFloatContainedByBFC();
+    testFloatStackingWrapsToNextLine();
+    testFloatWiderThanRemainingSpace();
+    testClearanceSwallowsMarginTop();
+    testClearWithoutClearanceKeepsMargin();
+    testClearedBlockKeepsFullWidth();
+    testTextWrapsBesideFloat();
     testMidRunFloatKeepsLine();
     testShapeOutsideCircleWrap();
     testAbsNegativeOffsets();
