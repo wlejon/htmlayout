@@ -161,20 +161,27 @@ AtomicInlineGeom atomicInlineGeometry(LayoutNode* child, float height,
             // descent hangs below the control (Blink).
             g.baseline = height;
         } else {
-            // Single-line form controls (input, select, button-type inputs):
-            // browsers align them by the control's internal text baseline —
-            // top border + padding + the control font's ascent.
-            float fs = resolveLength(styleVal(styleRef, "font-size"), 16.0f, 16.0f);
-            if (fs <= 0.0f) fs = 16.0f;
-            const std::string& fam = styleVal(styleRef, "font-family");
-            const std::string& wt  = styleVal(styleRef, "font-weight");
-            float asc = fs > 0.0f ? metrics.ascent(fam, fs, wt) : 0.0f;
-            if (asc <= 0.0f) asc = fs * 0.8f;
-            float b = child->box.margin.top + child->box.border.top +
-                      child->box.padding.top + asc;
-            if (b > height) b = height;
-            if (b < 0) b = 0;
-            g.baseline = b;
+            std::string_view ctype = child->attribute("type");
+            bool isCheckRadio = (tag == "input" || tag == "INPUT") &&
+                                (ctype == "checkbox" || ctype == "radio");
+            if (isCheckRadio) {
+                // Checkbox/radio: align by the bottom of the border box.
+                g.baseline = height - child->box.margin.bottom;
+            } else {
+                // Single-line form controls (input, select, button-type
+                // inputs): align by the control's internal text baseline —
+                // top border + padding + the control font's ascent.
+                float fs = resolveLength(styleVal(styleRef, "font-size"), 16.0f, 16.0f);
+                if (fs <= 0.0f) fs = 16.0f;
+                const std::string& fam = styleVal(styleRef, "font-family");
+                const std::string& wt  = styleVal(styleRef, "font-weight");
+                float asc = fs > 0.0f ? metrics.ascent(fam, fs, wt) : 0.0f;
+                if (asc <= 0.0f) asc = fs * 0.8f;
+                g.baseline = child->box.margin.top + child->box.border.top +
+                             child->box.padding.top + asc;
+            }
+            if (g.baseline > height) g.baseline = height;
+            if (g.baseline < 0) g.baseline = 0;
             (void)strutBelow;
         }
     } else {
@@ -647,21 +654,31 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         it.above = it.height;
                         it.below = 0;
                     } else {
-                        // Single-line form controls (input/select/button-type
-                        // inputs): browsers align them by the control's
-                        // internal text baseline — top border + padding + the
-                        // control font's ascent.
-                        float cfs = resolveLength(styleVal(cs, "font-size"), 16.0f, 16.0f);
-                        if (cfs <= 0.0f) cfs = 16.0f;
-                        const std::string& cfam = styleVal(cs, "font-family");
-                        const std::string& cwt  = styleVal(cs, "font-weight");
-                        float casc = cfs > 0.0f ? metrics.ascent(cfam, cfs, cwt) : 0.0f;
-                        if (casc <= 0.0f) casc = cfs * 0.8f;
-                        float b = child->box.margin.top + child->box.border.top +
-                                  child->box.padding.top + casc;
-                        if (b > it.height) b = it.height;
-                        if (b < 0) b = 0;
-                        it.baseline = b;
+                        std::string_view rtype = child->attribute("type");
+                        bool isCheckRadio =
+                            (rtag == "input" || rtag == "INPUT") &&
+                            (rtype == "checkbox" || rtype == "radio");
+                        if (isCheckRadio) {
+                            // Checkbox/radio carry no text; browsers align them
+                            // by the bottom of the border box (the bottom
+                            // margin sits below the line baseline).
+                            it.baseline = it.height - child->box.margin.bottom;
+                        } else {
+                            // Single-line form controls (input/select/button-
+                            // type inputs): browsers align them by the control's
+                            // internal text baseline — top border + padding +
+                            // the control font's ascent.
+                            float cfs = resolveLength(styleVal(cs, "font-size"), 16.0f, 16.0f);
+                            if (cfs <= 0.0f) cfs = 16.0f;
+                            const std::string& cfam = styleVal(cs, "font-family");
+                            const std::string& cwt  = styleVal(cs, "font-weight");
+                            float casc = cfs > 0.0f ? metrics.ascent(cfam, cfs, cwt) : 0.0f;
+                            if (casc <= 0.0f) casc = cfs * 0.8f;
+                            it.baseline = child->box.margin.top + child->box.border.top +
+                                          child->box.padding.top + casc;
+                        }
+                        if (it.baseline > it.height) it.baseline = it.height;
+                        if (it.baseline < 0) it.baseline = 0;
                         it.above = it.baseline;
                         it.below = it.height - it.baseline;
                     }
