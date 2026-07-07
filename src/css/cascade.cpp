@@ -373,7 +373,7 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             "stroke", "stroke-opacity", "stroke-width",
             "stroke-linecap", "stroke-linejoin", "stroke-miterlimit",
             "stroke-dasharray", "stroke-dashoffset",
-            "clip-rule", "paint-order", "color", "opacity",
+            "clip-rule", "clip-path", "paint-order", "color", "opacity",
             "stop-color", "stop-opacity",
         };
         for (const char* attr : kSvgPresAttrs) {
