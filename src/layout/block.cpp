@@ -142,7 +142,8 @@ struct AtomicInlineGeom {
 };
 
 AtomicInlineGeom atomicInlineGeometry(LayoutNode* child, float height,
-                                      float strutBelow, float availWidth) {
+                                      float strutBelow, float availWidth,
+                                      TextMetrics& metrics) {
     AtomicInlineGeom g;
     auto& styleRef = child->computedStyle();
     const std::string& va = styleVal(styleRef, "vertical-align");
@@ -152,17 +153,29 @@ AtomicInlineGeom atomicInlineGeometry(LayoutNode* child, float height,
 
     float iw = 0, ih = 0;
     if (child->intrinsicSize(iw, ih, availWidth)) {
-        if (child->hasIntrinsicRatio()) {
-            // Replaced media (img/canvas/video/svg): baseline is the bottom
-            // margin edge.
+        std::string_view tag = child->tagName();
+        bool isTextarea = (tag == "textarea" || tag == "TEXTAREA");
+        if (child->hasIntrinsicRatio() || isTextarea) {
+            // Replaced media (img/canvas/video/svg) and the multi-line
+            // <textarea> align by the bottom margin edge, so the line strut's
+            // descent hangs below the control (Blink).
             g.baseline = height;
         } else {
-            // Form controls: browsers align them by the control's internal
-            // text baseline, approximated as a strut-descent above the
-            // bottom margin edge.
-            float below = std::min(strutBelow, height);
-            if (below < 0) below = 0;
-            g.baseline = height - below;
+            // Single-line form controls (input, select, button-type inputs):
+            // browsers align them by the control's internal text baseline —
+            // top border + padding + the control font's ascent.
+            float fs = resolveLength(styleVal(styleRef, "font-size"), 16.0f, 16.0f);
+            if (fs <= 0.0f) fs = 16.0f;
+            const std::string& fam = styleVal(styleRef, "font-family");
+            const std::string& wt  = styleVal(styleRef, "font-weight");
+            float asc = fs > 0.0f ? metrics.ascent(fam, fs, wt) : 0.0f;
+            if (asc <= 0.0f) asc = fs * 0.8f;
+            float b = child->box.margin.top + child->box.border.top +
+                      child->box.padding.top + asc;
+            if (b > height) b = height;
+            if (b < 0) b = 0;
+            g.baseline = b;
+            (void)strutBelow;
         }
     } else {
         // Atomic inline: baseline of the last line box when it has in-flow
@@ -623,24 +636,34 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     // regardless of computed display (an <input> is
                     // inline-block per the UA sheet but has no line boxes of
                     // its own to take a baseline from).
-                    if (child->hasIntrinsicRatio()) {
-                        // Replaced media (img/canvas/video/svg): baseline is
-                        // the bottom margin edge.
+                    std::string_view rtag = child->tagName();
+                    bool isTextarea = (rtag == "textarea" || rtag == "TEXTAREA");
+                    if (child->hasIntrinsicRatio() || isTextarea) {
+                        // Replaced media (img/canvas/video/svg) and the
+                        // multi-line <textarea> align by the bottom margin
+                        // edge, so the block's strut descent hangs below the
+                        // control (matching Blink's reported line heights).
                         it.baseline = it.height;
                         it.above = it.height;
                         it.below = 0;
                     } else {
-                        // Form controls (input/button/select…): browsers align
-                        // them by the control's internal text baseline, which
-                        // we approximate as sitting a strut-descent above the
-                        // bottom margin edge. This keeps a lone control from
-                        // adding descent space under the line (matching
-                        // Chromium's reported container heights).
-                        float below = std::min(strutBelow, it.height);
-                        if (below < 0) below = 0;
-                        it.baseline = it.height - below;
+                        // Single-line form controls (input/select/button-type
+                        // inputs): browsers align them by the control's
+                        // internal text baseline — top border + padding + the
+                        // control font's ascent.
+                        float cfs = resolveLength(styleVal(cs, "font-size"), 16.0f, 16.0f);
+                        if (cfs <= 0.0f) cfs = 16.0f;
+                        const std::string& cfam = styleVal(cs, "font-family");
+                        const std::string& cwt  = styleVal(cs, "font-weight");
+                        float casc = cfs > 0.0f ? metrics.ascent(cfam, cfs, cwt) : 0.0f;
+                        if (casc <= 0.0f) casc = cfs * 0.8f;
+                        float b = child->box.margin.top + child->box.border.top +
+                                  child->box.padding.top + casc;
+                        if (b > it.height) b = it.height;
+                        if (b < 0) b = 0;
+                        it.baseline = b;
                         it.above = it.baseline;
-                        it.below = below;
+                        it.below = it.height - it.baseline;
                     }
                 } else if (d == "inline-block" || d == "inline-flex" || d == "inline-grid") {
                     // Atomic inline: baseline is the last line box's baseline
@@ -1336,7 +1359,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 float cw = inl->box.fullWidth() + inl->box.margin.left + inl->box.margin.right;
                 float ch = inl->box.fullHeight() + inl->box.margin.top + inl->box.margin.bottom;
                 AtomicInlineGeom g = atomicInlineGeometry(inl, ch, anonStrut.below,
-                                                          childAvailable);
+                                                          childAvailable, metrics);
                 AnonItem it{};
                 it.node = inl; it.width = cw; it.height = ch;
                 it.baseline = g.baseline; it.valign = g.valign;
@@ -2087,7 +2110,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                             float cw = c->box.fullWidth() + c->box.margin.left + c->box.margin.right;
                             float ch = c->box.fullHeight() + c->box.margin.top + c->box.margin.bottom;
                             li.push_back({c, cw, ch,
-                                atomicInlineGeometry(c, ch, colStrut.below, actualColWidth)});
+                                atomicInlineGeometry(c, ch, colStrut.below, actualColWidth, metrics)});
                         }
                         size_t ls = 0;
                         while (ls < li.size()) {
