@@ -166,6 +166,7 @@ const std::vector<PropertyDef>& knownProperties() {
         {"background-size",     "auto",     false},
         {"background-clip",     "border-box", false},
         {"background-origin",   "padding-box", false},
+        {"background-blend-mode", "normal",   false},
 
         // Direction and writing mode
         {"direction",         "ltr",        true},
