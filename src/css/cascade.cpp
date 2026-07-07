@@ -378,6 +378,7 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             "font-family", "font-size", "font-weight", "font-style",
             "text-anchor", "dominant-baseline", "alignment-baseline",
             "baseline-shift",
+            "marker-start", "marker-mid", "marker-end",
         };
         for (const char* attr : kSvgPresAttrs) {
             std::string_view v = elem.getAttribute(attr);

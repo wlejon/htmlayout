@@ -281,6 +281,11 @@ const std::vector<PropertyDef>& knownProperties() {
         {"dominant-baseline",  "auto",      false},
         {"alignment-baseline", "auto",      false},
         {"baseline-shift",     "baseline",  false},
+        // SVG markers are inherited (a value on a <g> flows to descendant
+        // shapes); each references a <marker> by url(#id) or is `none`.
+        {"marker-start",       "none",      true},
+        {"marker-mid",         "none",      true},
+        {"marker-end",         "none",      true},
     };
     return props;
 }
