@@ -359,6 +359,36 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
 
     std::vector<MatchedDecl> matched;
 
+    // 0. SVG presentation attributes (fill="red", stroke-width="2", ...) are the
+    //    lowest-priority style source: they beat inheritance (they enter the
+    //    cascade as a real declaration) but lose to any author rule or inline
+    //    style. Seed them at specificity 0 and push them FIRST so stable_sort
+    //    keeps them earliest among equal-specificity declarations (a universal
+    //    author rule still wins). Attribute names match their CSS property names
+    //    1:1. presDecls must outlive the apply pass — MatchedDecl holds pointers.
+    std::vector<Declaration> presDecls;
+    {
+        static const char* const kSvgPresAttrs[] = {
+            "fill", "fill-opacity", "fill-rule",
+            "stroke", "stroke-opacity", "stroke-width",
+            "stroke-linecap", "stroke-linejoin", "stroke-miterlimit",
+            "stroke-dasharray", "stroke-dashoffset",
+            "clip-rule", "paint-order", "color", "opacity",
+            "stop-color", "stop-opacity",
+        };
+        for (const char* attr : kSvgPresAttrs) {
+            std::string_view v = elem.getAttribute(attr);
+            if (!v.empty()) presDecls.push_back({std::string(attr), std::string(v), false});
+        }
+        for (auto& decl : presDecls) {
+            matched.push_back({
+                &decl.property, &decl.value, /*important=*/false,
+                /*specificity=*/0, /*order=*/0, /*isInline=*/false,
+                /*layerOrder=*/-1, Origin::Author
+            });
+        }
+    }
+
     for (auto& rule : rules_) {
         // Container query check: if the rule has a container condition, evaluate it
         if (!rule.containerCondition.empty()) {

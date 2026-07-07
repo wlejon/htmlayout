@@ -253,6 +253,28 @@ const std::vector<PropertyDef>& knownProperties() {
         {"inset-inline-end",   "auto",      false},
         {"inset-block-start",  "auto",      false},
         {"inset-block-end",    "auto",      false},
+
+        // SVG presentation properties. These are settable via CSS *and* as SVG
+        // presentation attributes (fill="red"); the attribute is seeded as a
+        // lowest-priority declaration in Cascade::resolve(). Most are inherited
+        // in SVG so a `fill`/`stroke` on a <g> flows to its shape children.
+        // `clip-path`, `opacity`, and `color` (drives currentColor) are already
+        // registered above.
+        {"fill",              "black",      true},
+        {"fill-opacity",      "1",          true},
+        {"fill-rule",         "nonzero",    true},
+        {"stroke",            "none",       true},
+        {"stroke-opacity",    "1",          true},
+        {"stroke-width",      "1",          true},
+        {"stroke-linecap",    "butt",       true},
+        {"stroke-linejoin",   "miter",      true},
+        {"stroke-miterlimit", "4",          true},
+        {"stroke-dasharray",  "none",       true},
+        {"stroke-dashoffset", "0",          true},
+        {"clip-rule",         "nonzero",    true},
+        {"paint-order",       "normal",     true},
+        {"stop-color",        "black",      false},
+        {"stop-opacity",      "1",          false},
     };
     return props;
 }
