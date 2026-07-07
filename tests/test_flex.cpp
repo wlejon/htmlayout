@@ -560,6 +560,39 @@ static void testFlexAlignBaseline() {
     check(approx(aBaseline, bBaseline, 2), "flex baseline: baselines aligned");
 }
 
+static void testFlexShrunkItemChildWidth() {
+    printf("--- Flex: children of a shrunk item see the flexed width ---\n");
+    // Container 760px; 4 items each width:180 + padding-left:40 ->
+    // hypothetical 220 each, 880 total, shrink 30 each -> border box 190,
+    // content 150. A block child must be laid out against the flexed
+    // content width (150), not the specified style width (180).
+    FlexMockNode root; initFlexContainer(root);
+    root.style["width"] = "760px";
+
+    FlexMockNode items[4];
+    FlexMockNode kids[4];
+    for (int i = 0; i < 4; i++) {
+        initFlexItem(items[i]);
+        items[i].style["width"] = "180px";
+        items[i].style["padding-left"] = "40px";
+        initFlexItem(kids[i]);          // plain block child
+        kids[i].style["display"] = "block";
+        kids[i].style["height"] = "10px";
+        items[i].addChild(&kids[i]);
+        root.addChild(&items[i]);
+    }
+
+    FlexTextMetrics m;
+    layoutTree(&root, 800, m);
+
+    check(approx(items[0].box.contentRect.width, 150),
+          "shrunk item: content width = 190 - 40 padding");
+    check(approx(kids[0].box.contentRect.width, 150),
+          "shrunk item child: laid out at flexed width, not style width");
+    check(approx(items[1].box.contentRect.x - items[0].box.contentRect.x, 190),
+          "shrunk items: packed at 190px pitch");
+}
+
 // ========== Entry point ==========
 
 void testFlexLayout() {
@@ -593,4 +626,5 @@ void testFlexLayout() {
     testFlexAlignContentSpaceAround();
     testFlexAlignContentSpaceEvenly();
     testFlexAlignContentStretch();
+    testFlexShrunkItemChildWidth();
 }

@@ -599,7 +599,26 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         }
                     }
                 }
+                // The flex algorithm resolved the used main size (finalMain,
+                // border-box). Pre-resolve padding/border and pass the flexed
+                // CONTENT width into the inner layout via overrideContentWidth
+                // so the item's children are laid out against the flexed size
+                // rather than the item's specified style width (which flexing
+                // may have grown or shrunk away from).
+                {
+                    float ipadH = resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
+                                  resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
+                    float iborH = 0;
+                    if (styleVal(cs, "border-left-style") != "none")
+                        iborH += resolveLength(styleVal(cs, "border-left-width"), mainAvailable, childFontSize);
+                    if (styleVal(cs, "border-right-style") != "none")
+                        iborH += resolveLength(styleVal(cs, "border-right-width"), mainAvailable, childFontSize);
+                    float flexedContentW = contentWidth - ipadH - iborH;
+                    if (flexedContentW < 0) flexedContentW = 0;
+                    item->node->overrideContentWidth = flexedContentW;
+                }
                 layoutNode(item->node, contentWidth, metrics);
+                item->node->overrideContentWidth = -1.0f;
                 item->node->box.contentRect.width = contentWidth -
                     item->node->box.padding.left - item->node->box.padding.right -
                     item->node->box.border.left - item->node->box.border.right;

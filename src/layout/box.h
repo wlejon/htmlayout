@@ -156,6 +156,13 @@ struct LayoutNode {
     // Set by the parent before layout; 0 means percentage heights resolve to auto.
     float availableHeight = 0;
 
+    // Flexed used content width, set (>= 0) by a flex container before laying
+    // out a row-direction item whose main size was grown/shrunk away from its
+    // style width. Block layout uses it in place of the resolved style width
+    // so the item's CHILDREN see the flexed size, not the specified one.
+    // -1 means "no override". The flex container resets it after layout.
+    float overrideContentWidth = -1.0f;
+
     // Viewport height, propagated from root to all descendants.
     // Used as fallback for absolute elements whose containing block has no definite height.
     float viewportHeight = 0;

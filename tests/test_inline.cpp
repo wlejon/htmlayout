@@ -625,6 +625,79 @@ static void testPlainTextLineUsesLineHeight() {
           "line-height 2: run centered by half-leading");
 }
 
+static void testSubSuperBaselineShift() {
+    printf("--- Line box: vertical-align sub/super shifts baseline ---\n");
+    // Block: font 16, line-height 1.5 -> LH 24, natural 20, ascent 16,
+    // strut above 18 / below 6.
+    // super: shift up = 16/3 + 1 = 6.333; the raised extent grows the line
+    //   above the baseline: above = 18 + 6.333 = 24.333, below stays 6.
+    // sub: shift down = 16/5 + 1 = 4.2; grows below: above 18, below 10.2.
+    {
+        InlineMockNode root;
+        initBlock(root);
+        root.style["width"] = "500px";
+        root.style["line-height"] = "1.5";
+
+        InlineMockNode t1;
+        t1.isText = true;
+        t1.text = "xx";
+        root.addChild(&t1);
+
+        InlineMockNode sup;
+        initInline(sup);
+        sup.style["vertical-align"] = "super";
+        sup.style["line-height"] = "1.5";
+        root.addChild(&sup);
+
+        InlineMockNode supText;
+        supText.isText = true;
+        supText.text = "s";
+        sup.addChild(&supText);
+
+        ScaledTextMetrics m;
+        layoutTree(&root, 500, m);
+
+        check(approx(root.box.contentRect.height, 30.333f),
+              "super: line height = above(18+6.333) + below(6)");
+        check(approx(sup.box.contentRect.y, 2.0f),
+              "super: box top = baseline(24.333) - ascent(16) - shift(6.333)");
+        check(t1.box.textRuns.size() == 1 && approx(t1.box.textRuns[0].y, 8.333f),
+              "super: sibling text stays on the (unmoved) line baseline");
+    }
+    {
+        InlineMockNode root;
+        initBlock(root);
+        root.style["width"] = "500px";
+        root.style["line-height"] = "1.5";
+
+        InlineMockNode t1;
+        t1.isText = true;
+        t1.text = "xx";
+        root.addChild(&t1);
+
+        InlineMockNode sub;
+        initInline(sub);
+        sub.style["vertical-align"] = "sub";
+        sub.style["line-height"] = "1.5";
+        root.addChild(&sub);
+
+        InlineMockNode subText;
+        subText.isText = true;
+        subText.text = "s";
+        sub.addChild(&subText);
+
+        ScaledTextMetrics m;
+        layoutTree(&root, 500, m);
+
+        check(approx(root.box.contentRect.height, 28.2f),
+              "sub: line height = above(18) + below(6+4.2)");
+        check(approx(sub.box.contentRect.y, 6.2f),
+              "sub: box top = baseline(18) - ascent(16) + shift(4.2)");
+        check(t1.box.textRuns.size() == 1 && approx(t1.box.textRuns[0].y, 2.0f),
+              "sub: sibling text stays on the (unmoved) line baseline");
+    }
+}
+
 // ========== Entry point ==========
 
 void testInlineLayout() {
@@ -660,4 +733,5 @@ void testInlineLayout() {
     testMixedFontSizeLineBox();
     testInlineBlockBaselineAlignment();
     testPlainTextLineUsesLineHeight();
+    testSubSuperBaselineShift();
 }

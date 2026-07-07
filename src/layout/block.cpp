@@ -221,6 +221,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (minW >= 0.0f && contentWidth < minW) contentWidth = minW;
     if (maxW >= 0.0f && contentWidth > maxW) contentWidth = maxW;
 
+    // Flex-item override: the flex algorithm already resolved (and min/max-
+    // clamped) the used main size; honor it over the style width so children
+    // are laid out against the flexed content width.
+    if (node->overrideContentWidth >= 0.0f)
+        contentWidth = node->overrideContentWidth;
+
     node->box.contentRect.width = contentWidth;
 
     // Handle margin: auto for horizontal centering
@@ -367,6 +373,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // Non-baseline items don't move the line's baseline; they only
             // grow the line box when taller than it.
             int valign = 0;
+            // Baseline shift for vertical-align: sub/super (positive raises
+            // the box above the line baseline). Blink-compatible offsets:
+            // super = parentFontSize/3 + 1, sub = -(parentFontSize/5 + 1).
+            // The shifted extents participate in the line-height union.
+            float shift = 0;
             // For text runs: the post-processing display string and the
             // source byte range so we can record PlacedTextRun on the text
             // node after line layout.
@@ -493,6 +504,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 if (va == "top" || va == "text-top") it.valign = 1;
                 else if (va == "middle") it.valign = 2;
                 else if (va == "bottom" || va == "text-bottom") it.valign = 3;
+                else if (va == "super") it.shift = fontSize / 3.0f + 1.0f;
+                else if (va == "sub") it.shift = -(fontSize / 5.0f + 1.0f);
 
                 float iw = 0, ih = 0;
                 bool replaced = child->intrinsicSize(iw, ih, childAvailable);
@@ -729,8 +742,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             for (size_t k = line.start; k < line.end; ++k) {
                 const IFCItem& it = items[k];
                 if (it.valign == 0) {
-                    above = std::max(above, it.above);
-                    below = std::max(below, it.below);
+                    above = std::max(above, it.above + it.shift);
+                    below = std::max(below, it.below - it.shift);
                 } else if (it.valign == 2) {
                     float a = it.height * 0.5f + strutXHeight * 0.5f;
                     above = std::max(above, a);
@@ -796,7 +809,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                             case 2: yTop = lineBaseline -
                                 (item.height * 0.5f + strutXHeight * 0.5f); break;
                             case 3: yTop = cursorY + line.maxHeight - item.height; break;
-                            default: yTop = lineBaseline - item.baseline; break;
+                            default: yTop = lineBaseline - item.baseline - item.shift; break;
                         }
                         item.node->box.contentRect.x = cursorX + item.node->box.margin.left +
                             item.node->box.padding.left + item.node->box.border.left;
