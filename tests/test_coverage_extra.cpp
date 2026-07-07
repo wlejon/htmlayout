@@ -183,8 +183,10 @@ static void testLogicalProperties() {
     r = expandShorthand("max-block-size", "300px");
     check(r[0].property == "max-height", "max-block-size -> max-height");
 
+    // Inline-axis logical longhands stay logical after expansion; the cascade
+    // maps them to physical sides using `direction` (see testInlineLogical).
     r = expandShorthand("margin-inline-start", "10px");
-    check(r[0].property == "margin-left", "margin-inline-start -> margin-left");
+    check(r[0].property == "margin-inline-start", "margin-inline-start stays logical");
 
     r = expandShorthand("margin-block-end", "5px");
     check(r[0].property == "margin-bottom", "margin-block-end -> margin-bottom");
@@ -192,8 +194,8 @@ static void testLogicalProperties() {
     r = expandShorthand("margin-inline", "10px 20px");
     bool ml = false, mr = false;
     for (auto& d : r) {
-        if (d.property == "margin-left" && d.value == "10px") ml = true;
-        if (d.property == "margin-right" && d.value == "20px") mr = true;
+        if (d.property == "margin-inline-start" && d.value == "10px") ml = true;
+        if (d.property == "margin-inline-end" && d.value == "20px") mr = true;
     }
     check(ml && mr, "margin-inline 2v");
 
@@ -212,14 +214,14 @@ static void testLogicalProperties() {
     check(r.size() == 2, "padding-block 1v");
 
     r = expandShorthand("padding-inline-start", "8px");
-    check(r[0].property == "padding-left", "padding-inline-start -> padding-left");
+    check(r[0].property == "padding-inline-start", "padding-inline-start stays logical");
 
     r = expandShorthand("border-inline-start", "1px solid red");
     bool bw = false, bs = false, bc = false;
     for (auto& d : r) {
-        if (d.property == "border-left-width") bw = true;
-        if (d.property == "border-left-style") bs = true;
-        if (d.property == "border-left-color") bc = true;
+        if (d.property == "border-inline-start-width") bw = true;
+        if (d.property == "border-inline-start-style") bs = true;
+        if (d.property == "border-inline-start-color") bc = true;
     }
     check(bw && bs && bc, "border-inline-start expands");
 
@@ -230,7 +232,7 @@ static void testLogicalProperties() {
 
     r = expandShorthand("border-inline", "1px solid green");
     int sides = 0;
-    for (auto& d : r) if (d.property == "border-left-width" || d.property == "border-right-width") sides++;
+    for (auto& d : r) if (d.property == "border-inline-start-width" || d.property == "border-inline-end-width") sides++;
     check(sides == 2, "border-inline applies to both sides");
 
     r = expandShorthand("border-block", "1px solid green");
@@ -253,18 +255,18 @@ static void testLogicalProperties() {
     check(r.size() == 2, "border-block-color 1v");
 
     r = expandShorthand("border-inline-start-width", "3px");
-    check(r[0].property == "border-left-width", "border-inline-start-width");
+    check(r[0].property == "border-inline-start-width", "border-inline-start-width stays logical");
     r = expandShorthand("border-block-end-color", "red");
     check(r[0].property == "border-bottom-color", "border-block-end-color");
     r = expandShorthand("border-inline-end-style", "dashed");
-    check(r[0].property == "border-right-style", "border-inline-end-style");
+    check(r[0].property == "border-inline-end-style", "border-inline-end-style stays logical");
     r = expandShorthand("border-block-start-color", "blue");
     check(r[0].property == "border-top-color", "border-block-start-color");
 
     r = expandShorthand("inset-inline-start", "10px");
-    check(r[0].property == "left", "inset-inline-start -> left");
+    check(r[0].property == "inset-inline-start", "inset-inline-start stays logical");
     r = expandShorthand("inset-inline-end", "10px");
-    check(r[0].property == "right", "inset-inline-end -> right");
+    check(r[0].property == "inset-inline-end", "inset-inline-end stays logical");
 }
 
 static void testListStyleShorthand() {

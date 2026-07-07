@@ -1010,8 +1010,14 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // inward by the half-border so cells line up against the painted edge.
     std::vector<float> colXPositions(numCols);
     {
+        // Under `direction: rtl` the column order reverses: grid column 0 sits
+        // at the right edge and the last column at the left. Walk the physical
+        // slots left-to-right (same widths and spacing) but assign them to grid
+        // columns from last to first.
+        const bool rtl = (styleVal(node->computedStyle(), "direction") == "rtl");
         float cx = borderSpacing + collapseInset.left;
-        for (size_t c = 0; c < numCols; c++) {
+        for (size_t s = 0; s < numCols; s++) {
+            size_t c = rtl ? (numCols - 1 - s) : s;
             colXPositions[c] = cx;
             cx += colWidths[c] + borderSpacing;
         }

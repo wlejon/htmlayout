@@ -308,6 +308,39 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
     }
 }
 
+// CSS Logical Properties L1 — resolve inline-axis logical properties (margin/
+// padding/border/inset -inline-start/end) to physical sides using the element's
+// own computed `direction`. Block-axis logical properties are already physical
+// by shorthand-expansion time (writing-mode is always horizontal-tb). Presence
+// of a logical key in the map means it was explicitly set (non-inherited
+// defaults are never stored), so it wins over the physical initial value.
+static void resolveInlineLogical(ComputedStyle& style) {
+    auto dirIt = style.find("direction");
+    const bool rtl = (dirIt != style.end() && dirIt->second == "rtl");
+    const char* startSide = rtl ? "right" : "left";
+    const char* endSide   = rtl ? "left"  : "right";
+    auto move = [&](const char* logical, const char* physicalPrefix,
+                    const char* side, const char* physicalSuffix) {
+        auto it = style.find(logical);
+        if (it == style.end()) return;
+        std::string v = std::move(it->second);
+        style.erase(it);
+        style[std::string(physicalPrefix) + side + physicalSuffix] = std::move(v);
+    };
+    move("margin-inline-start", "margin-", startSide, "");
+    move("margin-inline-end",   "margin-", endSide,   "");
+    move("padding-inline-start", "padding-", startSide, "");
+    move("padding-inline-end",   "padding-", endSide,   "");
+    move("inset-inline-start", "", startSide, "");
+    move("inset-inline-end",   "", endSide,   "");
+    move("border-inline-start-width", "border-", startSide, "-width");
+    move("border-inline-end-width",   "border-", endSide,   "-width");
+    move("border-inline-start-style", "border-", startSide, "-style");
+    move("border-inline-end-style",   "border-", endSide,   "-style");
+    move("border-inline-start-color", "border-", startSide, "-color");
+    move("border-inline-end-color",   "border-", endSide,   "-color");
+}
+
 ComputedStyle Cascade::resolve(const ElementRef& elem,
                                 const std::string& inlineStyle,
                                 const ComputedStyle* parentStyle) const {
@@ -716,6 +749,16 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
+    // 9d. CSS Logical Properties L1 — resolve inline-axis logical properties to
+    //     physical sides now that `direction` is known. Block-axis logical
+    //     properties were already mapped to physical at shorthand-expansion time
+    //     (writing-mode is always horizontal-tb), but inline-start/end depend on
+    //     the element's own `direction`: for ltr inline-start=left, inline-end=
+    //     right; for rtl they swap. Presence of a logical key in the map means it
+    //     was explicitly set (non-inherited defaults are never stored), so mapping
+    //     it onto the physical side reproduces the correct computed value.
+    resolveInlineLogical(style);
+
     // 10. Non-inherited defaults are NOT stored in the map.  Layout's styleVal()
     //    falls back to initialValueRef() for missing keys, so the map only
     //    contains properties that were explicitly set or inherited — typically
@@ -853,6 +896,16 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
             style[e.property] = e.value;
         }
     }
+
+    // Resolve inline-axis logical properties to physical sides before the
+    // defaults-fill loop below stores every non-inherited property (which would
+    // otherwise make "explicitly set" indistinguishable from default). Direction
+    // is inherited from the originating element when not set on the pseudo.
+    if (style.find("direction") == style.end()) {
+        auto d = elemStyle.find("direction");
+        if (d != elemStyle.end()) style["direction"] = d->second;
+    }
+    resolveInlineLogical(style);
 
     // Inherit from the originating element's style for inherited properties
     for (auto& prop : knownProperties()) {

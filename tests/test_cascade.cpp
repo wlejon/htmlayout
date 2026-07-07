@@ -745,7 +745,44 @@ static void testMonospaceDefaultFontSize() {
           "cascade: 'Menlo, monospace' stack does not trigger the quirk");
 }
 
+static void testInlineLogicalDirection() {
+    printf("--- Cascade: inline logical properties resolve per direction ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        ".flow { margin-inline-start: 40px; margin-inline-end: 8px;"
+        "        padding-inline-start: 3px; inset-inline-start: 20px;"
+        "        border-inline-start-width: 5px; }\n"));
+
+    // ltr: inline-start = left, inline-end = right.
+    MockElement ltr; ltr.tag = "div"; ltr.classes = "flow";
+    auto sLtr = cascade.resolve(ltr, "direction: ltr");
+    check(sv(sLtr, "margin-left") == "40px", "ltr: margin-inline-start -> margin-left");
+    check(sv(sLtr, "margin-right") == "8px", "ltr: margin-inline-end -> margin-right");
+    check(sv(sLtr, "padding-left") == "3px", "ltr: padding-inline-start -> padding-left");
+    check(sv(sLtr, "left") == "20px", "ltr: inset-inline-start -> left");
+    check(sv(sLtr, "border-left-width") == "5px", "ltr: border-inline-start-width -> border-left-width");
+    check(sv(sLtr, "margin-inline-start") == "0", "ltr: logical key removed after mapping");
+
+    // rtl: inline-start = right, inline-end = left.
+    MockElement rtl; rtl.tag = "div"; rtl.classes = "flow";
+    auto sRtl = cascade.resolve(rtl, "direction: rtl");
+    check(sv(sRtl, "margin-right") == "40px", "rtl: margin-inline-start -> margin-right");
+    check(sv(sRtl, "margin-left") == "8px", "rtl: margin-inline-end -> margin-left");
+    check(sv(sRtl, "padding-right") == "3px", "rtl: padding-inline-start -> padding-right");
+    check(sv(sRtl, "right") == "20px", "rtl: inset-inline-start -> right");
+    check(sv(sRtl, "border-right-width") == "5px", "rtl: border-inline-start-width -> border-right-width");
+
+    // Direction inherited from the parent (the `dir` attribute path) also drives
+    // the mapping.
+    ComputedStyle parentRtl;
+    parentRtl["direction"] = "rtl";
+    MockElement child; child.tag = "div"; child.classes = "flow";
+    auto sInh = cascade.resolve(child, {}, &parentRtl);
+    check(sv(sInh, "margin-right") == "40px", "inherited rtl: margin-inline-start -> margin-right");
+}
+
 void testCascade() {
+    testInlineLogicalDirection();
     testBasicResolve();
     testSpecificityOrder();
     testSourceOrder();

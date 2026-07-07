@@ -721,6 +721,7 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
                     lower.substr(0, 15) == "conic-gradient(" ||
                     lower.substr(0, 26) == "repeating-linear-gradient(" ||
                     lower.substr(0, 26) == "repeating-radial-gradient(" ||
+                    lower.substr(0, 25) == "repeating-conic-gradient(" ||
                     lower.substr(0, 6) == "image(" ||
                     lower == "none") {
                     image = (lower == "none") ? "none" : t;
@@ -1020,16 +1021,20 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
     if (property == "max-inline-size") return {{"max-width", value}};
     if (property == "max-block-size") return {{"max-height", value}};
 
-    // Logical margin longhands
-    if (property == "margin-inline-start") return {{"margin-left", value}};
-    if (property == "margin-inline-end") return {{"margin-right", value}};
+    // Logical margin longhands. Block-axis maps to physical directly (writing
+    // mode is horizontal-tb); inline-axis (start/end) depends on `direction`
+    // and is resolved to physical (left/right) after the cascade knows it
+    // (Cascade::resolve, see resolveInlineLogical). Keep the logical longhand
+    // in the map so that step verbatim.
+    if (property == "margin-inline-start") return {{"margin-inline-start", value}};
+    if (property == "margin-inline-end") return {{"margin-inline-end", value}};
     if (property == "margin-block-start") return {{"margin-top", value}};
     if (property == "margin-block-end") return {{"margin-bottom", value}};
 
     // Logical margin shorthands
     if (property == "margin-inline") {
-        return {{"margin-left", parts[0]},
-                {"margin-right", parts.size() > 1 ? parts[1] : parts[0]}};
+        return {{"margin-inline-start", parts[0]},
+                {"margin-inline-end", parts.size() > 1 ? parts[1] : parts[0]}};
     }
     if (property == "margin-block") {
         return {{"margin-top", parts[0]},
@@ -1037,43 +1042,45 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
     }
 
     // Logical padding longhands
-    if (property == "padding-inline-start") return {{"padding-left", value}};
-    if (property == "padding-inline-end") return {{"padding-right", value}};
+    if (property == "padding-inline-start") return {{"padding-inline-start", value}};
+    if (property == "padding-inline-end") return {{"padding-inline-end", value}};
     if (property == "padding-block-start") return {{"padding-top", value}};
     if (property == "padding-block-end") return {{"padding-bottom", value}};
 
     // Logical padding shorthands
     if (property == "padding-inline") {
-        return {{"padding-left", parts[0]},
-                {"padding-right", parts.size() > 1 ? parts[1] : parts[0]}};
+        return {{"padding-inline-start", parts[0]},
+                {"padding-inline-end", parts.size() > 1 ? parts[1] : parts[0]}};
     }
     if (property == "padding-block") {
         return {{"padding-top", parts[0]},
                 {"padding-bottom", parts.size() > 1 ? parts[1] : parts[0]}};
     }
 
-    // Logical border longhands
-    if (property == "border-inline-start-width") return {{"border-left-width", value}};
-    if (property == "border-inline-end-width") return {{"border-right-width", value}};
+    // Logical border longhands. Inline-axis width/style/color stay logical and
+    // resolve to physical after the cascade (direction-dependent); block-axis
+    // maps to physical directly.
+    if (property == "border-inline-start-width") return {{"border-inline-start-width", value}};
+    if (property == "border-inline-end-width") return {{"border-inline-end-width", value}};
     if (property == "border-block-start-width") return {{"border-top-width", value}};
     if (property == "border-block-end-width") return {{"border-bottom-width", value}};
-    if (property == "border-inline-start-style") return {{"border-left-style", value}};
-    if (property == "border-inline-end-style") return {{"border-right-style", value}};
+    if (property == "border-inline-start-style") return {{"border-inline-start-style", value}};
+    if (property == "border-inline-end-style") return {{"border-inline-end-style", value}};
     if (property == "border-block-start-style") return {{"border-top-style", value}};
     if (property == "border-block-end-style") return {{"border-bottom-style", value}};
-    if (property == "border-inline-start-color") return {{"border-left-color", value}};
-    if (property == "border-inline-end-color") return {{"border-right-color", value}};
+    if (property == "border-inline-start-color") return {{"border-inline-start-color", value}};
+    if (property == "border-inline-end-color") return {{"border-inline-end-color", value}};
     if (property == "border-block-start-color") return {{"border-top-color", value}};
     if (property == "border-block-end-color") return {{"border-bottom-color", value}};
 
     // Logical border shorthands (border-inline-start, border-block-end, etc.)
     if (property == "border-inline-start") {
         auto bc = parseBorderTokens(parts);
-        return {{"border-left-width", bc.width}, {"border-left-style", bc.style}, {"border-left-color", bc.color}};
+        return {{"border-inline-start-width", bc.width}, {"border-inline-start-style", bc.style}, {"border-inline-start-color", bc.color}};
     }
     if (property == "border-inline-end") {
         auto bc = parseBorderTokens(parts);
-        return {{"border-right-width", bc.width}, {"border-right-style", bc.style}, {"border-right-color", bc.color}};
+        return {{"border-inline-end-width", bc.width}, {"border-inline-end-style", bc.style}, {"border-inline-end-color", bc.color}};
     }
     if (property == "border-block-start") {
         auto bc = parseBorderTokens(parts);
@@ -1087,8 +1094,8 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
     // border-inline / border-block (apply same to both sides)
     if (property == "border-inline") {
         auto bc = parseBorderTokens(parts);
-        return {{"border-left-width", bc.width}, {"border-left-style", bc.style}, {"border-left-color", bc.color},
-                {"border-right-width", bc.width}, {"border-right-style", bc.style}, {"border-right-color", bc.color}};
+        return {{"border-inline-start-width", bc.width}, {"border-inline-start-style", bc.style}, {"border-inline-start-color", bc.color},
+                {"border-inline-end-width", bc.width}, {"border-inline-end-style", bc.style}, {"border-inline-end-color", bc.color}};
     }
     if (property == "border-block") {
         auto bc = parseBorderTokens(parts);
@@ -1098,39 +1105,40 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
 
     // border-inline-width / border-block-width (1 or 2 values)
     if (property == "border-inline-width") {
-        return {{"border-left-width", parts[0]},
-                {"border-right-width", parts.size() > 1 ? parts[1] : parts[0]}};
+        return {{"border-inline-start-width", parts[0]},
+                {"border-inline-end-width", parts.size() > 1 ? parts[1] : parts[0]}};
     }
     if (property == "border-block-width") {
         return {{"border-top-width", parts[0]},
                 {"border-bottom-width", parts.size() > 1 ? parts[1] : parts[0]}};
     }
     if (property == "border-inline-style") {
-        return {{"border-left-style", parts[0]},
-                {"border-right-style", parts.size() > 1 ? parts[1] : parts[0]}};
+        return {{"border-inline-start-style", parts[0]},
+                {"border-inline-end-style", parts.size() > 1 ? parts[1] : parts[0]}};
     }
     if (property == "border-block-style") {
         return {{"border-top-style", parts[0]},
                 {"border-bottom-style", parts.size() > 1 ? parts[1] : parts[0]}};
     }
     if (property == "border-inline-color") {
-        return {{"border-left-color", parts[0]},
-                {"border-right-color", parts.size() > 1 ? parts[1] : parts[0]}};
+        return {{"border-inline-start-color", parts[0]},
+                {"border-inline-end-color", parts.size() > 1 ? parts[1] : parts[0]}};
     }
     if (property == "border-block-color") {
         return {{"border-top-color", parts[0]},
                 {"border-bottom-color", parts.size() > 1 ? parts[1] : parts[0]}};
     }
 
-    // Logical inset longhands
-    if (property == "inset-inline-start") return {{"left", value}};
-    if (property == "inset-inline-end") return {{"right", value}};
+    // Logical inset longhands. Inline-axis stays logical (direction-dependent);
+    // block-axis maps to physical directly.
+    if (property == "inset-inline-start") return {{"inset-inline-start", value}};
+    if (property == "inset-inline-end") return {{"inset-inline-end", value}};
     if (property == "inset-block-start") return {{"top", value}};
     if (property == "inset-block-end") return {{"bottom", value}};
 
     // Logical inset shorthands
     if (property == "inset-inline") {
-        return {{"left", parts[0]}, {"right", parts.size() > 1 ? parts[1] : parts[0]}};
+        return {{"inset-inline-start", parts[0]}, {"inset-inline-end", parts.size() > 1 ? parts[1] : parts[0]}};
     }
     if (property == "inset-block") {
         return {{"top", parts[0]}, {"bottom", parts.size() > 1 ? parts[1] : parts[0]}};

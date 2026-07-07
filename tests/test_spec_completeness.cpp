@@ -19,11 +19,12 @@ static bool approx(float a, float b, float tol = 1.0f) {
 static void testLogicalMargin() {
     printf("--- Logical Properties: margin ---\n");
 
-    // margin-inline expands to margin-left + margin-right
+    // margin-inline expands to inline-axis logical longhands; the cascade maps
+    // them to physical left/right per `direction` (see testInlineLogicalCascade).
     auto r = expandShorthand("margin-inline", "10px 20px");
     check(r.size() == 2, "margin-inline -> 2 longhands");
-    check(r[0].property == "margin-left" && r[0].value == "10px", "margin-inline-start = left");
-    check(r[1].property == "margin-right" && r[1].value == "20px", "margin-inline-end = right");
+    check(r[0].property == "margin-inline-start" && r[0].value == "10px", "margin-inline-start logical");
+    check(r[1].property == "margin-inline-end" && r[1].value == "20px", "margin-inline-end logical");
 
     // Single value
     auto r2 = expandShorthand("margin-inline", "15px");
@@ -36,10 +37,10 @@ static void testLogicalMargin() {
 
     // Longhands
     auto r4 = expandShorthand("margin-inline-start", "8px");
-    check(r4[0].property == "margin-left" && r4[0].value == "8px", "margin-inline-start -> margin-left");
+    check(r4[0].property == "margin-inline-start" && r4[0].value == "8px", "margin-inline-start logical");
 
     auto r5 = expandShorthand("margin-inline-end", "12px");
-    check(r5[0].property == "margin-right" && r5[0].value == "12px", "margin-inline-end -> margin-right");
+    check(r5[0].property == "margin-inline-end" && r5[0].value == "12px", "margin-inline-end logical");
 
     auto r6 = expandShorthand("margin-block-start", "3px");
     check(r6[0].property == "margin-top" && r6[0].value == "3px", "margin-block-start -> margin-top");
@@ -52,15 +53,15 @@ static void testLogicalPadding() {
     printf("--- Logical Properties: padding ---\n");
 
     auto r = expandShorthand("padding-inline", "10px 20px");
-    check(r[0].property == "padding-left" && r[0].value == "10px", "padding-inline-start");
-    check(r[1].property == "padding-right" && r[1].value == "20px", "padding-inline-end");
+    check(r[0].property == "padding-inline-start" && r[0].value == "10px", "padding-inline-start");
+    check(r[1].property == "padding-inline-end" && r[1].value == "20px", "padding-inline-end");
 
     auto r2 = expandShorthand("padding-block", "5px");
     check(r2[0].property == "padding-top" && r2[0].value == "5px", "padding-block-start");
     check(r2[1].property == "padding-bottom" && r2[1].value == "5px", "padding-block-end 1v");
 
     auto r3 = expandShorthand("padding-inline-start", "8px");
-    check(r3[0].property == "padding-left", "padding-inline-start -> padding-left");
+    check(r3[0].property == "padding-inline-start", "padding-inline-start logical");
 
     auto r4 = expandShorthand("padding-block-end", "12px");
     check(r4[0].property == "padding-bottom", "padding-block-end -> padding-bottom");
@@ -86,15 +87,15 @@ static void testLogicalInset() {
     printf("--- Logical Properties: inset ---\n");
 
     auto r1 = expandShorthand("inset-inline", "10px 20px");
-    check(r1[0].property == "left" && r1[0].value == "10px", "inset-inline-start -> left");
-    check(r1[1].property == "right" && r1[1].value == "20px", "inset-inline-end -> right");
+    check(r1[0].property == "inset-inline-start" && r1[0].value == "10px", "inset-inline-start logical");
+    check(r1[1].property == "inset-inline-end" && r1[1].value == "20px", "inset-inline-end logical");
 
     auto r2 = expandShorthand("inset-block", "5px");
     check(r2[0].property == "top" && r2[0].value == "5px", "inset-block-start -> top");
     check(r2[1].property == "bottom" && r2[1].value == "5px", "inset-block-end -> bottom");
 
     auto r3 = expandShorthand("inset-inline-start", "15px");
-    check(r3[0].property == "left" && r3[0].value == "15px", "inset-inline-start longhand");
+    check(r3[0].property == "inset-inline-start" && r3[0].value == "15px", "inset-inline-start longhand");
 
     auto r4 = expandShorthand("inset-block-end", "25px");
     check(r4[0].property == "bottom" && r4[0].value == "25px", "inset-block-end longhand");
@@ -106,8 +107,8 @@ static void testLogicalBorder() {
     // border-inline shorthand
     auto r1 = expandShorthand("border-inline", "1px solid red");
     check(r1.size() == 6, "border-inline -> 6 longhands (2 sides x 3)");
-    check(r1[0].property == "border-left-width" && r1[0].value == "1px", "border-inline: left-width");
-    check(r1[3].property == "border-right-width" && r1[3].value == "1px", "border-inline: right-width");
+    check(r1[0].property == "border-inline-start-width" && r1[0].value == "1px", "border-inline: start-width");
+    check(r1[3].property == "border-inline-end-width" && r1[3].value == "1px", "border-inline: end-width");
 
     // border-block-start
     auto r2 = expandShorthand("border-block-start", "2px dashed blue");
@@ -116,8 +117,8 @@ static void testLogicalBorder() {
 
     // border-inline-width
     auto r3 = expandShorthand("border-inline-width", "1px 2px");
-    check(r3[0].property == "border-left-width" && r3[0].value == "1px", "border-inline-width: left");
-    check(r3[1].property == "border-right-width" && r3[1].value == "2px", "border-inline-width: right");
+    check(r3[0].property == "border-inline-start-width" && r3[0].value == "1px", "border-inline-width: start");
+    check(r3[1].property == "border-inline-end-width" && r3[1].value == "2px", "border-inline-width: end");
 
     // border-block-color
     auto r4 = expandShorthand("border-block-color", "red");
@@ -126,7 +127,7 @@ static void testLogicalBorder() {
 
     // Individual longhands
     auto r5 = expandShorthand("border-inline-start-width", "3px");
-    check(r5[0].property == "border-left-width", "border-inline-start-width -> border-left-width");
+    check(r5[0].property == "border-inline-start-width", "border-inline-start-width logical");
 
     auto r6 = expandShorthand("border-block-end-style", "dotted");
     check(r6[0].property == "border-bottom-style", "border-block-end-style -> border-bottom-style");

@@ -20,6 +20,12 @@ p, pre, dl, dt, dd, ol, ul, menu, dir {
     display: block;
 }
 
+/* The HTML `dir` attribute is a presentational hint for the `direction`
+   property (HTML §15.3.3). A nested dir="ltr"/"rtl" overrides the inherited
+   direction, which is how ltr islands inside an rtl block resolve. */
+[dir="ltr"] { direction: ltr; }
+[dir="rtl"] { direction: rtl; }
+
 hr {
     display: block;
     border-top-style: solid;

@@ -331,6 +331,30 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             node->box.margin.right = remaining - node->box.margin.left;
             if (node->box.margin.right < 0) node->box.margin.right = 0;
         }
+    } else if (node->overrideContentWidth < 0.0f &&
+               node->parent() &&
+               styleVal(node->parent()->computedStyle(), "direction") == "rtl" &&
+               styleVal(style, "width") != "auto" &&
+               styleVal(style, "float") == "none" &&
+               styleVal(style, "position") != "absolute" &&
+               styleVal(style, "position") != "fixed" &&
+               (styleVal(style, "display") == "block" ||
+                styleVal(style, "display") == "flow-root" ||
+                styleVal(style, "display") == "list-item")) {
+        // Over-constrained (CSS 2.1 §10.3.3): an in-flow block whose width and
+        // both margins are specified but do not fill its containing block. The
+        // end-side margin is over-specified and recomputed to absorb the slack —
+        // margin-left when the CONTAINING BLOCK's direction is rtl (an element
+        // carrying dir="rtl" but laid out inside an ltr parent still hugs the
+        // left, so it's the parent's direction that matters). In ltr the slack
+        // goes to margin-right, which leaves the box position unchanged, so only
+        // the rtl case needs handling here. Only widen for positive slack; a box
+        // wider than its container overflows without shifting the anchored edge.
+        float totalUsed = contentWidth + paddingH + borderH +
+                          node->box.margin.left + node->box.margin.right;
+        float remaining = availableWidth - totalUsed;
+        if (remaining > 0)
+            node->box.margin.left += remaining;
     }
 
     // Available width for children
@@ -995,7 +1019,53 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
             float lineBaseline = cursorY + line.above;
 
-            for (size_t i = line.start; i < line.end; i++) {
+            // Bidi visual reordering (UAX #9 rule L2). The line's items are in
+            // logical order; when the block's base direction is rtl (or an
+            // opposite-direction inline island is present), reorder them for
+            // painting/positioning. Each item takes the base embedding level,
+            // bumped by one when its own `direction` opposes the base (the HTML
+            // `dir` attribute isolates such runs). Then, from the highest level
+            // down to the lowest odd level, reverse each maximal run at that
+            // level or higher. Latin-only content means no per-glyph shaping —
+            // this is box-order reordering only.
+            std::vector<size_t> order;
+            order.reserve(line.end - line.start);
+            for (size_t i = line.start; i < line.end; i++) order.push_back(i);
+            {
+                const int baseLevel = (direction == "rtl") ? 1 : 0;
+                std::vector<int> lvl;
+                lvl.reserve(order.size());
+                int maxLvl = 0;
+                for (size_t idx : order) {
+                    int level = baseLevel;
+                    const IFCItem& it = items[idx];
+                    if (!it.forceBreak && it.node) {
+                        const std::string& idir =
+                            styleVal(it.node->computedStyle(), "direction");
+                        bool itemRtl = (idir == "rtl");
+                        if (itemRtl != (direction == "rtl")) level = baseLevel + 1;
+                    }
+                    lvl.push_back(level);
+                    maxLvl = std::max(maxLvl, level);
+                }
+                for (int L = maxLvl; L >= 1; L--) {
+                    size_t j = 0;
+                    while (j < order.size()) {
+                        if (lvl[j] >= L) {
+                            size_t k = j;
+                            while (k < order.size() && lvl[k] >= L) k++;
+                            std::reverse(order.begin() + j, order.begin() + k);
+                            std::reverse(lvl.begin() + j, lvl.begin() + k);
+                            j = k;
+                        } else {
+                            j++;
+                        }
+                    }
+                }
+            }
+
+            for (size_t oi = 0; oi < order.size(); oi++) {
+                size_t i = order[oi];
                 auto& item = items[i];
                 if (item.forceBreak) {
                     if (item.node) {
@@ -2271,10 +2341,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 };
 
                 const float unbounded = std::numeric_limits<float>::max() * 0.25f;
+                const bool fillAuto = (styleVal(style, "column-fill") == "auto");
                 float H;
-                if (specifiedHeight >= 0.0f) {
-                    // Definite height: columns fill to it and overflow into
-                    // extra columns when the content doesn't fit.
+                if (specifiedHeight >= 0.0f && fillAuto) {
+                    // column-fill: auto with a definite height: columns fill to
+                    // it sequentially and overflow into extra columns when the
+                    // content doesn't fit.
                     H = std::max(1.0f, node->box.contentRect.height);
                 } else if (columnCount <= 1) {
                     H = fill(unbounded, false).second;
@@ -2297,6 +2369,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         else lo = mid;
                     }
                     H = hi;
+                    // A definite height caps the balanced column height:
+                    // balancing may want a shorter column (honored), but never a
+                    // taller one — overflow spills into extra columns instead.
+                    if (specifiedHeight >= 0.0f)
+                        H = std::min(H, std::max(1.0f, node->box.contentRect.height));
                 }
                 float maxBottom = fill(H, true).second;
 

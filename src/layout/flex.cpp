@@ -101,6 +101,14 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     bool isReverse = (flexDir == "row-reverse" || flexDir == "column-reverse");
     bool isWrap = (flexWrap == "wrap" || flexWrap == "wrap-reverse");
 
+    // Under `direction: rtl` a row flex container's main axis runs right-to-left,
+    // so the main-start edge is the right edge and items pack from the right —
+    // positionally identical to row-reverse. XOR the two so `row`+rtl reverses
+    // and `row-reverse`+rtl cancels back to left-to-right. (rtl affects only the
+    // cross axis for column containers, which is left as-is.)
+    if (isRow && styleVal(style, "direction") == "rtl")
+        isReverse = !isReverse;
+
     float mainAvailable = isRow ? containerMain : resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
     // Column flex with no explicit height but a definite available height from
     // the parent (e.g. parent flex distributed space to us): use it as the
