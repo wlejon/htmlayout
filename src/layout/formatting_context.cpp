@@ -490,6 +490,15 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     float maxChildMax = 0.0f;
     float sumChildMax = 0.0f;
 
+    // Track whether every in-flow child is inline-level. A block container
+    // whose children are all inline-level (text, inline, inline-block, and
+    // inline ::before/::after) forms a single inline formatting context, so
+    // its max-content width is the whole content laid out on one unbroken
+    // line — the SUM of the pieces — not the widest child. With a block-level
+    // child present, children stack and the widest wins (the fallback below).
+    bool allInline = true;
+    int inflowCount = 0;
+
     auto isWhitespaceOnly = [](std::string_view s) {
         for (char c : s) {
             if (!std::isspace(static_cast<unsigned char>(c))) return false;
@@ -553,12 +562,21 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
             }
             maxChildMax = std::max(maxChildMax, w);
             sumChildMax += w;
+            ++inflowCount;   // text runs are inline-level
         } else {
             auto& cs = child->computedStyle();
             if (styleVal(cs, "display") == "none") continue;
             // Out-of-flow children contribute nothing to intrinsic sizes.
             const std::string& cpos = styleVal(cs, "position");
             if (cpos == "absolute" || cpos == "fixed") continue;
+            {
+                const std::string& cdisp = styleVal(cs, "display");
+                bool inlineLevel = cdisp == "inline" || cdisp == "inline-block" ||
+                                   cdisp == "inline-flex" || cdisp == "inline-grid" ||
+                                   cdisp == "inline-table";
+                if (!inlineLevel) allInline = false;
+                ++inflowCount;
+            }
             float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;
             float ph = resolveLength(styleVal(cs, "padding-left"), 0, childFontSize) +
@@ -625,6 +643,9 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
         if (childCount > 1) sumChildMax += gap * (childCount - 1);
         return sumChildMax;
     }
+    // Pure inline formatting context: all in-flow children share one line,
+    // so max-content is their combined width, not the widest single piece.
+    if (allInline && inflowCount > 1) return sumChildMax;
     return maxChildMax;
 }
 

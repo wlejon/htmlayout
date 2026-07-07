@@ -95,6 +95,12 @@ const std::vector<PropertyDef>& knownProperties() {
 
         // Generated content
         {"content",           "normal",  false},
+        {"counter-reset",     "none",    false},
+        {"counter-increment", "none",    false},
+        {"counter-set",       "none",    false},
+        // `quotes` is inherited so <q> descendants pick up an ancestor's
+        // custom quote pairs; `auto` resolves to the locale default downstream.
+        {"quotes",            "auto",    true},
 
         // Pointer events (for hit testing)
         {"pointer-events",    "auto",    true},
