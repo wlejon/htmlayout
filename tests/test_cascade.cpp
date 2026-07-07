@@ -321,6 +321,26 @@ static void testCustomProperties() {
     MockElement d3; d3.tag = "div";
     auto s3 = cascade5.resolve(d3);
     check(s3["color"] == "purple", "var(): nested var() in fallback");
+
+    // Invalid-at-computed-value-time: a unitless number substituted into a
+    // length property is not a valid <length>, so the property falls back to
+    // its initial value (width → auto), NOT treated as pixels.
+    Cascade cascade6;
+    cascade6.addStylesheet(parse(
+        "div { --unitless: 20; width: var(--unitless); }\n"
+    ));
+    MockElement d4; d4.tag = "div";
+    auto s4 = cascade6.resolve(d4);
+    check(sv(s4, "width") == "auto", "var(): IACVT unitless length → width auto");
+
+    // A valid substituted length is kept as-is.
+    Cascade cascade7;
+    cascade7.addStylesheet(parse(
+        "div { --w: 120px; width: var(--w); }\n"
+    ));
+    MockElement d5; d5.tag = "div";
+    auto s5 = cascade7.resolve(d5);
+    check(s5["width"] == "120px", "var(): valid length kept");
 }
 
 static void testPseudoElements() {

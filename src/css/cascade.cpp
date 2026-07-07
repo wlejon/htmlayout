@@ -559,10 +559,39 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
-    // 7. Resolve var() references in all property values
+    // 7. Resolve var() references in all property values. A value substituted
+    //    from a custom property that is invalid for its property is
+    //    "invalid at computed-value time" (IACVT, CSS Variables §3.2): the
+    //    property computes to its inherited value (if inherited) or initial
+    //    value (otherwise). The common trigger is a length property receiving
+    //    a unitless non-zero number (e.g. --x:20 → width:var(--x)); "20" is not
+    //    a valid <length>, so width falls back to its initial value (auto).
     for (auto& [prop, val] : style) {
-        if (val.find("var(") != std::string::npos) {
-            val = resolveVarReferences(val, style, parentStyle);
+        if (val.find("var(") == std::string::npos) continue;
+        val = resolveVarReferences(val, style, parentStyle);
+
+        if (isCustomProperty(prop)) continue;
+        // Is the substituted value a bare non-zero number (no unit / percent)?
+        // Only length-valued properties treat that as invalid — properties that
+        // legitimately take unitless numbers (line-height, z-index, opacity,
+        // flex-grow, order, …) must be left alone.
+        static const std::unordered_set<std::string> kLengthProps = {
+            "width", "height", "min-width", "min-height", "max-width", "max-height",
+            "top", "right", "bottom", "left",
+            "margin-top", "margin-right", "margin-bottom", "margin-left",
+            "padding-top", "padding-right", "padding-bottom", "padding-left",
+            "border-top-width", "border-right-width", "border-bottom-width",
+            "border-left-width", "font-size", "text-indent",
+            "letter-spacing", "word-spacing", "flex-basis",
+            "column-width", "column-gap", "row-gap", "gap",
+        };
+        if (kLengthProps.count(prop) == 0) continue;
+        const char* b = val.c_str();
+        char* e = nullptr;
+        double n = std::strtod(b, &e);
+        // Fully consumed (no trailing unit) and non-zero → invalid <length>.
+        if (e != b && *e == '\0' && n != 0.0) {
+            val = initialValue(prop); // IACVT → initial (width/height → auto, etc.)
         }
     }
 

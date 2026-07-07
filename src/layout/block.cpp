@@ -197,6 +197,17 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         fontSize = explicitZero ? 0.0f : 16.0f;
     }
 
+    // Establish the ch/ex font-metric context for this element before any of
+    // its lengths are resolved. ch = advance of "0", ex = x-height, both in the
+    // element's own (inherited) font. Nested elements reset this on entry.
+    {
+        const std::string& fam = styleVal(style, "font-family");
+        const std::string& wt  = styleVal(style, "font-weight");
+        float chPx = fontSize > 0.0f ? metrics.measureWidth("0", fam, fontSize, wt) : 0.0f;
+        float exPx = fontSize > 0.0f ? metrics.xHeight(fam, fontSize, wt) : 0.0f;
+        setLengthFontContext(chPx, exPx);
+    }
+
     const std::string& position = styleVal(style, "position");
 
     // Fresh layout pass: forget any baseline recorded by a previous layout

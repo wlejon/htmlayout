@@ -28,6 +28,11 @@ static void resetBoxes(LayoutNode* node) {
 void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
     if (!root) return;
     setLayoutViewport(viewport.width, viewport.height);
+    // rem resolves against the root element's font-size. The root's computed
+    // font-size is already absolute (px/unitless) by the time it reaches layout,
+    // so resolve it against the initial 16px base (em/% would compound off 16).
+    setRootFontSize(resolveLength(styleVal(root->computedStyle(), "font-size"),
+                                  16.0f, 16.0f));
     resetBoxes(root);
     root->availableHeight = viewport.height;
     root->viewportHeight = viewport.height;

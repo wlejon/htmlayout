@@ -10,8 +10,10 @@
 #include <cctype>
 #include <charconv>
 #include <cmath>
+#include <cstring>
 #include <algorithm>
 #include <optional>
+#include <vector>
 
 namespace htmlayout::layout {
 
@@ -24,9 +26,34 @@ using layout::styleVal;
 static float g_viewportWidth = 0.0f;
 static float g_viewportHeight = 0.0f;
 
+// Root element (<html>) font-size, used to resolve rem units. Threaded the same
+// file-scoped way as the viewport since rem, like vw/vh, needs a document-global
+// reference the per-site resolver has no node to reach. Defaults to 16 (the
+// initial font-size) until layoutTree() sets the real root size.
+static float g_rootFontSize = 16.0f;
+
 void setLayoutViewport(float width, float height) {
     g_viewportWidth = width;
     g_viewportHeight = height;
+}
+
+void setRootFontSize(float px) {
+    g_rootFontSize = (px > 0.0f) ? px : 16.0f;
+}
+
+// ch and ex are font-metric units: 1ch is the advance of "0" in the element's
+// font, 1ex its x-height. Both depend on the font family AND size, which vary
+// per element, so they can't be a once-per-pass global like the viewport. Layout
+// sets this context (absolute px for the element's current font) right before it
+// resolves that element's own lengths. 0 means "unset" — the resolver then falls
+// back to the CSS-defined 0.5em approximation so callers without a font in hand
+// (intrinsic-width probes, standalone resolveLength) keep working.
+static float g_chPx = 0.0f;
+static float g_exPx = 0.0f;
+
+void setLengthFontContext(float chPx, float exPx) {
+    g_chPx = chPx;
+    g_exPx = exPx;
 }
 
 // Resolve a single CSS length token (number + unit) to pixels.
@@ -51,7 +78,7 @@ static float resolveSingleLength(const std::string& value, float referenceSize, 
 
     if (unit.empty() || unit == "px") return num;
     if (unit == "em") return num * fontSize;
-    if (unit == "rem") return num * 16.0f;
+    if (unit == "rem") return num * g_rootFontSize;
     if (unit == "%") return num * referenceSize / 100.0f;
     // Viewport units resolve against the real viewport (set by layoutTree). When a
     // viewport dimension is unknown (0), fall back to the percentage reference so
@@ -64,8 +91,8 @@ static float resolveSingleLength(const std::string& value, float referenceSize, 
         return num * (unit == "vmin" ? std::min(vw, vh) : std::max(vw, vh)) / 100.0f;
     }
     if (unit == "pt") return num * 96.0f / 72.0f;
-    if (unit == "ch") return num * fontSize * 0.5f;
-    if (unit == "ex") return num * fontSize * 0.5f;
+    if (unit == "ch") return num * (g_chPx > 0.0f ? g_chPx : fontSize * 0.5f);
+    if (unit == "ex") return num * (g_exPx > 0.0f ? g_exPx : fontSize * 0.5f);
     if (unit == "cm") return num * 96.0f / 2.54f;
     if (unit == "mm") return num * 96.0f / 25.4f;
     if (unit == "in") return num * 96.0f;
@@ -88,18 +115,67 @@ static float evalCalc(const std::string& expr, float referenceSize, float fontSi
             while (pos < s.size() && (s[pos] == ' ' || s[pos] == '\t')) pos++;
         }
 
-        // Parse a primary: number+unit, (expr), or calc(expr)
+        // Parse a comma-separated argument list up to the closing ')'.
+        // Consumes the ')'. Each argument is a full additive expression.
+        std::vector<float> parseArgs() {
+            std::vector<float> args;
+            while (true) {
+                args.push_back(parseExpr());
+                skipSpaces();
+                if (pos < s.size() && s[pos] == ',') { pos++; continue; }
+                break;
+            }
+            skipSpaces();
+            if (pos < s.size() && s[pos] == ')') pos++;
+            return args;
+        }
+
+        // Case-insensitive match of a function name + '(' at the cursor.
+        bool matchFunc(const char* name) {
+            size_t n = std::strlen(name);
+            if (pos + n + 1 > s.size()) return false;
+            for (size_t i = 0; i < n; i++)
+                if (std::tolower(static_cast<unsigned char>(s[pos + i])) != name[i])
+                    return false;
+            return s[pos + n] == '(';
+        }
+
+        // Parse a primary: math function, number+unit, (expr), or calc(expr)
         float parsePrimary() {
             skipSpaces();
             if (pos >= s.size()) return 0.0f;
 
-            // Handle nested calc(...)
-            if (pos + 5 <= s.size() && s.substr(pos, 5) == "calc(") {
-                pos += 5;
+            // CSS math functions: calc/min/max/clamp (nestable, case-insensitive).
+            if (matchFunc("calc")) {
+                pos += 5; // "calc("
                 float val = parseExpr();
                 skipSpaces();
                 if (pos < s.size() && s[pos] == ')') pos++;
                 return val;
+            }
+            if (matchFunc("min")) {
+                pos += 4; // "min("
+                auto args = parseArgs();
+                if (args.empty()) return 0.0f;
+                float v = args[0];
+                for (float a : args) v = std::min(v, a);
+                return v;
+            }
+            if (matchFunc("max")) {
+                pos += 4; // "max("
+                auto args = parseArgs();
+                if (args.empty()) return 0.0f;
+                float v = args[0];
+                for (float a : args) v = std::max(v, a);
+                return v;
+            }
+            if (matchFunc("clamp")) {
+                pos += 6; // "clamp("
+                auto args = parseArgs();
+                // clamp(MIN, VAL, MAX) == max(MIN, min(VAL, MAX)).
+                if (args.size() < 3) return args.empty() ? 0.0f : args[0];
+                float lo = args[0], val = args[1], hi = args[2];
+                return std::max(lo, std::min(val, hi));
             }
 
             // Handle parenthesized sub-expression
@@ -180,6 +256,20 @@ static float evalCalc(const std::string& expr, float referenceSize, float fontSi
 
     CalcParser parser{expr, 0, referenceSize, fontSize};
     return parser.parseExpr();
+}
+
+// True if the value is a CSS math function — calc()/min()/max()/clamp() — at the
+// top level. These all flow through evalCalc, whose primary parser handles each
+// function (and their nesting) directly, so the whole string is passed through.
+static bool isMathFunction(const std::string& v) {
+    auto starts = [&](const char* f) {
+        size_t n = std::strlen(f);
+        if (v.size() < n + 1) return false;
+        for (size_t i = 0; i < n; i++)
+            if (std::tolower(static_cast<unsigned char>(v[i])) != f[i]) return false;
+        return v[n] == '(';
+    };
+    return starts("calc") || starts("min") || starts("max") || starts("clamp");
 }
 
 bool isIntrinsicSizingKeyword(const std::string& value) {
@@ -543,12 +633,10 @@ float resolveLength(const std::string& value, float referenceSize, float fontSiz
         return 0.0f;
     }
 
-    // Handle calc() expressions
-    if (value.size() > 5 && value.substr(0, 5) == "calc(") {
-        // Extract the expression inside calc(...)
-        std::string expr = value.substr(5);
-        if (!expr.empty() && expr.back() == ')') expr.pop_back();
-        return evalCalc(expr, referenceSize, fontSize);
+    // Handle calc()/min()/max()/clamp() math functions. The whole string is
+    // passed to evalCalc, whose primary parser recognizes each function name.
+    if (isMathFunction(value)) {
+        return evalCalc(value, referenceSize, fontSize);
     }
 
     return resolveSingleLength(value, referenceSize, fontSize);
@@ -602,13 +690,10 @@ float resolveLength(const std::string& value, float referenceSize, float fontSiz
         return 0.0f;
     }
 
-    // Handle calc() with viewport dimensions
-    if (value.size() > 5 && value.substr(0, 5) == "calc(") {
-        std::string expr = value.substr(5);
-        if (!expr.empty() && expr.back() == ')') expr.pop_back();
-        // For calc, we still use the basic evalCalc which uses referenceSize for vw/vh
-        // A more complete implementation would thread viewport through
-        return evalCalc(expr, referenceSize, fontSize);
+    // Handle calc()/min()/max()/clamp(). vw/vh inside resolve against the
+    // file-scoped viewport (set by layoutTree), so referenceSize suffices here.
+    if (isMathFunction(value)) {
+        return evalCalc(value, referenceSize, fontSize);
     }
 
     // For vw/vh/vmin/vmax, use actual viewport dimensions

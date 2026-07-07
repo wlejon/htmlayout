@@ -30,6 +30,19 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics);
 // then fall back to the percentage reference, preserving pre-viewport behavior.
 void setLayoutViewport(float width, float height);
 
+// Set the root element (<html>) font-size in px, used to resolve rem units.
+// Called once per layout pass by layoutTree() so the per-site resolver — which
+// has no node in hand — can size rem against the document root rather than a
+// hardcoded 16px. A non-positive value falls back to 16 (the initial font-size).
+void setRootFontSize(float px);
+
+// Set the font-metric context (in px) used to resolve ch and ex units for the
+// element currently being laid out: chPx is the advance width of "0", exPx the
+// x-height, both in the element's own font at its own size. Layout calls this
+// right before resolving that element's lengths. Passing 0 for either restores
+// the 0.5em fallback for that unit.
+void setLengthFontContext(float chPx, float exPx);
+
 // Resolve CSS length values (px, em, rem, %, vw, vh, vmin, vmax, ch, pt, auto) to pixels.
 // Supports calc() expressions.
 float resolveLength(const std::string& value, float referenceSize, float fontSize);

@@ -36,6 +36,40 @@ static void testCalcNested() {
     check(approx(resolveLength("calc(100% - (20px + 20px))", 400, 16), 360.0f), "calc(100% - (20+20)) at 400 = 360");
 }
 
+static void testMinMaxClamp() {
+    printf("--- min()/max()/clamp() ---\n");
+    // min(300px, 50% of 400) = 200
+    check(approx(resolveLength("min(300px, 50%)", 400, 16), 200.0f), "min(300px,50%) at 400 = 200");
+    // max(150px, 60% of 400) = 240
+    check(approx(resolveLength("max(150px, 60%)", 400, 16), 240.0f), "max(150px,60%) at 400 = 240");
+    // clamp(120px, 10em, 50%) at 16px font, 400 ref = clamp(120,160,200) = 160
+    check(approx(resolveLength("clamp(120px, 10em, 50%)", 400, 16), 160.0f), "clamp min<val<max picks val");
+    // clamp where preferred exceeds max: clamp(50px, 90% of 400, 280px) = 280
+    check(approx(resolveLength("clamp(50px, 90%, 280px)", 400, 16), 280.0f), "clamp val>max picks max");
+    // clamp where preferred below min: clamp(200px, 10%, 400px) at 400 = clamp(200,40,400)=200
+    check(approx(resolveLength("clamp(200px, 10%, 400px)", 400, 16), 200.0f), "clamp val<min picks min");
+    // nested: max(100px, min(300px, 50%)) at 400 = max(100,200) = 200
+    check(approx(resolveLength("max(100px, min(300px, 50%))", 400, 16), 200.0f), "nested max/min = 200");
+    // inside calc: calc(min(300px, 50%) + 10px) at 400 = 210
+    check(approx(resolveLength("calc(min(300px, 50%) + 10px)", 400, 16), 210.0f), "min inside calc = 210");
+    // many args
+    check(approx(resolveLength("min(300px, 250px, 100px, 400px)", 800, 16), 100.0f), "min of 4 args = 100");
+}
+
+static void testRemRootFontSize() {
+    printf("--- rem tracks root font-size ---\n");
+    // Default root font-size is 16 until layoutTree sets it.
+    setRootFontSize(16.0f);
+    check(approx(resolveLength("1rem", 0, 40), 16.0f), "1rem = 16 at default root");
+    // Root font-size 20px: rem must ignore the local (em) font-size of 40.
+    setRootFontSize(20.0f);
+    check(approx(resolveLength("1rem", 0, 40), 20.0f), "1rem = 20 with root 20px");
+    check(approx(resolveLength("0.5rem", 0, 40), 10.0f), "0.5rem = 10 with root 20px");
+    // em still tracks the local font-size, unaffected by root.
+    check(approx(resolveLength("2em", 0, 40), 80.0f), "2em = 80 (local font-size), rem-immune");
+    setRootFontSize(16.0f); // restore for later tests
+}
+
 // ========== calc() in layout context ==========
 
 struct CalcLayoutNode : public LayoutNode {
@@ -371,6 +405,8 @@ void testCalc() {
     testCalcBasic();
     testCalcMixedUnits();
     testCalcNested();
+    testMinMaxClamp();
+    testRemRootFontSize();
     testCalcInLayout();
     testViewportLayout();
     testNewProperties();
