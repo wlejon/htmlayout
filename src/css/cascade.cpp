@@ -977,6 +977,7 @@ void Cascade::clear() {
     keyframes_.clear();
     fontFaces_.clear();
     nextOrder_ = 0;
+    usesHover_ = false;
     layerNames_.clear();
     loadedImports_.clear();
 }

@@ -781,8 +781,44 @@ static void testInlineLogicalDirection() {
     check(sv(sInh, "margin-right") == "40px", "inherited rtl: margin-inline-start -> margin-right");
 }
 
+static void testHoverPseudoTracking() {
+    printf("--- Cascade: usesHoverPseudo tracking ---\n");
+    {
+        Cascade c;
+        c.addStylesheet(parse("div { color: red; } .cell { background: #16161c; }"));
+        check(!c.usesHoverPseudo(), "no :hover rules -> usesHoverPseudo() false");
+    }
+    {
+        Cascade c;
+        c.addStylesheet(parse("a:hover { color: blue; }"));
+        check(c.usesHoverPseudo(), ":hover rule -> usesHoverPseudo() true");
+    }
+    {
+        Cascade c;  // :hover on a non-subject compound (ancestor)
+        c.addStylesheet(parse(".menu:hover .item { color: blue; }"));
+        check(c.usesHoverPseudo(), ":hover on ancestor compound -> true");
+    }
+    {
+        Cascade c;
+        c.addStylesheet(parse("li:not(:hover) { opacity: 0.5; }"));
+        check(c.usesHoverPseudo(), ":hover nested in :not() -> true");
+    }
+    {
+        Cascade c;
+        c.addStylesheet(parse("div:has(:hover) { outline: 1px solid; }"));
+        check(c.usesHoverPseudo(), ":hover nested in :has() -> true");
+    }
+    {
+        Cascade c;
+        c.addStylesheet(parse("a:hover { color: blue; }"));
+        c.clear();
+        check(!c.usesHoverPseudo(), "clear() resets usesHoverPseudo()");
+    }
+}
+
 void testCascade() {
     testInlineLogicalDirection();
+    testHoverPseudoTracking();
     testBasicResolve();
     testSpecificityOrder();
     testSourceOrder();

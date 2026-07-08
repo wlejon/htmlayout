@@ -62,6 +62,12 @@ public:
     // Access stored @font-face rules (populated by addStylesheet)
     const std::vector<FontFaceRule>& fontFaces() const { return fontFaces_; }
 
+    // True if any added rule uses the :hover pseudo-class anywhere in its
+    // selector (including nested inside :not()/:is()/:where()/:has()).
+    // Lets the consumer skip all hover-driven restyle work — a hover-target
+    // change cannot alter computed style on a page with no :hover rules.
+    bool usesHoverPseudo() const { return usesHover_; }
+
     // Clear all stylesheets
     void clear();
 
@@ -81,9 +87,33 @@ private:
         bool isSlottedSelector = false;
         bool isPartSelector = false;
     };
+    // Does this simple selector (or anything nested in its :not()/:is()/
+    // :where()/:has()/:host() args) use the :hover pseudo-class?
+    static bool simpleMentionsHover(const SimpleSelector& s) {
+        if (s.type == SimpleSelectorType::PseudoClass && s.value == "hover")
+            return true;
+        for (auto& n : s.notArg)     if (simpleMentionsHover(n)) return true;
+        for (auto& n : s.hostArg)    if (simpleMentionsHover(n)) return true;
+        for (auto& n : s.slottedArg) if (simpleMentionsHover(n)) return true;
+        for (auto& c : s.selectorListArg)
+            for (auto& sub : c.simples) if (simpleMentionsHover(sub)) return true;
+        return false;
+    }
+
     // Classify :host/:slotted/::part flags after inserting a rule
     void classifyLastRule() {
         auto& rule = rules_.back();
+        // Track whether any rule anywhere uses :hover (across every compound in
+        // the chain, not just the subject) so the consumer can skip hover
+        // restyle work on pages with no :hover rules.
+        if (!usesHover_) {
+            for (auto& entry : rule.selector.chain.entries) {
+                for (auto& s : entry.compound.simples) {
+                    if (simpleMentionsHover(s)) { usesHover_ = true; break; }
+                }
+                if (usesHover_) break;
+            }
+        }
         if (rule.selector.chain.entries.empty()) return;
         for (auto& s : rule.selector.chain.entries[0].compound.simples) {
             if (s.type == SimpleSelectorType::PseudoClass &&
@@ -101,6 +131,7 @@ private:
     std::vector<KeyframeBlock> keyframes_;
     std::vector<FontFaceRule> fontFaces_;
     size_t nextOrder_ = 0;
+    bool usesHover_ = false;  // any rule uses :hover (set in classifyLastRule)
 
     // @import resolution
     ImportResolver importResolver_;
