@@ -84,6 +84,16 @@ struct LayoutBox {
     // per spec the parent then synthesizes one from the bottom margin edge.
     float baselineOffset = -1.0f;
 
+    // Subtree hit-test bounds: the union of this node's border box and all
+    // descendant boxes (each descendant's own transform + clipping folded in),
+    // in the SAME space as contentRect (relative to the parent's content
+    // origin). hitTest() rejects an entire subtree in O(1) when the point lies
+    // outside this rect — the browser "visual-overflow rect" trick that turns
+    // hit testing from O(element count) into O(tree depth). Computed by the
+    // post-order pass at the end of layoutTree(). width < 0 is the sentinel for
+    // "not computed" — hitTest then skips pruning and walks the whole tree.
+    Rect hitBounds{0, 0, -1, -1};
+
     // Full box dimensions including padding + border
     float fullWidth() const { return contentRect.width + padding.left + padding.right + border.left + border.right; }
     float fullHeight() const { return contentRect.height + padding.top + padding.bottom + border.top + border.bottom; }

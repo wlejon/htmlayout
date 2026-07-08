@@ -10,6 +10,8 @@ namespace htmlayout::layout {
 
 using layout::styleVal;
 
+namespace { Rect computeSubtreeHitBounds(LayoutNode* node); }
+
 void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
     layoutTree(root, Viewport{viewportWidth, 0.0f}, metrics);
 }
@@ -42,6 +44,10 @@ void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics
 
     // Pass 2: position all absolute/fixed elements against their correct containing blocks
     layoutAbsoluteElements(root, viewport, metrics);
+
+    // Pass 3: cache per-node subtree hit-bounds so hit testing can prune whole
+    // branches instead of walking every element on each mouse move.
+    computeSubtreeHitBounds(root);
 }
 
 namespace {
@@ -104,6 +110,75 @@ bool clipsHitTesting(const css::ComputedStyle& style) {
     return false;
 }
 
+// Post-order pass computing box.hitBounds for every node: the union of the
+// node's border box and all descendant boxes, folding in each descendant's own
+// transform and clipping. Expressed in the SAME space as box.contentRect
+// (relative to the parent's content origin), and returns that rect so the
+// parent can lift and union it. The offset math mirrors hitTestRecursive
+// exactly, so the cached bounds and the walk that consults them can never
+// disagree.
+Rect computeSubtreeHitBounds(LayoutNode* node) {
+    if (!node) return {0, 0, 0, 0};
+    const auto& style = node->computedStyle();
+    if (styleVal(style, "display") == "none") {
+        node->box.hitBounds = {0, 0, 0, 0};
+        return {0, 0, 0, 0};
+    }
+
+    // This node's own border box, in parent-content space (same as contentRect).
+    float bx = node->box.contentRect.x - node->box.padding.left - node->box.border.left;
+    float by = node->box.contentRect.y - node->box.padding.top - node->box.border.top;
+    float bw = node->box.fullWidth();
+    float bh = node->box.fullHeight();
+    float minX = bx, minY = by, maxX = bx + bw, maxY = by + bh;
+
+    // Children live in this node's content space, shifted by its scroll offset —
+    // the exact mapping hitTestRecursive uses (childOffset = absX - scroll).
+    float childOffX = node->box.contentRect.x - node->scrollLeftPx();
+    float childOffY = node->box.contentRect.y - node->scrollTopPx();
+    bool clips = clipsHitTesting(style);
+    for (auto* child : node->children()) {
+        Rect cb = computeSubtreeHitBounds(child);   // in our content space
+        // A clipping node bounds descendants to its own border box, so their
+        // extent never enlarges ours (they still get their own hitBounds above,
+        // for pruning once the point is known to be inside us).
+        if (clips) continue;
+        if (cb.width <= 0 && cb.height <= 0) continue;   // display:none / empty
+        float cx = cb.x + childOffX, cy = cb.y + childOffY;
+        minX = std::min(minX, cx);            minY = std::min(minY, cy);
+        maxX = std::max(maxX, cx + cb.width); maxY = std::max(maxY, cy + cb.height);
+    }
+
+    Rect bounds{minX, minY, maxX - minX, maxY - minY};
+
+    // Fold in this node's own transform — its whole box + subtree move together,
+    // mirroring hitTestRecursive's forward transform about transform-origin.
+    const std::string& transform = styleVal(style, "transform");
+    if (!transform.empty() && transform != "none") {
+        css::Matrix2D mat = css::parseTransform(transform, bw, bh);
+        if (!mat.isIdentity()) {
+            float ox, oy;
+            css::parseTransformOrigin(styleVal(style, "transform-origin"), bw, bh, ox, oy);
+            css::Matrix2D toOrigin{1, 0, 0, 1, bx + ox, by + oy};
+            css::Matrix2D fromOrigin{1, 0, 0, 1, -(bx + ox), -(by + oy)};
+            css::Matrix2D full = toOrigin * mat * fromOrigin;
+            float cxs[4] = {bounds.x, bounds.x + bounds.width, bounds.x, bounds.x + bounds.width};
+            float cys[4] = {bounds.y, bounds.y, bounds.y + bounds.height, bounds.y + bounds.height};
+            float tMinX = 1e30f, tMinY = 1e30f, tMaxX = -1e30f, tMaxY = -1e30f;
+            for (int i = 0; i < 4; ++i) {
+                float tx = full.a * cxs[i] + full.c * cys[i] + full.e;
+                float ty = full.b * cxs[i] + full.d * cys[i] + full.f;
+                tMinX = std::min(tMinX, tx); tMinY = std::min(tMinY, ty);
+                tMaxX = std::max(tMaxX, tx); tMaxY = std::max(tMaxY, ty);
+            }
+            bounds = {tMinX, tMinY, tMaxX - tMinX, tMaxY - tMinY};
+        }
+    }
+
+    node->box.hitBounds = bounds;
+    return bounds;
+}
+
 // Hit test with offset accumulation: positions are relative to parent content area,
 // so we track the accumulated offset from the root.
 LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
@@ -120,6 +195,18 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     // with pointer-events:auto must still be reachable. Track it and skip
     // returning `node` below — children are still traversed normally.
     bool pointerEventsNone = (styleVal(style, "pointer-events") == "none");
+
+    // Subtree prune: box.hitBounds (cached at layout time) is the union of this
+    // node and every descendant, in the same space as the incoming point + the
+    // accumulated offset. If the point is outside it, nothing here can be hit —
+    // skip the whole branch without the per-node alloc/sort/recursion below.
+    // width < 0 is the "not computed" sentinel (e.g. hitTest without a layout
+    // pass); pruning is skipped then and the full walk runs as before.
+    const Rect& hb = node->box.hitBounds;
+    if (hb.width >= 0.0f &&
+        (x < hb.x + offsetX || x >= hb.x + offsetX + hb.width ||
+         y < hb.y + offsetY || y >= hb.y + offsetY + hb.height))
+        return nullptr;
 
     // Compute this node's absolute content position
     float absX = node->box.contentRect.x + offsetX;
@@ -171,6 +258,42 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     // (last-painted) element is tested first.
     auto children = node->children();
 
+    // Children's positions are relative to this node's content area, offset
+    // by this element's scroll position (scrollLeft/scrollTop shift the
+    // visible content in the opposite direction).
+    float childOffsetX = absX - node->scrollLeftPx();
+    float childOffsetY = absY - node->scrollTopPx();
+
+    // Fast path: when no child is positioned and every child's z-index is
+    // auto/0 (the overwhelmingly common case), paint order == source order, so
+    // hit order is simply reverse source order — no per-hit vector alloc + sort
+    // needed. Only fall back to the full stacking sort when some child is
+    // positioned or z-ordered.
+    bool needsSort = false;
+    for (auto* child : children) {
+        if (!child) continue;
+        const auto& cs = child->computedStyle();
+        const std::string& p = styleVal(cs, "position");
+        if (p == "absolute" || p == "relative" || p == "fixed" || p == "sticky") {
+            needsSort = true; break;
+        }
+        if (getZIndex(cs) != 0) { needsSort = true; break; }
+    }
+
+    if (!needsSort) {
+        for (size_t i = children.size(); i-- > 0; ) {
+            LayoutNode* hit = hitTestRecursive(children[i], testX, testY,
+                                                childOffsetX, childOffsetY);
+            if (hit) return hit;
+        }
+        // No child hit — fall through to the self-test below.
+    } else {
+
+    // Sort children by CSS stacking order for hit testing (topmost first).
+    // Per CSS: positioned elements paint above non-positioned; within the same
+    // category, higher z-index paints above lower; equal z-index uses source order
+    // (later paints on top). Hit testing reverses paint order so the topmost
+    // (last-painted) element is tested first.
     struct ZChild { int z; bool positioned; size_t srcIdx; LayoutNode* node; };
     std::vector<ZChild> zChildren;
     zChildren.reserve(children.size());
@@ -193,16 +316,13 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
             return a.srcIdx > b.srcIdx;                  // later source order first
         });
 
-    // Children's positions are relative to this node's content area, offset
-    // by this element's scroll position (scrollLeft/scrollTop shift the
-    // visible content in the opposite direction).
-    float childOffsetX = absX - node->scrollLeftPx();
-    float childOffsetY = absY - node->scrollTopPx();
     for (auto& zc : zChildren) {
         LayoutNode* hit = hitTestRecursive(zc.node, testX, testY,
                                             childOffsetX, childOffsetY);
         if (hit) return hit;
     }
+
+    } // end stacking-sort path
 
     // No child hit — this node is the deepest match only if the point is
     // actually inside its bounds (overflow:visible descendants may have
