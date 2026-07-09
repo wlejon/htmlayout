@@ -593,9 +593,41 @@ static void testFlexShrunkItemChildWidth() {
           "shrunk items: packed at 190px pitch");
 }
 
+static void testFlexColumnMaxHeightClamp() {
+    printf("--- Flex: column main size clamped by max-height ---\n");
+    // A column flex container with height:900px but max-height:400px must
+    // distribute free space over the CLAMPED 400px, not the 900px height:
+    // a fixed header + footer plus a flex:1 body should fit inside 400, with
+    // the body shrunk to 400-40-50=310. Without the clamp the body grows to
+    // 810 (900-40-50) and the footer is pushed outside the box — the modal
+    // dialog bug (scrollable list overgrows, fixed footer clipped away).
+    FlexMockNode root; initFlexContainer(root);
+    root.style["flex-direction"] = "column";
+    root.style["width"] = "300px";
+    root.style["height"] = "900px";
+    root.style["max-height"] = "400px";
+
+    FlexMockNode head, body, foot;
+    initFlexItem(head); head.style["height"] = "40px"; head.style["flex-shrink"] = "0";
+    initFlexItem(body); body.style["flex-grow"] = "1"; body.style["flex-shrink"] = "1";
+    body.style["overflow"] = "auto";
+    initFlexItem(foot); foot.style["height"] = "50px"; foot.style["flex-shrink"] = "0";
+    root.addChild(&head); root.addChild(&body); root.addChild(&foot);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 600, m);
+
+    check(approx(body.box.contentRect.height, 310),
+          "column max-height: flex body shrunk to fit clamped height (310)");
+    float footBottom = foot.box.contentRect.y + foot.box.contentRect.height;
+    check(footBottom <= 400 + 1,
+          "column max-height: fixed footer stays inside the 400px box");
+}
+
 // ========== Entry point ==========
 
 void testFlexLayout() {
+    testFlexColumnMaxHeightClamp();
     testFlexBasicRow();
     testFlexGrow();
     testFlexShrink();

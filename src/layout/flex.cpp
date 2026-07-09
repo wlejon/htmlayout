@@ -110,6 +110,25 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         isReverse = !isReverse;
 
     float mainAvailable = isRow ? containerMain : resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+    // Column flex: clamp the definite main size by min/max-height, mirroring the
+    // min/max-width clamp applied to containerMain (the row main size) above.
+    // Without this a `height:88vh; max-height:660px` column container distributes
+    // free space against the uncapped 88vh, over-growing a flexible scroll body
+    // past the clamped box — a fixed footer is pushed out of view and the
+    // scrollbar draws for the oversized region. A percentage min/max-height
+    // against an indefinite containing block is 'none'/'auto' (same guard as the
+    // box-height clamp near the end of this function), not 0.
+    if (!isRow && mainAvailable >= 0) {
+        auto pctIndefiniteH = [&](const std::string& v) {
+            return node->availableHeight <= 0.0f && !v.empty() && v.back() == '%';
+        };
+        const std::string& maxHVal = styleVal(style, "max-height");
+        const std::string& minHVal = styleVal(style, "min-height");
+        float maxH = pctIndefiniteH(maxHVal) ? -1.0f : resolveDim(maxHVal, node->availableHeight, fontSize);
+        float minH = pctIndefiniteH(minHVal) ? -1.0f : resolveDim(minHVal, node->availableHeight, fontSize);
+        if (maxH >= 0 && mainAvailable > maxH) mainAvailable = maxH;
+        if (minH >= 0 && mainAvailable < minH) mainAvailable = minH;
+    }
     // Column flex with no explicit height but a definite available height from
     // the parent (e.g. parent flex distributed space to us): use it as the
     // main-axis constraint so children are properly sized.
