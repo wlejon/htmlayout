@@ -278,7 +278,11 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             item.maxMain = resolveDim(styleVal(cs, "max-height"), mainAvailable, childFontSize);
         }
         if (minMainAuto && isRow) {
-            const std::string& overflow = styleVal(cs, "overflow");
+            // §4.5: the automatic minimum resolves to 0 when the item is a scroll
+            // container on the MAIN axis. For row flex that is the inline axis, so
+            // check overflow-x (the `overflow` shorthand expands into it too);
+            // reading the shorthand alone misses `overflow-x`/`overflow-y` longhands.
+            const std::string& overflow = styleVal(cs, "overflow-x");
             if (overflow == "visible" || overflow.empty()) {
                 // Auto-min = min-content on the main axis (plus border/padding edges).
                 float minContent = computeMinContentWidth(item.node, metrics);
@@ -317,8 +321,10 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // depends on the item's definite cross size, so it can't be measured
             // until the item is laid out — defer to the hypothetical-size loop.
             // (Overflow != visible resolves auto-min to 0, so items with their own
-            // scroll container are still allowed to shrink.)
-            const std::string& overflow = styleVal(cs, "overflow");
+            // scroll container are still allowed to shrink.) The main axis here is
+            // the block axis, so check overflow-y (the `overflow` shorthand expands
+            // into it too); reading the shorthand alone misses the longhand form.
+            const std::string& overflow = styleVal(cs, "overflow-y");
             if (overflow == "visible" || overflow.empty())
                 item.colAutoMinPending = true;
         }
