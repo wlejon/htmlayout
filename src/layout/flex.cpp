@@ -1060,9 +1060,19 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
     node->box.naturalHeight = std::max(naturalH, node->box.contentRect.height);
 
-    // Apply min/max-height constraints (same as block layout)
-    float minH = resolveDim(styleVal(style, "min-height"), node->availableHeight, fontSize);
-    float maxH = resolveDim(styleVal(style, "max-height"), node->availableHeight, fontSize);
+    // Apply min/max-height constraints (same as block layout). A percentage
+    // min/max-height against an indefinite containing-block height (ref <= 0) is
+    // treated as 'none'/'auto' per CSS, not 0 — resolving to 0 would collapse
+    // this flex container's box (see the matching guard in block.cpp).
+    auto pctAgainstIndefiniteH = [&](const std::string& v) {
+        return node->availableHeight <= 0.0f && !v.empty() && v.back() == '%';
+    };
+    const std::string& minHVal = styleVal(style, "min-height");
+    const std::string& maxHVal = styleVal(style, "max-height");
+    float minH = pctAgainstIndefiniteH(minHVal) ? -1.0f
+                 : resolveDim(minHVal, node->availableHeight, fontSize);
+    float maxH = pctAgainstIndefiniteH(maxHVal) ? -1.0f
+                 : resolveDim(maxHVal, node->availableHeight, fontSize);
     if (minH >= 0.0f && node->box.contentRect.height < minH) node->box.contentRect.height = minH;
     if (maxH >= 0.0f && node->box.contentRect.height > maxH) node->box.contentRect.height = maxH;
 

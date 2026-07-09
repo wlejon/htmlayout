@@ -2076,9 +2076,21 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Store natural height before clamping (for scroll extent calculation)
     node->box.naturalHeight = std::max(cursorY, node->box.contentRect.height);
 
-    // Apply min/max-height constraints
-    float minH = resolveDimension(styleVal(style, "min-height"), heightRef, fontSize);
-    float maxH = resolveDimension(styleVal(style, "max-height"), heightRef, fontSize);
+    // Apply min/max-height constraints. A percentage min/max-height resolves
+    // against the containing block's height; when that height is indefinite
+    // (heightRef <= 0) CSS treats the percentage as 'none'/'auto' (CSS2 §10.5,
+    // §10.7), NOT as 0. Resolving it to 0 would collapse the box — e.g.
+    // max-height:100% on a replaced <iframe> (or any element) inside an
+    // auto-height flex item clamps its height to 0 and it vanishes.
+    auto pctAgainstIndefiniteH = [&](const std::string& v) {
+        return heightRef <= 0.0f && !v.empty() && v.back() == '%';
+    };
+    const std::string& minHVal = styleVal(style, "min-height");
+    const std::string& maxHVal = styleVal(style, "max-height");
+    float minH = pctAgainstIndefiniteH(minHVal) ? -1.0f
+                 : resolveDimension(minHVal, heightRef, fontSize);
+    float maxH = pctAgainstIndefiniteH(maxHVal) ? -1.0f
+                 : resolveDimension(maxHVal, heightRef, fontSize);
     if (minH >= 0.0f && node->box.contentRect.height < minH) node->box.contentRect.height = minH;
     if (maxH >= 0.0f && node->box.contentRect.height > maxH) node->box.contentRect.height = maxH;
 
