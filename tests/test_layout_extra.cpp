@@ -904,7 +904,10 @@ static void testFlexRowAutoMinOverflowHidden() {
     left.style_["flex-shrink"] = "0";
     left.style_["flex-basis"] = "240px";
     left.style_["min-width"] = "auto";
-    left.style_["overflow"] = "hidden";
+    // The cascade expands the `overflow` shorthand into the longhands before
+    // layout runs; layout reads overflow-x/overflow-y, so set them as expanded.
+    left.style_["overflow-x"] = "hidden";
+    left.style_["overflow-y"] = "hidden";
 
     LxNode wide; wide.initBase();
     wide.style_["width"] = "300px";
