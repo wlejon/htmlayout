@@ -587,17 +587,29 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign;
                     bool willStretch = itemAutoH &&
                         (effAlign == "stretch" || effAlign == "normal" || effAlign.empty());
-                    if (willStretch) {
-                        // Container's resolved content height (cross axis).
-                        float specHc = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
-                        float containerCrossH = -1.0f;
-                        if (specHc >= 0) {
-                            containerCrossH = (styleVal(style, "box-sizing") == "border-box")
-                                ? specHc - paddingV - borderV : specHc;
-                        } else if (node->box.contentRect.height > 0) {
-                            containerCrossH = node->box.contentRect.height;
-                        }
-                        if (containerCrossH > 0) {
+                    // Container's resolved content height (cross axis).
+                    float specHc = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+                    float containerCrossH = -1.0f;
+                    if (specHc >= 0) {
+                        containerCrossH = (styleVal(style, "box-sizing") == "border-box")
+                            ? specHc - paddingV - borderV : specHc;
+                    } else if (node->box.contentRect.height > 0) {
+                        containerCrossH = node->box.contentRect.height;
+                    }
+                    if (containerCrossH > 0) {
+                        // Propagate the container's definite cross size as the
+                        // item's availableHeight so a *percentage* height on the
+                        // item (e.g. a non-stretch <iframe height:100%> aligned
+                        // to center) resolves against it instead of collapsing to
+                        // 0. This is independent of stretch — any item needs a
+                        // definite CB height to resolve percentage heights.
+                        item->node->availableHeight = containerCrossH;
+                        if (willStretch) {
+                            // Auto-height stretch item: also pre-set contentRect
+                            // height to the stretch height so the inner layout
+                            // (e.g. a CSS Grid with 1fr rows or a nested flex
+                            // column) sees a definite height up front rather than
+                            // collapsing to content size.
                             float pad = resolveLength(styleVal(cs, "padding-top"), mainAvailable, childFontSize) +
                                         resolveLength(styleVal(cs, "padding-bottom"), mainAvailable, childFontSize);
                             float bor = 0;
@@ -607,7 +619,6 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                                 bor += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, childFontSize);
                             float stretchH = containerCrossH - pad - bor;
                             if (stretchH > 0) {
-                                item->node->availableHeight = containerCrossH;
                                 item->node->box.contentRect.height = stretchH;
                             }
                         }

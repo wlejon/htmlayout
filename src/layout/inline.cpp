@@ -242,9 +242,19 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     // For inline-block or inline replaced elements: resolve explicit width/height
     if (display == "inline-block" || hasIntrinsic) {
         float specW = resolveLength(styleVal(style, "width"), availableWidth, fontSize);
-        float specH = resolveLength(styleVal(style, "height"), 0, fontSize);
         const std::string& widthVal = styleVal(style, "width");
         const std::string& heightVal = styleVal(style, "height");
+        // A percentage height on an inline-block / inline replaced element
+        // resolves against the containing block's *definite* height, propagated
+        // here as node->availableHeight (the same value the block path uses).
+        // When that height is indefinite (<= 0), CSS treats a percentage height
+        // as auto (CSS2 §10.5) — fall back to the intrinsic height below rather
+        // than collapsing the box to 0. Previously the percentage basis was
+        // hard-coded to 0, so e.g. an inline <iframe height:100%> vanished.
+        float heightRef = node->availableHeight;
+        bool heightPctIndefinite = !heightVal.empty() && heightVal.back() == '%' &&
+                                   heightRef <= 0.0f;
+        float specH = resolveLength(heightVal, heightRef, fontSize);
 
         float contentAvail = availableWidth - paddingH - borderH;
 
@@ -281,7 +291,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             node->box.contentRect.width = fitAvail;
         }
 
-        if (heightVal != "auto" && !heightVal.empty()) {
+        if (heightVal != "auto" && !heightVal.empty() && !heightPctIndefinite) {
             const std::string& boxSizing = styleVal(style, "box-sizing");
             float paddingV = node->box.padding.top + node->box.padding.bottom;
             float borderV = node->box.border.top + node->box.border.bottom;
