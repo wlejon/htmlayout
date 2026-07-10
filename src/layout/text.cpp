@@ -17,6 +17,28 @@ struct SourceWord {
 // Scan a source string into words (runs of non-whitespace) with their source
 // byte ranges. Leading/trailing whitespace is discarded; only word positions
 // survive. Used by the collapsing whitespace paths ("normal", "nowrap").
+// Byte length of the UTF-8 sequence starting at `i`, clamped to the bytes
+// remaining. Stray continuation / invalid lead bytes count as length 1 so
+// callers always make progress. Character-level wrapping must consume whole
+// sequences — slicing mid-sequence hands invalid UTF-8 to the measurer, and
+// Skia's text APIs fatally abort on it.
+size_t utf8SeqLen(const std::string& s, size_t i) {
+    unsigned char b = static_cast<unsigned char>(s[i]);
+    size_t n = 1;
+    if      ((b & 0xE0) == 0xC0) n = 2;
+    else if ((b & 0xF0) == 0xE0) n = 3;
+    else if ((b & 0xF8) == 0xF0) n = 4;
+    if (i + n > s.size()) n = s.size() - i;
+    return n;
+}
+
+// Number of codepoints in a UTF-8 string — the letter-spacing slot count.
+size_t utf8CodepointCount(const std::string& s) {
+    size_t count = 0;
+    for (size_t i = 0; i < s.size(); i += utf8SeqLen(s, i)) ++count;
+    return count;
+}
+
 std::vector<SourceWord> scanWords(const std::string& text) {
     std::vector<SourceWord> words;
     std::string current;
@@ -89,7 +111,7 @@ void measureWordModeIntrinsics(const std::string& srcText,
     auto measureWord = [&](const std::string& s) -> float {
         float w = metrics.measureWidth(s, fontFamily, fontSize, fontWeight);
         if (letterSpacing != 0 && !s.empty())
-            w += letterSpacing * static_cast<float>(s.size());
+            w += letterSpacing * static_cast<float>(utf8CodepointCount(s));
         return w;
     };
     // Inter-word space advance — mirrors block.cpp's
@@ -137,7 +159,7 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
     auto measureWithSpacing = [&](const std::string& s) -> float {
         float w = metrics.measureWidth(s, fontFamily, fontSize, fontWeight);
         if (letterSpacing != 0 && !s.empty()) {
-            w += letterSpacing * static_cast<float>(s.size());
+            w += letterSpacing * static_cast<float>(utf8CodepointCount(s));
         }
         return w;
     };
@@ -230,20 +252,21 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
                 std::string current;
                 float currentW = 0;
                 int segStart = lineBase;
-                for (size_t i = 0; i < line.size(); i++) {
-                    char c = line[i];
-                    std::string test = current + c;
+                for (size_t i = 0; i < line.size();) {
+                    size_t n = utf8SeqLen(line, i);
+                    std::string test = current + line.substr(i, n);
                     float testW = measureWithSpacing(test);
                     if (testW > availableWidth && !current.empty()) {
                         runs.push_back({current, currentW, lineH,
                                         segStart, static_cast<int>(lineBase + i)});
-                        current = std::string(1, c);
+                        current = line.substr(i, n);
                         currentW = measureWithSpacing(current);
                         segStart = static_cast<int>(lineBase + i);
                     } else {
-                        current = test;
+                        current = std::move(test);
                         currentW = testW;
                     }
+                    i += n;
                 }
                 if (!current.empty()) {
                     runs.push_back({current, currentW, lineH,
@@ -300,20 +323,22 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
         std::string partial;
         float partialW = 0;
         int partialStart = w.srcStart;
-        for (size_t ci = 0; ci < w.text.size(); ci++) {
-            std::string test = partial + w.text[ci];
+        for (size_t ci = 0; ci < w.text.size();) {
+            size_t n = utf8SeqLen(w.text, ci);
+            std::string test = partial + w.text.substr(ci, n);
             float testW = measureWithSpacing(test);
             if (testW > availableWidth && !partial.empty()) {
                 runs.push_back({partial, partialW, lineH,
                                 partialStart,
                                 static_cast<int>(w.srcStart + ci)});
-                partial = std::string(1, w.text[ci]);
+                partial = w.text.substr(ci, n);
                 partialW = measureWithSpacing(partial);
                 partialStart = static_cast<int>(w.srcStart + ci);
             } else {
-                partial = test;
+                partial = std::move(test);
                 partialW = testW;
             }
+            ci += n;
         }
         currentLine = partial;
         currentWidth = partialW;

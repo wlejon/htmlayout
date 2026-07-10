@@ -956,6 +956,60 @@ static void testTextSingleLongWord() {
     check(runs.size() >= 3, "text: long word breaks into 3+ runs with break-word");
 }
 
+// Structural UTF-8 validity — no truncated multi-byte sequences, no stray
+// continuation bytes. Character-level wrapping must never slice a sequence:
+// downstream Skia text APIs fatally abort on invalid UTF-8.
+static bool isStructurallyValidUtf8(const std::string& s) {
+    size_t i = 0;
+    while (i < s.size()) {
+        unsigned char b = static_cast<unsigned char>(s[i]);
+        size_t n;
+        if      (b < 0x80)          n = 1;
+        else if ((b & 0xE0) == 0xC0) n = 2;
+        else if ((b & 0xF0) == 0xE0) n = 3;
+        else if ((b & 0xF8) == 0xF0) n = 4;
+        else return false; // stray continuation or invalid lead byte
+        if (i + n > s.size()) return false; // truncated sequence
+        for (size_t k = 1; k < n; ++k)
+            if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80) return false;
+        i += n;
+    }
+    return true;
+}
+
+static void testTextBreakWordMultibyte() {
+    printf("--- Text: break-word never splits UTF-8 sequences ---\n");
+    CovMetrics m;
+    // One long word mixing 1-byte and 4-byte (emoji) codepoints. At 10px per
+    // byte and 50px available, byte-level breaking would slice the emoji.
+    std::string word = "abc\xF0\x9F\x98\x80\xF0\x9F\x98\x80xyz\xF0\x9F\x98\x80""abc";
+    auto runs = breakTextIntoRuns(word, 50, "mono", 16, "normal", "normal", m,
+                                  "break-word");
+    check(runs.size() >= 2, "break-word multibyte: long word broken into runs");
+    std::string joined;
+    for (auto& r : runs) {
+        check(isStructurallyValidUtf8(r.text),
+              "break-word multibyte: run is valid UTF-8");
+        joined += r.text;
+    }
+    check(joined == word, "break-word multibyte: no bytes lost or reordered");
+}
+
+static void testTextPreWrapMultibyte() {
+    printf("--- Text: pre-wrap never splits UTF-8 sequences ---\n");
+    CovMetrics m;
+    std::string line = "aa\xF0\x9F\x98\x80\xF0\x9F\x98\x80""bb\xF0\x9F\x98\x80""cc";
+    auto runs = breakTextIntoRuns(line, 50, "mono", 16, "normal", "pre-wrap", m);
+    check(runs.size() >= 2, "pre-wrap multibyte: overflowing line wrapped");
+    std::string joined;
+    for (auto& r : runs) {
+        check(isStructurallyValidUtf8(r.text),
+              "pre-wrap multibyte: run is valid UTF-8");
+        joined += r.text;
+    }
+    check(joined == line, "pre-wrap multibyte: no bytes lost or reordered");
+}
+
 // ======================================================================
 // BLOCK LAYOUT COVERAGE
 // ======================================================================
@@ -2306,6 +2360,8 @@ void testCoverage() {
     testTextWordBreakAll();
     testTextEmptyInput();
     testTextSingleLongWord();
+    testTextBreakWordMultibyte();
+    testTextPreWrapMultibyte();
 
     // Block layout
     testBlockMarginAuto();
