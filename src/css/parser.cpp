@@ -1103,6 +1103,32 @@ bool evaluateMediaFeature(const std::string& feature, const MediaContext& ctx) {
 bool evaluateMediaQuery(const std::string& condition, const MediaContext& ctx) {
     if (condition.empty() || condition == "all") return true;
 
+    // Media query LIST: top-level commas separate independent queries;
+    // the list matches when ANY query matches (Media Queries §2.1).
+    {
+        int depth = 0;
+        size_t start = 0;
+        std::vector<std::string> parts;
+        for (size_t i = 0; i < condition.size(); i++) {
+            char c = condition[i];
+            if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == ',' && depth == 0) {
+                parts.push_back(condition.substr(start, i - start));
+                start = i + 1;
+            }
+        }
+        if (!parts.empty()) {
+            parts.push_back(condition.substr(start));
+            for (auto& p : parts) {
+                std::string q = p;
+                trimInPlace(q);
+                if (!q.empty() && evaluateMediaQuery(q, ctx)) return true;
+            }
+            return false;
+        }
+    }
+
     // Handle media type prefixes: "screen and (...)", "print", etc.
     std::string cond = condition;
 

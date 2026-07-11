@@ -68,6 +68,12 @@ public:
     // change cannot alter computed style on a page with no :hover rules.
     bool usesHoverPseudo() const { return usesHover_; }
 
+    // True if any @container rule was added. Container queries read the
+    // container's laid-out size, which trails style resolution by one layout
+    // pass — consumers should re-resolve styles once after layout when this
+    // is set.
+    bool usesContainerQueries() const { return usesContainers_; }
+
     // Clear all stylesheets
     void clear();
 
@@ -136,6 +142,7 @@ private:
     std::vector<FontFaceRule> fontFaces_;
     size_t nextOrder_ = 0;
     bool usesHover_ = false;  // any rule uses :hover (set in classifyLastRule)
+    bool usesContainers_ = false; // any @container rule added
 
     // @import resolution
     ImportResolver importResolver_;

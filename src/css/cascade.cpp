@@ -297,6 +297,7 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
 
     // Add @container rules
     for (auto& containerBlock : sheet.containerBlocks) {
+        if (!containerBlock.rules.empty()) usesContainers_ = true;
         for (auto& rule : containerBlock.rules) {
             auto selectors = parseSelectorList(rule.selector);
             for (auto& sel : selectors) {
@@ -1007,6 +1008,7 @@ void Cascade::clear() {
     fontFaces_.clear();
     nextOrder_ = 0;
     usesHover_ = false;
+    usesContainers_ = false;
     layerNames_.clear();
     loadedImports_.clear();
 }
