@@ -466,6 +466,22 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (!currentLine.items.empty()) lines.push_back(std::move(currentLine));
     }
 
+    // wrap-reverse flips the cross axis: the first line lands at the cross-end
+    // edge. Reversing the stacking order here and swapping the flex-start /
+    // flex-end interpretation of align-content (and per-item alignment below)
+    // implements that flip.
+    const bool isWrapReverse = (flexWrap == "wrap-reverse");
+    if (isWrapReverse) std::reverse(lines.begin(), lines.end());
+    auto flipCrossAlign = [&](const std::string& a) -> std::string {
+        if (!isWrapReverse) return a;
+        if (a == "flex-start" || a == "start") return "flex-end";
+        if (a == "flex-end" || a == "end") return "flex-start";
+        // wrap-reverse packs lines at the cross-end edge when alignment
+        // defaults to the start side; the default for align-content is
+        // handled at its use site (empty/normal stays stretch).
+        return a;
+    };
+
     // For column flex with auto height, ensure mainAvailable is at least the total
     // hypothetical size so items are never shrunk (the container grows to fit).
     if (columnAutoHeight) {
@@ -788,21 +804,26 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float freeCross = crossAvailable - totalLineCross - totalLineGaps;
         if (freeCross < 0) freeCross = 0;
 
-        if (alignContent == "center") {
+        // Under wrap-reverse the start/end interpretation flips (lines were
+        // already reversed, so "flex-start" must pack at the far edge).
+        // Non-directional values (center/stretch/space-*) pass through.
+        std::string effAlignContent = flipCrossAlign(alignContent);
+
+        if (effAlignContent == "center") {
             crossOffset = freeCross / 2.0f;
-        } else if (alignContent == "flex-end") {
+        } else if (effAlignContent == "flex-end") {
             crossOffset = freeCross;
-        } else if (alignContent == "space-between" && lines.size() > 1) {
+        } else if (effAlignContent == "space-between" && lines.size() > 1) {
             crossGapAdjusted = gapCross + freeCross / (lines.size() - 1);
-        } else if (alignContent == "space-around" && !lines.empty()) {
+        } else if (effAlignContent == "space-around" && !lines.empty()) {
             float lineGap = freeCross / lines.size();
             crossOffset = lineGap / 2.0f;
             crossGapAdjusted = gapCross + lineGap;
-        } else if (alignContent == "space-evenly" && !lines.empty()) {
+        } else if (effAlignContent == "space-evenly" && !lines.empty()) {
             float lineGap = freeCross / (lines.size() + 1);
             crossOffset = lineGap;
             crossGapAdjusted = gapCross + lineGap;
-        } else if (alignContent == "stretch" || alignContent == "normal" || alignContent.empty()) {
+        } else if (effAlignContent == "stretch" || effAlignContent == "normal" || effAlignContent.empty()) {
             // Stretch: distribute free space equally to each line's cross size
             if (!lines.empty() && freeCross > 0) {
                 float extra = freeCross / lines.size();
@@ -912,7 +933,9 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
             // Cross-axis alignment
             const std::string& selfAlign = styleVal(cs, "align-self");
-            const std::string& align = (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign;
+            // wrap-reverse flips per-item cross alignment too (flex-start ↔ flex-end).
+            const std::string align = flipCrossAlign(
+                (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign);
 
             float crossPos = crossCursor;
             if (hasCrossAutoMargin) {
