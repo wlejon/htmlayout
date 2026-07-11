@@ -91,6 +91,16 @@ bool nodeEstablishesBFC(LayoutNode* node) {
     if ((!mcCount.empty() && mcCount != "auto") ||
         (!mcWidth.empty() && mcWidth != "auto"))
         return true;
+    // Layout containment makes the box an independent formatting context
+    // (css-contain §2). container-type: size / inline-size implies it.
+    const std::string& ctype = styleVal(style, "container-type");
+    if (ctype.find("size") != std::string::npos)
+        return true;
+    const std::string& contain = styleVal(style, "contain");
+    if (contain.find("layout") != std::string::npos ||
+        contain.find("paint") != std::string::npos ||
+        contain == "strict" || contain == "content")
+        return true;
     return false;
 }
 
@@ -1632,6 +1642,24 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
+        // A line box doesn't collapse margins: if this run produces real
+        // line content, the previous block sibling's pending margin-bottom
+        // resolves in full before the first line, and a following block's
+        // margin-top won't see it. Whitespace-only runs (no rendered line)
+        // must leave the pending margin alone so blocks separated by a
+        // whitespace text node still collapse normally.
+        {
+            bool anyLine = false;
+            for (auto& line : anonLines) {
+                if (line.totalWidth > 0 || line.endsWithBreak) { anyLine = true; break; }
+            }
+            if (anyLine) {
+                if (!firstChild) cursorY += prevMarginBottom;
+                prevMarginBottom = 0;
+                firstChild = false;
+            }
+        }
+
         // Position with text-align (skip zero-width lines from whitespace,
         // but preserve explicit <br>-terminated lines so blank lines render)
         for (auto& line : anonLines) {
@@ -2327,12 +2355,19 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     int col = 0;
                     float y = 0, maxBottom = 0, prevMB = 0;
                     bool colEmpty = true;
+                    // Margins truncate only at UNFORCED breaks (css-break
+                    // §5.2). The first column's top and forced break-before/
+                    // after columns keep the leading margin — the multicol
+                    // container is a BFC, so it doesn't collapse away.
+                    bool keepTopMargin = true;
                     for (size_t k = 0; k < frag.size(); ++k) {
                         auto& it = frag[k];
                         if (it.breakBefore && !colEmpty) {
                             ++col; y = 0; colEmpty = true; prevMB = 0;
+                            keepTopMargin = true;
                         }
-                        float spacing = colEmpty ? 0.0f :
+                        float spacing = colEmpty ?
+                            (keepTopMargin ? it.marginTop : 0.0f) :
                             std::max({prevMB, it.marginTop, 0.0f}) +
                             std::min({prevMB, it.marginTop, 0.0f});
                         float top = y + spacing;
@@ -2346,6 +2381,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         prevMB = it.marginBottom;
                         if (it.breakAfter) {
                             ++col; y = 0; colEmpty = true; prevMB = 0;
+                            keepTopMargin = true;
                         }
                     }
                     int used = frag.empty() ? 1 : (colEmpty ? col : col + 1);
