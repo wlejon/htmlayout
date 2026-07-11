@@ -97,6 +97,10 @@ private:
         for (auto& n : s.slottedArg) if (simpleMentionsHover(n)) return true;
         for (auto& c : s.selectorListArg)
             for (auto& sub : c.simples) if (simpleMentionsHover(sub)) return true;
+        for (auto& rel : s.relativeArgs)
+            for (auto& entry : rel.chain.entries)
+                for (auto& sub : entry.compound.simples)
+                    if (simpleMentionsHover(sub)) return true;
         return false;
     }
 

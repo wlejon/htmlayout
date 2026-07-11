@@ -20,6 +20,9 @@ struct ElementRef {
     virtual bool hasAttribute(std::string_view name) const = 0;
     virtual ElementRef* parent() const = 0;
     virtual std::span<ElementRef* const> children() const = 0;
+    // :empty — true if the element has any text node child (even whitespace-only,
+    // matching browser behavior). Elements are reported via children().
+    virtual bool hasTextChildren() const { return false; }
     virtual int childIndex() const = 0;          // 0-based index among siblings
     virtual int childIndexOfType() const = 0;    // 0-based index among same-tag siblings
     virtual int siblingCount() const = 0;         // total sibling count
@@ -101,6 +104,7 @@ enum class AttrMatchOp {
 };
 
 struct CompoundSelector; // forward declaration for selectorListArg
+struct RelativeSelector; // forward declaration for :has() arguments
 
 struct SimpleSelector {
     SimpleSelectorType type;
@@ -118,8 +122,10 @@ struct SimpleSelector {
     std::vector<SimpleSelector> notArg;
     // :host() / :host-context() argument (parsed sub-selectors)
     std::vector<SimpleSelector> hostArg;
-    // :is()/:where()/:has() arguments (selector list, stored as compound selectors)
+    // :is()/:where() arguments (selector list, stored as compound selectors)
     std::vector<CompoundSelector> selectorListArg;
+    // :has() arguments (relative selectors: lead combinator + complex selector)
+    std::vector<RelativeSelector> relativeArgs;
     // ::slotted() argument (parsed compound selector)
     std::vector<SimpleSelector> slottedArg;
     // ::part() argument (part name)
@@ -147,6 +153,14 @@ struct SelectorChain {
         Combinator combinator = Combinator::None;
     };
     std::vector<Entry> entries;
+};
+
+// A :has() argument: a relative selector. `lead` is the combinator anchoring
+// the selector to the :has() scope element (descendant when none was written);
+// `chain` is the complex selector, entries[0] being the subject.
+struct RelativeSelector {
+    Combinator lead = Combinator::Descendant;
+    SelectorChain chain;
 };
 
 // Parsed selector (compiled for fast matching)

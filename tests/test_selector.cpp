@@ -196,6 +196,10 @@ static void testEmpty() {
     notEmpty.addChild(&child);
     check(parseSelector(":empty").matches(empty), ":empty matches childless element");
     check(!parseSelector(":empty").matches(notEmpty), ":empty doesn't match element with children");
+
+    // Text children (even whitespace-only) make an element non-empty
+    MockElement textOnly; textOnly.tag = "div"; textOnly.textChildren = true;
+    check(!parseSelector(":empty").matches(textOnly), ":empty doesn't match element with text");
 }
 
 static void testCommaList() {
@@ -324,6 +328,37 @@ static void testIsWhereHas() {
     auto hasDeep = parseSelector(":has(em)");
     check(hasDeep.matches(grandparent), ":has(em) matches with deep descendant");
     check(hasDeep.matches(mid), ":has(em) matches direct parent too");
+
+    // :has(> X) — direct child only
+    auto hasChild = parseSelector(":has(> em)");
+    check(hasChild.matches(mid), ":has(> em) matches direct parent");
+    check(!hasChild.matches(grandparent), ":has(> em) doesn't match grandparent");
+
+    // :has(+ X) / :has(~ X) — sibling forms anchored at the scope element
+    MockElement host; host.tag = "div";
+    MockElement s1; s1.tag = "div"; s1.classes = "a";
+    MockElement s2; s2.tag = "div"; s2.classes = "b";
+    MockElement s3; s3.tag = "div"; s3.classes = "c";
+    host.addChild(&s1); host.addChild(&s2); host.addChild(&s3);
+
+    auto hasAdj = parseSelector(":has(+ .b)");
+    check(hasAdj.matches(s1), ":has(+ .b) matches element right before .b");
+    check(!hasAdj.matches(s2), ":has(+ .b) doesn't match .b itself");
+    check(!hasAdj.matches(s3), ":has(+ .b) doesn't match element after .b");
+
+    auto hasGen = parseSelector(":has(~ .c)");
+    check(hasGen.matches(s1), ":has(~ .c) matches earlier sibling");
+    check(hasGen.matches(s2), ":has(~ .c) matches immediately-preceding sibling");
+    check(!hasGen.matches(s3), ":has(~ .c) doesn't match .c itself");
+
+    // :has(> X Y) — complex selector anchored by child combinator
+    auto hasComplex = parseSelector(":has(> div em)");
+    check(hasComplex.matches(grandparent), ":has(> div em) matches grandparent");
+    check(!hasComplex.matches(mid), ":has(> div em) doesn't match mid (em is its direct child)");
+
+    // :has() specificity = most specific argument
+    check(calculateSpecificity(":has(#x, .y)") == (1u << 16),
+          ":has() specificity = most specific argument");
 }
 
 void testSelector() {

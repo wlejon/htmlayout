@@ -362,28 +362,45 @@ private:
                 arg = m_text.substr(argStart, m_pos - argStart);
                 if (peek() == ')') advance();
 
-                // Split by comma and parse each as a compound selector
+                bool isHas = (ss.value == "has");
+                auto addPart = [&ss, isHas](const std::string& raw) {
+                    std::string part = trim(raw);
+                    if (part.empty()) return;
+                    if (isHas) {
+                        // :has() takes relative selectors: an optional lead
+                        // combinator anchoring to the scope element, then a
+                        // full complex selector.
+                        RelativeSelector rel;
+                        char c0 = part[0];
+                        if (c0 == '>') rel.lead = Combinator::Child;
+                        else if (c0 == '+') rel.lead = Combinator::AdjacentSibling;
+                        else if (c0 == '~') rel.lead = Combinator::GeneralSibling;
+                        if (c0 == '>' || c0 == '+' || c0 == '~')
+                            part = trim(part.substr(1));
+                        if (part.empty()) return;
+                        rel.chain = parseSelector(part).chain;
+                        if (!rel.chain.entries.empty())
+                            ss.relativeArgs.push_back(std::move(rel));
+                    } else {
+                        SelectorParser subParser(part);
+                        ss.selectorListArg.push_back(subParser.parseCompound());
+                    }
+                };
+
+                // Split by comma (respecting parentheses)
                 std::string current;
                 int pd = 0;
                 for (size_t j = 0; j < arg.size(); j++) {
                     if (arg[j] == '(') pd++;
                     else if (arg[j] == ')') pd--;
                     else if (arg[j] == ',' && pd == 0) {
-                        std::string part = trim(current);
-                        if (!part.empty()) {
-                            SelectorParser subParser(part);
-                            ss.selectorListArg.push_back(subParser.parseCompound());
-                        }
+                        addPart(current);
                         current.clear();
                         continue;
                     }
                     current += arg[j];
                 }
-                std::string part = trim(current);
-                if (!part.empty()) {
-                    SelectorParser subParser(part);
-                    ss.selectorListArg.push_back(subParser.parseCompound());
-                }
+                addPart(current);
             } else if (ss.value == "host" || ss.value == "host-context") {
                 // :host(selector) / :host-context(selector)
                 std::string arg;
@@ -463,8 +480,8 @@ uint32_t computeSpecificity(const SelectorChain& chain) {
                 case SimpleSelectorType::Attribute:
                 case SimpleSelectorType::PseudoClass:
                     if (s.value == "not" || s.value == "is" || s.value == "has") {
-                        // :is()/:has() specificity = most specific argument
-                        int maxIds = 0, maxClasses = 0, maxTypes = 0;
+                        // :is()/:not()/:has() specificity = most specific argument
+                        uint32_t maxSpec = 0;
                         for (auto& compound : s.selectorListArg) {
                             int ci = 0, cc = 0, ct = 0;
                             for (auto& inner : compound.simples) {
@@ -478,12 +495,15 @@ uint32_t computeSpecificity(const SelectorChain& chain) {
                                 }
                             }
                             uint32_t spec = (ci << 16) | (cc << 8) | ct;
-                            uint32_t maxSpec = (maxIds << 16) | (maxClasses << 8) | maxTypes;
-                            if (spec > maxSpec) { maxIds = ci; maxClasses = cc; maxTypes = ct; }
+                            if (spec > maxSpec) maxSpec = spec;
                         }
-                        ids += maxIds;
-                        classes += maxClasses;
-                        types += maxTypes;
+                        for (auto& rel : s.relativeArgs) {
+                            uint32_t spec = computeSpecificity(rel.chain);
+                            if (spec > maxSpec) maxSpec = spec;
+                        }
+                        ids += (maxSpec >> 16) & 0xFF;
+                        classes += (maxSpec >> 8) & 0xFF;
+                        types += maxSpec & 0xFF;
                     } else if (s.value == "where") {
                         // :where() contributes zero specificity
                     } else if (s.value == "host" || s.value == "host-context") {
@@ -551,8 +571,72 @@ bool matchNth(int a, int b, int index) {
 
 } // anonymous namespace
 
-// Forward declaration for use by matchSimple (:is/:where/:has)
+// Forward declarations for use by matchSimple (:is/:where/:has)
 bool matchCompound(const CompoundSelector& compound, const ElementRef& elem);
+static bool matchChainTop(const SelectorChain& chain, const ElementRef& elem,
+                          const ElementRef** topOut);
+
+// ---- :has() relative-selector matching ----
+
+static bool isDescendantOf(const ElementRef* e, const ElementRef* scope) {
+    for (ElementRef* p = e->parent(); p; p = p->parent())
+        if (p == scope) return true;
+    return false;
+}
+
+template <typename F>
+static bool anyDescendant(const ElementRef& root, F&& f) {
+    for (ElementRef* c : root.children()) {
+        if (f(*c)) return true;
+        if (anyDescendant(*c, f)) return true;
+    }
+    return false;
+}
+
+// :has(rel) — does any element match the relative selector with the :has()
+// element as scope? The chain matches bottom-up from a candidate subject; the
+// topmost matched element must then relate to the scope by the lead combinator.
+static bool matchHas(const SimpleSelector& ss, const ElementRef& scope) {
+    for (const auto& rel : ss.relativeArgs) {
+        auto tryMatch = [&](const ElementRef& cand) -> bool {
+            const ElementRef* top = nullptr;
+            if (!matchChainTop(rel.chain, cand, &top)) return false;
+            switch (rel.lead) {
+                case Combinator::Child:
+                    return top->parent() == &scope;
+                case Combinator::None:
+                case Combinator::Descendant:
+                    return isDescendantOf(top, &scope);
+                case Combinator::AdjacentSibling:
+                    return top->parent() == scope.parent() && scope.parent() &&
+                           top->childIndex() == scope.childIndex() + 1;
+                case Combinator::GeneralSibling:
+                    return top->parent() == scope.parent() && scope.parent() &&
+                           top->childIndex() > scope.childIndex();
+            }
+            return false;
+        };
+
+        bool matched = false;
+        if (rel.lead == Combinator::AdjacentSibling ||
+            rel.lead == Combinator::GeneralSibling) {
+            // Candidate subjects live in the subtrees of following siblings
+            // (including the siblings themselves).
+            if (ElementRef* p = scope.parent()) {
+                auto sibs = p->children();
+                for (int j = scope.childIndex() + 1;
+                     j < static_cast<int>(sibs.size()) && !matched; j++) {
+                    if (tryMatch(*sibs[j]) || anyDescendant(*sibs[j], tryMatch))
+                        matched = true;
+                }
+            }
+        } else {
+            matched = anyDescendant(scope, tryMatch);
+        }
+        if (matched) return true;
+    }
+    return false;
+}
 
 bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
     switch (ss.type) {
@@ -609,7 +693,8 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
             if (name == "focus") return elem.isFocused();
             if (name == "active") return elem.isActive();
             if (name == "root") return elem.parent() == nullptr;
-            if (name == "empty") return elem.children().empty();
+            if (name == "empty")
+                return elem.children().empty() && !elem.hasTextChildren();
             if (name == "host") {
                 // :host matches the shadow host element.
                 // An element is the shadow host if it has a shadow root.
@@ -709,18 +794,7 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
                 return false;
             }
             if (name == "has") {
-                // :has() matches if any descendant/child matches any compound
-                // For simplicity, check all descendants
-                auto checkDescendants = [&](auto& self, const ElementRef& parent) -> bool {
-                    for (auto* child : parent.children()) {
-                        for (auto& compound : ss.selectorListArg) {
-                            if (matchCompound(compound, *child)) return true;
-                        }
-                        if (self(self, *child)) return true;
-                    }
-                    return false;
-                };
-                return checkDescendants(checkDescendants, elem);
+                return matchHas(ss, elem);
             }
             if (name == "nth-child") {
                 int index = elem.childIndex() + 1; // 1-based
@@ -756,8 +830,11 @@ bool matchCompound(const CompoundSelector& compound, const ElementRef& elem) {
 }
 
 // Match a selector chain against an element.
-// entries[0] must match elem (subject). Then walk ancestors/siblings per combinators.
-bool matchChain(const SelectorChain& chain, const ElementRef& elem) {
+// entries[0] must match elem (subject). Then walk ancestors/siblings per
+// combinators. On success *topOut (if given) receives the element matched by
+// the last (leftmost) entry — used by :has() to anchor relative selectors.
+static bool matchChainTop(const SelectorChain& chain, const ElementRef& elem,
+                          const ElementRef** topOut) {
     if (chain.entries.empty()) return false;
 
     // entries[0] is the subject
@@ -828,7 +905,12 @@ bool matchChain(const SelectorChain& chain, const ElementRef& elem) {
                 return false;
         }
     }
+    if (topOut) *topOut = current;
     return true;
+}
+
+bool matchChain(const SelectorChain& chain, const ElementRef& elem) {
+    return matchChainTop(chain, elem, nullptr);
 }
 
 // ---- Public API ----

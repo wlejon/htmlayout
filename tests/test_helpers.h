@@ -29,6 +29,7 @@ struct MockElement : public htmlayout::css::ElementRef {
     std::unordered_map<std::string, std::string> attrs;
     MockElement* parentElem = nullptr;
     std::vector<htmlayout::css::ElementRef*> childElems;
+    bool textChildren = false;
     bool hovered = false;
     bool focused = false;
     bool active = false;
@@ -57,6 +58,7 @@ struct MockElement : public htmlayout::css::ElementRef {
     std::span<ElementRef* const> children() const override {
         return childElems;
     }
+    bool hasTextChildren() const override { return textChildren; }
     int childIndex() const override {
         if (!parentElem) return 0;
         for (int i = 0; i < static_cast<int>(parentElem->childElems.size()); i++) {
