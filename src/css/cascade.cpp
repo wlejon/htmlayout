@@ -573,10 +573,36 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     //    Build uaStyle in the same pass to avoid double expandShorthand.
     ComputedStyle style;
     ComputedStyle uaStyle;
+    // 4a. Custom properties first — they never expand, and shorthand
+    //     substitution in 4b needs their final values.
     for (auto& m : matched) {
-        auto expanded = expandShorthand(*m.property, *m.value);
+        if (!isCustomProperty(*m.property)) continue;
+        style[*m.property] = *m.value;
+        if (m.origin == Origin::UserAgent) {
+            uaStyle[*m.property] = *m.value;
+        }
+    }
+    // 4b. Normal declarations. A var() inside a shorthand must be substituted
+    //     BEFORE expansion (CSS Variables: the declaration holds a pending-
+    //     substitution value; the shorthand splits into longhands only after
+    //     substitution) — expanding "border: var(--bw, 6px) solid" raw would
+    //     mis-tokenize and drop the width.
+    std::unordered_set<std::string> substitutedProps;
+    for (auto& m : matched) {
+        if (isCustomProperty(*m.property)) continue;
+        const std::string* valPtr = m.value;
+        std::string substituted;
+        bool wasSubstituted = false;
+        if (valPtr->find("var(") != std::string::npos) {
+            substituted = resolveVarReferences(*valPtr, style, parentStyle);
+            valPtr = &substituted;
+            wasSubstituted = true;
+        }
+        auto expanded = expandShorthand(*m.property, *valPtr);
         for (auto& e : expanded) {
             style[e.property] = e.value;
+            if (wasSubstituted) substitutedProps.insert(e.property);
+            else substitutedProps.erase(e.property);
             if (m.origin == Origin::UserAgent) {
                 uaStyle[e.property] = e.value;
             }
@@ -646,8 +672,11 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     //    a unitless non-zero number (e.g. --x:20 → width:var(--x)); "20" is not
     //    a valid <length>, so width falls back to its initial value (auto).
     for (auto& [prop, val] : style) {
-        if (val.find("var(") == std::string::npos) continue;
-        val = resolveVarReferences(val, style, parentStyle);
+        bool hadVar = val.find("var(") != std::string::npos;
+        if (hadVar) val = resolveVarReferences(val, style, parentStyle);
+        // Values substituted during shorthand application (4b) already lost
+        // their var() marker but still need IACVT validation below.
+        else if (substitutedProps.count(prop) == 0) continue;
 
         if (isCustomProperty(prop)) continue;
         // Is the substituted value a bare non-zero number (no unit / percent)?
