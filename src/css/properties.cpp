@@ -79,6 +79,14 @@ const std::vector<PropertyDef>& knownProperties() {
         {"visibility",        "visible",   true},
         {"cursor",            "auto",      true},
 
+        // Form-control theming (inherited — declare once on body/root).
+        // color-scheme: renderers draw dark UA control chrome (range track,
+        // checkbox/radio boxes) when the computed value includes "dark".
+        // accent-color: the accent parts of controls (checked fill, range
+        // fill + thumb).
+        {"color-scheme",      "normal",    true},
+        {"accent-color",      "auto",      true},
+
         // Visual
         {"background-color",  "transparent", false},
         {"background-image",  "none",        false},
