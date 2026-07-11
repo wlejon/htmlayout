@@ -163,9 +163,12 @@ struct ParsedTrackList {
     std::vector<TrackSize> tracks;
     NamedLines lineNames;
     bool hasAutoFit = false;  // if auto-fit was used, empty tracks should collapse
+    int autoFitBegin = -1;    // track-index range produced by the auto-fit repeat
+    int autoFitEnd = -1;
 };
 
-ParsedTrackList parseTrackListWithNames(const std::string& value, float available, float fontSize) {
+ParsedTrackList parseTrackListWithNames(const std::string& value, float available, float fontSize,
+                                        float gap = 0.0f) {
     ParsedTrackList result;
     if (value.empty() || value == "none") return result;
 
@@ -219,14 +222,24 @@ ParsedTrackList parseTrackListWithNames(const std::string& value, float availabl
 
                 if (isAutoFill || isAutoFit) {
                     if (isAutoFit) result.hasAutoFit = true;
-                    // Compute how many repetitions fit in the available space.
-                    // Count only the track-size tokens (skip named lines).
+                    // Compute how many repetitions fit in the available space,
+                    // gaps included: count·P + (count·k − 1)·gap ≤ available,
+                    // where P is the fixed size of one repetition and k the
+                    // number of tracks per repetition (Grid §7.2.3.1).
                     float patternSize = computeRepeatPatternSize(subTokens, available, fontSize);
-                    if (patternSize > 0) {
-                        count = static_cast<int>(std::floor(available / patternSize));
+                    int tracksPerRep = 0;
+                    for (auto& st : subTokens)
+                        if (st.empty() || st.front() != '[') tracksPerRep++;
+                    float denom = patternSize + tracksPerRep * gap;
+                    if (patternSize > 0 && denom > 0) {
+                        count = static_cast<int>(std::floor((available + gap) / denom));
                         if (count < 1) count = 1;
                     } else {
                         count = 1; // fallback: at least one repetition
+                    }
+                    if (isAutoFit) {
+                        result.autoFitBegin = static_cast<int>(result.tracks.size());
+                        result.autoFitEnd = result.autoFitBegin + count * tracksPerRep;
                     }
                 } else {
                     try { count = std::stoi(countStr); } catch (...) { count = 1; }
@@ -726,14 +739,16 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // gap shorthand handling (already expanded by properties.cpp)
 
     // Parse grid template (with named lines and auto-fill/auto-fit support)
-    auto colParsed = parseTrackListWithNames(styleVal(style, "grid-template-columns"), containerWidth, fontSize);
-    auto rowParsed = parseTrackListWithNames(styleVal(style, "grid-template-rows"), containerWidth, fontSize);
+    auto colParsed = parseTrackListWithNames(styleVal(style, "grid-template-columns"), containerWidth, fontSize, colGap);
+    auto rowParsed = parseTrackListWithNames(styleVal(style, "grid-template-rows"), containerWidth, fontSize, rowGap);
     auto colTracks = std::move(colParsed.tracks);
     auto rowTracks = std::move(rowParsed.tracks);
     auto colLineNames = std::move(colParsed.lineNames);
     auto rowLineNames = std::move(rowParsed.lineNames);
     bool hasAutoFitCols = colParsed.hasAutoFit;
     bool hasAutoFitRows = rowParsed.hasAutoFit;
+    int autoFitColBegin = colParsed.autoFitBegin, autoFitColEnd = colParsed.autoFitEnd;
+    int autoFitRowBegin = rowParsed.autoFitBegin, autoFitRowEnd = rowParsed.autoFitEnd;
 
     // Parse implicit track sizing (default to Auto if not specified)
     const std::string& autoColVal = styleVal(style, "grid-auto-columns");
@@ -950,6 +965,45 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         rowTracks.push_back(autoRowTrack);
     }
 
+    // auto-fit: collapse empty repeated tracks (Grid §7.2.3.2). A collapsed
+    // track is fixed at 0 and its gutters collapse — equivalent, for sizing
+    // and positioning, to removing the track entirely, which also lets the
+    // remaining flexible tracks absorb the freed space like Chromium does.
+    auto collapseEmptyTracks = [&](std::vector<TrackSize>& tracks, size_t& count,
+                                   int fitBegin, int fitEnd, bool isCol) {
+        int limit = static_cast<int>(std::min(tracks.size(), count));
+        if (fitBegin < 0 || fitBegin >= limit) return;
+        fitEnd = std::min(fitEnd, limit);
+        std::vector<bool> hasItem(limit, false);
+        for (auto& item : items) {
+            int start = isCol ? item.col : item.row;
+            int span = isCol ? item.colSpan : item.rowSpan;
+            for (int c = std::max(start, 0); c < start + span && c < limit; c++)
+                hasItem[c] = true;
+        }
+        std::vector<int> shift(limit, 0);
+        std::vector<TrackSize> kept;
+        kept.reserve(tracks.size());
+        int removed = 0;
+        for (int i = 0; i < limit; i++) {
+            shift[i] = removed;
+            if (i >= fitBegin && i < fitEnd && !hasItem[i]) { removed++; continue; }
+            kept.push_back(tracks[i]);
+        }
+        if (removed == 0) return;
+        for (size_t i = limit; i < tracks.size(); i++) kept.push_back(tracks[i]);
+        for (auto& item : items) {
+            int& start = isCol ? item.col : item.row;
+            if (start >= 0 && start < limit) start -= shift[start];
+        }
+        tracks = std::move(kept);
+        count -= removed;
+    };
+    if (hasAutoFitCols)
+        collapseEmptyTracks(colTracks, numCols, autoFitColBegin, autoFitColEnd, true);
+    if (hasAutoFitRows)
+        collapseEmptyTracks(rowTracks, numRows, autoFitRowBegin, autoFitRowEnd, false);
+
     // Layout items to determine content sizes for auto tracks
     std::vector<float> colContentSizes(numCols, 0);
     std::vector<float> rowContentSizes(numRows, 0);
@@ -1005,32 +1059,6 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Rows: the items' min-content block contribution is their laid-out
     // height, so rowContentSizes doubles as the flexible-row floor.
     auto rowSizes = resolveTrackSizes(rowTracks, rowAvailable, rowGap, rowContentSizes, rowContentSizes);
-
-    // auto-fit: collapse empty tracks to 0
-    if (hasAutoFitCols) {
-        for (size_t c = 0; c < numCols; c++) {
-            bool hasItem = false;
-            for (auto& item : items) {
-                if (item.col <= static_cast<int>(c) && static_cast<int>(c) < item.col + item.colSpan) {
-                    hasItem = true;
-                    break;
-                }
-            }
-            if (!hasItem) colSizes[c] = 0;
-        }
-    }
-    if (hasAutoFitRows) {
-        for (size_t r = 0; r < numRows; r++) {
-            bool hasItem = false;
-            for (auto& item : items) {
-                if (item.row <= static_cast<int>(r) && static_cast<int>(r) < item.row + item.rowSpan) {
-                    hasItem = true;
-                    break;
-                }
-            }
-            if (!hasItem) rowSizes[r] = 0;
-        }
-    }
 
     // Container-level justify-items / align-items defaults to "stretch".
     // Per-item justify-self / align-self can override.
