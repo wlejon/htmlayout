@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
@@ -139,6 +140,99 @@ StrutMetrics computeStrut(const css::ComputedStyle& style, float fontSize,
     s.below = (natural - asc) + (leading - half);
     s.xHeight = fontSize > 0 ? metrics.xHeight(fam, fontSize, wt) : 0.0f;
     return s;
+}
+
+// Inline space an inside list marker (list-style-position: inside) occupies
+// at the start of the list item's first line. Blink geometry, measured
+// against Chromium: a symbolic marker (disc/circle/square) is a
+// round(ascent)-wide box plus the 7px marker padding; an ordinal marker is
+// the marker text ("12.") plus one space advance. The painter (bro's
+// DrawTraversal) fills this reserved box.
+float insideMarkerInlineSize(LayoutNode* node, const css::ComputedStyle& style,
+                             float fontSize, TextMetrics& metrics) {
+    if (styleVal(style, "display") != "list-item") return 0.0f;
+    if (styleVal(style, "list-style-position") != "inside") return 0.0f;
+    std::string type = styleVal(style, "list-style-type");
+    if (type.empty()) type = "disc";
+    if (type == "none" || type == "disclosure-open" ||
+        type == "disclosure-closed")
+        return 0.0f;
+    const std::string& fam = styleVal(style, "font-family");
+    const std::string& wt = styleVal(style, "font-weight");
+    if (fontSize <= 0) return 0.0f;
+
+    // Blink (list_marker.cc): symbol width = (A*2/3 + 1)/2 + 2 in INTEGER
+    // arithmetic on the rounded ascent A, and the inside marker box carries
+    // margin-start -1px and margin-end 1em (kCUAMarkerMarginEm). Verified
+    // against Chromium at font sizes 10..40px.
+    if (type == "disc" || type == "circle" || type == "square") {
+        int a = static_cast<int>(std::lround(metrics.ascent(fam, fontSize, wt)));
+        float symbol = static_cast<float>((a * 2 / 3 + 1) / 2 + 2);
+        return symbol - 1.0f + fontSize;
+    }
+
+    // Ordinal marker: position among list-item siblings, honoring
+    // <ol start> and <li value>.
+    int idx = 1;
+    if (LayoutNode* parent = node->parent()) {
+        std::string startAttr(parent->attribute("start"));
+        if (!startAttr.empty()) idx = std::atoi(startAttr.c_str());
+        for (LayoutNode* sib : parent->children()) {
+            if (styleVal(sib->computedStyle(), "display") != "list-item")
+                continue;
+            std::string valAttr(sib->attribute("value"));
+            if (!valAttr.empty()) idx = std::atoi(valAttr.c_str());
+            if (sib == node) break;
+            ++idx;
+        }
+    }
+
+    auto toAlpha = [](int n) {
+        std::string s;
+        while (n > 0) {
+            int rem = (n - 1) % 26;
+            s.insert(s.begin(), static_cast<char>('a' + rem));
+            n = (n - 1) / 26;
+        }
+        return s.empty() ? std::string("a") : s;
+    };
+    auto toRoman = [](int n) {
+        if (n <= 0 || n >= 4000) return std::to_string(n);
+        static const int vals[] = {1000, 900, 500, 400, 100, 90,
+                                   50, 40, 10, 9, 5, 4, 1};
+        static const char* syms[] = {"m", "cm", "d", "cd", "c", "xc",
+                                     "l", "xl", "x", "ix", "v", "iv", "i"};
+        std::string s;
+        for (int i = 0; i < 13; ++i)
+            while (n >= vals[i]) { s += syms[i]; n -= vals[i]; }
+        return s;
+    };
+    auto toUpper = [](std::string s) {
+        for (auto& ch : s)
+            ch = static_cast<char>(
+                std::toupper(static_cast<unsigned char>(ch)));
+        return s;
+    };
+
+    std::string text;
+    if (type == "decimal") {
+        text = std::to_string(idx);
+    } else if (type == "decimal-leading-zero") {
+        text = (idx >= 0 && idx < 10 ? "0" : "") + std::to_string(idx);
+    } else if (type == "lower-alpha" || type == "lower-latin") {
+        text = toAlpha(idx);
+    } else if (type == "upper-alpha" || type == "upper-latin") {
+        text = toUpper(toAlpha(idx));
+    } else if (type == "lower-roman") {
+        text = toRoman(idx);
+    } else if (type == "upper-roman") {
+        text = toUpper(toRoman(idx));
+    } else {
+        text = std::to_string(idx);
+    }
+    text += ".";
+    return metrics.measureWidth(text, fam, fontSize, wt) +
+           metrics.measureWidth(" ", fam, fontSize, wt);
 }
 
 // Baseline geometry of an atomic inline-level box (inline-block, replaced
@@ -901,8 +995,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // Resolve text-indent up front: the first line's usable width is
         // reduced (or, for a negative indent, extended) by it, and the
         // positioning pass below offsets the first line's start by it.
+        // An inside list marker occupies the start of the first line the
+        // same way — reserve its inline size along with the indent.
         float textIndent = resolveLength(styleVal(style, "text-indent"),
-                                         childAvailable, fontSize);
+                                         childAvailable, fontSize) +
+                           insideMarkerInlineSize(node, style, fontSize,
+                                                  metrics);
         {
             size_t lineStart = 0;
             float cursorX = 0;

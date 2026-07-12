@@ -456,7 +456,23 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     child->box.contentRect.y = cursorY + child->box.margin.top +
                         child->box.padding.top + child->box.border.top;
                     cursorX += cw;
-                    lineMaxH = std::max(lineMaxH, ch);
+                    // The line still includes the block's strut (CSS2 §10.8):
+                    // a line of only atomic inlines shorter than the
+                    // line-height must not shrink the line box below it.
+                    lineMaxH = std::max(lineMaxH, std::max(ch, ibLineHeight));
+                    // CSS2 §10.8.1: this box's own baseline is its LAST line
+                    // box's baseline. This simplified stacker keeps lines on
+                    // the strut baseline — half-leading + ascent below the
+                    // line top — so the parent line box aligns us there
+                    // rather than at the bottom margin edge.
+                    {
+                        float ibNatural = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+                        if (ibNatural <= 0) ibNatural = fontSize * 1.2f;
+                        float asc = (ibAscent > 0 && ibAscent < ibNatural)
+                            ? ibAscent : ibNatural * 0.8f;
+                        float half = std::floor((ibLineHeight - ibNatural) * 0.5f);
+                        node->box.baselineOffset = cursorY + asc + half;
+                    }
                 }
             }
             if (cursorX > 0) {
