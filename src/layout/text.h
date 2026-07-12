@@ -12,6 +12,14 @@ namespace htmlayout::layout {
 // and selection geometry. `text` is the post-whitespace-processing string
 // actually rendered — its length may differ from (srcEnd - srcStart) when
 // whitespace is collapsed.
+//
+// kFitSlack: slack for line-fit comparisons. A box shrink-wrapped to its
+// max-content width re-tests the same words against that width with a
+// different float summation order; a last-bit difference must not split the
+// line. Chromium is immune because LayoutUnit quantizes all layout math to
+// 1/64 px — use that quantum as the tolerance.
+inline constexpr float kFitSlack = 1.0f / 64.0f;
+
 struct TextRun {
     std::string text;
     float width;

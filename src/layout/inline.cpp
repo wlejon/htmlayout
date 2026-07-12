@@ -397,8 +397,22 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     }
                     for (auto& run : runs) {
                         if (run.text.empty() && run.width == 0) continue;
-                        float h = std::max(run.height, ibLineHeight);
-                        if (cursorX > 0 && cursorX + ibPending + run.width > contentAvail) {
+                        // Consecutive runs of one text node are separated by
+                        // collapsed whitespace in the source; when they end up
+                        // on the SAME line (the splitter packed against a
+                        // fractionally different width) the space must be
+                        // re-inserted, not silently dropped.
+                        if (!firstRun && run.canBreakBefore)
+                            ibPending = ibSpaceW + ls + ws;
+                        // The run's line contribution is its LEADED box — the
+                        // element's line-height — not the natural glyph
+                        // height. A line-height below the font's natural
+                        // height shrinks the line box and the glyphs overflow
+                        // it (CSS2 §10.8); taking max() here made the natural
+                        // height win and inflated the box.
+                        float h = ibLineHeight;
+                        if (cursorX > 0 &&
+                            cursorX + ibPending + run.width > contentAvail + kFitSlack) {
                             ibEndLine(cursorX);
                             maxContentW = std::max(maxContentW, cursorX);
                             cursorY += lineMaxH;
@@ -414,8 +428,10 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         // (for the parent line box to align against) tracks
                         // the LAST placed run — CSS2 §10.8.1 gives an
                         // inline-block the baseline of its last line box.
-                        float halfLead = (h - run.height) * 0.5f;
-                        if (halfLead < 0) halfLead = 0;
+                        // Half-leading centers the natural box in the leaded
+                        // one; negative when line-height < natural (glyphs
+                        // hang out both sides). Blink floors the ascent side.
+                        float halfLead = std::floor((h - run.height) * 0.5f);
                         PlacedTextRun placed;
                         placed.x = cursorX;
                         placed.y = cursorY + halfLead;
@@ -481,7 +497,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     layoutNode(child, contentAvail, metrics);
                     float cw = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
                     float ch = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
-                    if (cursorX > 0 && cursorX + ibPending + cw > contentAvail) {
+                    if (cursorX > 0 && cursorX + ibPending + cw > contentAvail + kFitSlack) {
                         ibEndLine(cursorX);
                         maxContentW = std::max(maxContentW, cursorX);
                         cursorY += lineMaxH;

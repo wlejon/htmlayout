@@ -1036,7 +1036,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 bool curIsSpace = !items[i].isElement && !items[i].forceBreak &&
                                   items[i].text == " ";
                 if (whiteSpace != "nowrap" && !curIsSpace && cursorX > 0 &&
-                    cursorX + items[i].width > lineAvail) {
+                    cursorX + items[i].width > lineAvail + kFitSlack) {
                     // Find the latest in-range break point at or before i.
                     size_t breakIdx = i;
                     while (breakIdx > lineStart &&

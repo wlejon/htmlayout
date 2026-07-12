@@ -161,6 +161,15 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
         if (letterSpacing != 0 && !s.empty()) {
             w += letterSpacing * static_cast<float>(utf8CodepointCount(s));
         }
+        // word-spacing widens every space the string carries INSIDE it —
+        // the nowrap / pre whole-line measurements; word-mode gaps get it
+        // via measureSpace instead (their words never contain spaces).
+        if (wordSpacing != 0 && !s.empty()) {
+            int nSpaces = 0;
+            for (char c : s)
+                if (c == ' ') ++nSpaces;
+            w += wordSpacing * static_cast<float>(nSpaces);
+        }
         return w;
     };
 
@@ -210,7 +219,7 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
                     runSrcEnd   = words[i].srcEnd;
                 } else {
                     float testWidth = currentWidth + spaceWidth + wordWidth;
-                    if (testWidth <= availableWidth) {
+                    if (testWidth <= availableWidth + kFitSlack) {
                         currentLine += " " + words[i].text;
                         currentWidth = testWidth;
                         runSrcEnd = words[i].srcEnd;
@@ -360,7 +369,7 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
             }
         } else {
             float testWidth = currentWidth + spaceWidth + wordWidth;
-            if (testWidth <= availableWidth) {
+            if (testWidth <= availableWidth + kFitSlack) {
                 currentLine += " " + words[i].text;
                 currentWidth = testWidth;
                 runSrcEnd = words[i].srcEnd;
