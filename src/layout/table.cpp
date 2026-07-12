@@ -1127,14 +1127,15 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float cellContentH = std::max(cell->box.contentRect.height, targetH);
 
         // Intrinsic (flowed) content height inside the cell's content box:
-        // start from the cell's flow height (naturalHeight — the line-box
-        // stack), NOT just the union of child boxes. The union undershoots
-        // for inline content whose line boxes are taller than the boxes
-        // themselves (a 14px inline-block on a 20px line flows 20px tall;
-        // Chromium centers the line stack, and with text the union was off
-        // by the half-leading). The child-box union below stays as a floor
-        // for content overflowing the flow height.
-        float intrinsicH = cell->box.naturalHeight;
+        // start from the cell's pure flow height (the line-box stack), NOT
+        // just the union of child boxes. The union undershoots for inline
+        // content whose line boxes are taller than the boxes themselves (a
+        // 14px inline-block on a 20px line flows 20px tall; Chromium centers
+        // the line stack, and with text the union was off by the
+        // half-leading). flowHeight, not naturalHeight: naturalHeight folds
+        // in an explicit cell height, which would zero the shift entirely.
+        // The child-box union below stays as a floor for overflowing content.
+        float intrinsicH = std::max(0.0f, cell->box.flowHeight);
         for (auto* child : getLayoutChildren(cell)) {
             if (!child) continue;
             float ch = child->box.contentRect.y + child->box.contentRect.height

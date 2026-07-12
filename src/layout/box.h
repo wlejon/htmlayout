@@ -51,6 +51,14 @@ struct LayoutBox {
     // For overflow:auto/scroll elements, scrollHeight = naturalHeight.
     float naturalHeight = 0;
 
+    // Pure flow height of the content (line-box stack / block-children
+    // extent), BEFORE any explicit height / min-max override — unlike
+    // naturalHeight, which folds contentRect.height in. Table cells center
+    // their content against this (a height:120px cell with one 20px line
+    // must report 20 here, not 120). Negative = not computed (non-block
+    // layout paths).
+    float flowHeight = -1.0f;
+
     // Whether text content was truncated by overflow (for text-overflow: ellipsis)
     bool textTruncated = false;
 

@@ -268,6 +268,13 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float borderH = node->box.border.left + node->box.border.right;
 
     float specifiedWidth = resolveDimension(styleVal(style, "width"), availableWidth, fontSize);
+    // A table cell's 'width' is an input to the table's column algorithm,
+    // not the used width — the cell always fills its assigned track span,
+    // handed in as availableWidth by table.cpp's final layout pass. Flow as
+    // width:auto so inline content (text-align, centering) positions against
+    // the real span: a colspan cell is much wider than its specified width.
+    if (specifiedWidth >= 0.0f && styleVal(style, "display") == "table-cell")
+        specifiedWidth = -1.0f;
     float contentWidth;
     if (specifiedWidth == SIZING_MIN_CONTENT) {
         contentWidth = computeMinContentWidth(node, metrics);
@@ -2196,6 +2203,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Store natural height before clamping (for scroll extent calculation)
     node->box.naturalHeight = std::max(cursorY, node->box.contentRect.height);
+    // Pure flow height, without the explicit-height fold — table cells
+    // center content against this (see LayoutBox::flowHeight).
+    node->box.flowHeight = cursorY;
 
     // Apply min/max-height constraints. A percentage min/max-height resolves
     // against the containing block's height; when that height is indefinite

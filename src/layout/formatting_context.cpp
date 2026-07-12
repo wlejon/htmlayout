@@ -506,10 +506,29 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
         return true;
     };
 
+    // A pure-whitespace text node between inline-level siblings collapses to
+    // ONE space in layout (block.cpp emits a synthetic space item), so the
+    // single-line (max-content) sum must count it too — table cells were
+    // measuring exactly (N-1) space advances narrower than Chromium for a
+    // run of N inline-blocks and wrapping content that fits. The space only
+    // counts when inline content both precedes AND follows (mirrors layout's
+    // leading-skip and trailing-trim), hence the pending buffer.
+    float spaceW = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight)
+        + letterSpacing + wordSpacing;
+    float pendingSpace = 0.0f;
+    bool prevInlineContent = false;
+    const std::string& wsModeOuter = styleVal(style, "white-space");
+    bool collapsingWs = wsModeOuter.empty() || wsModeOuter == "normal" ||
+                        wsModeOuter == "nowrap" || wsModeOuter == "pre-line";
+
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) {
             // Flex containers discard whitespace-only text nodes (CSS Flexbox §4)
             if (isFlexContainer && isWhitespaceOnly(child->textContent())) continue;
+            if (collapsingWs && isWhitespaceOnly(child->textContent())) {
+                if (prevInlineContent) pendingSpace = spaceW;
+                continue;
+            }
             std::string_view text = child->textContent();
             // The container's white-space mode decides how the FINAL layout
             // sizes this text. When it collapses and wraps at word boundaries
@@ -560,6 +579,9 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
                 if (wordSpacing != 0 && spaceCount > 0)
                     w += wordSpacing * static_cast<float>(spaceCount);
             }
+            sumChildMax += pendingSpace;
+            pendingSpace = 0.0f;
+            prevInlineContent = true;
             maxChildMax = std::max(maxChildMax, w);
             sumChildMax += w;
             ++inflowCount;   // text runs are inline-level
@@ -619,6 +641,9 @@ float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
                     ? minW + mh : minW + ph + bh + mh;
                 if (childMax < minTotal) childMax = minTotal;
             }
+            sumChildMax += pendingSpace;
+            pendingSpace = 0.0f;
+            prevInlineContent = true;
             maxChildMax = std::max(maxChildMax, childMax);
             sumChildMax += childMax;
         }
