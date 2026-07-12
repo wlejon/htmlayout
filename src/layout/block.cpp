@@ -1828,6 +1828,21 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
+    // -x-flow-collapse: collapse (UA-internal) — the child is laid out at
+    // its normal flow position but the run of consecutive collapsed children
+    // contributes nothing to the flow: the cursor/margin state is snapshotted
+    // when the run starts and restored when it ends, so following siblings
+    // and the parent's height behave as if the run were empty. This models
+    // Chromium's closed-<details> content (a content-visibility:hidden
+    // ::details-content wrapper): geometry queries see real laid-out boxes,
+    // but they take no space, don't paint and don't hit-test.
+    bool inCollapsedRun = false;
+    struct CollapsedSave {
+        float cursorY = 0, prevMarginBottom = 0, firstBlockChildMarginTop = 0;
+        bool firstChild = true, hadFirstBlockChild = false;
+        size_t nFloats = 0;
+    } collapsedSave;
+
     for (auto* child : getLayoutChildren(node)) {
         auto& childStyle = child->computedStyle();
 
@@ -1849,6 +1864,27 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // Absolutely and fixed positioned children are out of flow
         // (positioned by the post-layout absolute positioning pass)
         if (childPos == "absolute" || childPos == "fixed") continue;
+
+        bool childCollapsed =
+            styleVal(childStyle, "-x-flow-collapse") == "collapse";
+        if (childCollapsed != inCollapsedRun) {
+            flushInlineRun();
+            if (childCollapsed) {
+                collapsedSave = {cursorY, prevMarginBottom,
+                                 firstBlockChildMarginTop,
+                                 firstChild, hadFirstBlockChild,
+                                 floats.size()};
+            } else {
+                cursorY = collapsedSave.cursorY;
+                prevMarginBottom = collapsedSave.prevMarginBottom;
+                firstBlockChildMarginTop = collapsedSave.firstBlockChildMarginTop;
+                firstChild = collapsedSave.firstChild;
+                hadFirstBlockChild = collapsedSave.hadFirstBlockChild;
+                if (floats.size() > collapsedSave.nFloats)
+                    floats.resize(collapsedSave.nFloats);
+            }
+            inCollapsedRun = childCollapsed;
+        }
 
         // Collect inline/inline-block children for horizontal layout
         if (childDisplay == "inline" || childDisplay == "inline-block" ||
@@ -2042,6 +2078,20 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Flush any remaining inline items at end of BFC
     flushInlineRun();
+
+    // A collapsed run that reaches the end of the child list: roll the flow
+    // state back after flushing so the run's boxes keep their positions but
+    // contribute nothing to the parent's height.
+    if (inCollapsedRun) {
+        cursorY = collapsedSave.cursorY;
+        prevMarginBottom = collapsedSave.prevMarginBottom;
+        firstChild = collapsedSave.firstChild;
+        hadFirstBlockChild = collapsedSave.hadFirstBlockChild;
+        firstBlockChildMarginTop = collapsedSave.firstBlockChildMarginTop;
+        if (floats.size() > collapsedSave.nFloats)
+            floats.resize(collapsedSave.nFloats);
+        inCollapsedRun = false;
+    }
 
     // Add the last child's bottom margin
     if (!firstChild) {

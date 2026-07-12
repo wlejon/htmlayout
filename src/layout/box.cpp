@@ -191,6 +191,9 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     if (styleVal(style, "display") == "none") return nullptr;
     // visibility:hidden still occupies space but is not hit-testable
     if (styleVal(style, "visibility") == "hidden") return nullptr;
+    // Flow-collapsed content (closed <details> body) has real geometry but
+    // is never rendered or interactive — see -x-flow-collapse in block.cpp.
+    if (styleVal(style, "-x-flow-collapse") == "collapse") return nullptr;
     // pointer-events:none makes *this node* non-hittable, but descendants
     // with pointer-events:auto must still be reachable. Track it and skip
     // returning `node` below — children are still traversed normally.
