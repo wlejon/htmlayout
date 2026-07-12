@@ -359,6 +359,11 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             // baseline that sits half-leading + ascent below the line top.
             float ibAscent = metrics.ascent(fontFamily, fontSize, fontWeight);
             float cursorX = 0, lineMaxH = 0;
+            // Pure-whitespace text nodes between inline siblings collapse to
+            // one pending space advance, flushed when the next item stays on
+            // the line and dropped at wraps / the line end (CSS Text §4.1).
+            float ibSpaceW = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
+            float ibPending = 0.0f;
             for (auto* child : getLayoutChildren(node)) {
                 if (child->isTextNode()) {
                     float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
@@ -368,15 +373,27 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         "normal", "normal", ls, ws, styleVal(style, "text-transform"));
                     bool firstRun = true;
                     child->box.textRuns.clear();
+                    if (runs.empty() && cursorX > 0 &&
+                        (whiteSpace == "normal" || whiteSpace.empty())) {
+                        for (char c : child->textContent()) {
+                            if (std::isspace(static_cast<unsigned char>(c))) {
+                                ibPending = ibSpaceW;
+                                break;
+                            }
+                        }
+                    }
                     for (auto& run : runs) {
                         if (run.text.empty() && run.width == 0) continue;
                         float h = std::max(run.height, ibLineHeight);
-                        if (cursorX > 0 && cursorX + run.width > contentAvail) {
+                        if (cursorX > 0 && cursorX + ibPending + run.width > contentAvail) {
                             maxContentW = std::max(maxContentW, cursorX);
                             cursorY += lineMaxH;
                             cursorX = 0;
                             lineMaxH = 0;
+                        } else {
+                            cursorX += ibPending;
                         }
+                        ibPending = 0;
                         // Center the font's natural box in the line via
                         // half-leading; the glyph baseline then sits at
                         // placed.y + ascent, and the box's reported baseline
@@ -436,6 +453,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     cursorY += lineMaxH;
                     cursorX = 0;
                     lineMaxH = 0;
+                    ibPending = 0;
                     child->box.contentRect = {};
                 } else {
                     auto& cs = child->computedStyle();
@@ -445,12 +463,15 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     layoutNode(child, contentAvail, metrics);
                     float cw = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
                     float ch = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
-                    if (cursorX > 0 && cursorX + cw > contentAvail) {
+                    if (cursorX > 0 && cursorX + ibPending + cw > contentAvail) {
                         maxContentW = std::max(maxContentW, cursorX);
                         cursorY += lineMaxH;
                         cursorX = 0;
                         lineMaxH = 0;
+                    } else {
+                        cursorX += ibPending;
                     }
+                    ibPending = 0;
                     child->box.contentRect.x = cursorX + child->box.margin.left +
                         child->box.padding.left + child->box.border.left;
                     child->box.contentRect.y = cursorY + child->box.margin.top +
@@ -544,6 +565,28 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             // Fresh layout pass: clear any previously placed runs so we don't
             // accumulate stale geometry from the prior layout.
             child->box.textRuns.clear();
+            // Pure-whitespace text node collapses to a single space
+            // contribution between inline siblings (mirrors the block IFC).
+            // Skip when there's no prior content so leading whitespace
+            // doesn't push the first child rightward.
+            if (runs.empty() && (whiteSpace == "normal" || whiteSpace.empty()) &&
+                !allItems.empty()) {
+                bool anyWs = false;
+                for (char c : child->textContent()) {
+                    if (std::isspace(static_cast<unsigned char>(c))) { anyWs = true; break; }
+                }
+                if (anyWs) {
+                    LineItem sp;
+                    sp.text = " ";
+                    sp.width = metrics.measureWidth(" ", fontFamily, fontSize,
+                                                    fontWeight) + ls + ws;
+                    sp.height = 0.0f; // doesn't grow the line
+                    sp.node = child;
+                    sp.canBreakBefore = true;
+                    sp.canBreakAfter  = true;
+                    allItems.push_back(std::move(sp));
+                }
+            }
             for (auto& run : runs) {
                 LineItem item;
                 item.text = run.text;
@@ -658,6 +701,17 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 allItems.push_back(std::move(item));
             }
         }
+    }
+
+    // Drop trailing collapsible whitespace synthetic items — they collapse
+    // against the inline's end, matching the block IFC's line-edge trim.
+    while (!allItems.empty()) {
+        auto& back = allItems.back();
+        if (back.text == " " && !back.forceBreak && back.height == 0.0f) {
+            allItems.pop_back();
+            continue;
+        }
+        break;
     }
 
     // Build line boxes. Under white-space: nowrap, cross-item wraps between

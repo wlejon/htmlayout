@@ -154,12 +154,15 @@ float insideMarkerInlineSize(LayoutNode* node, const css::ComputedStyle& style,
     if (styleVal(style, "list-style-position") != "inside") return 0.0f;
     std::string type = styleVal(style, "list-style-type");
     if (type.empty()) type = "disc";
-    if (type == "none" || type == "disclosure-open" ||
-        type == "disclosure-closed")
-        return 0.0f;
+    if (type == "none") return 0.0f;
     const std::string& fam = styleVal(style, "font-family");
     const std::string& wt = styleVal(style, "font-weight");
     if (fontSize <= 0) return 0.0f;
+
+    // Disclosure triangle (<summary>): Blink's DisclosureSymbolSize is
+    // 0.66em, with a 0.4em end margin (kClosureMarkerMarginEm).
+    if (type == "disclosure-open" || type == "disclosure-closed")
+        return 0.66f * fontSize + 0.4f * fontSize;
 
     // Blink (list_marker.cc): symbol width = (A*2/3 + 1)/2 + 2 in INTEGER
     // arithmetic on the rounded ascent A, and the inside marker box carries
