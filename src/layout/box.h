@@ -84,6 +84,19 @@ struct LayoutBox {
     // per spec the parent then synthesizes one from the bottom margin edge.
     float baselineOffset = -1.0f;
 
+    // Content extents of a non-replaced inline element, measured from its
+    // first-line baseline (positive above/below). The element's own box is
+    // only its font strip (Chromium's fragment geometry — see layoutInline),
+    // so taller content (inline-block children, wrapped lines) overflows it;
+    // parent line boxes size against these extents instead of the box height.
+    // Deliberately EXCLUDES the element's own first-line text: that is
+    // covered by the element's leaded (line-height) contribution, which with
+    // a negative half-leading is smaller than the glyphs (CSS2 §10.8.1).
+    // Negative means "not an inline / not computed" — parents fall back to
+    // box-height-based sizing.
+    float inlineExtentAbove = -1.0f;
+    float inlineExtentBelow = -1.0f;
+
     // Subtree hit-test bounds: the union of this node's border box and all
     // descendant boxes (each descendant's own transform + clipping folded in),
     // in the SAME space as contentRect (relative to the parent's content

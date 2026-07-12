@@ -308,7 +308,11 @@ static void testInlineMultipleInlineBlocks() {
           "ib1 and ib2 on same line (same y)");
     check(ib3.box.contentRect.y > ib1.box.contentRect.y,
           "ib3 wraps to next line (greater y)");
-    check(approx(root.box.contentRect.height, 60), "total height = 2 lines x 30px = 60");
+    // The inline root's own box is its font strip across the lines
+    // (Chromium fragment geometry): first-line baseline (30) - ascent (16)
+    // down to last-line baseline (60) + descent (4) → 50. The 30px
+    // inline-blocks overflow the strip without growing it.
+    check(approx(root.box.contentRect.height, 50), "strip spans first to last baseline = 50");
 }
 
 static void testInlineDisplayNone() {
@@ -330,7 +334,10 @@ static void testInlineDisplayNone() {
     FixedTextMetrics metrics;
     layoutTree(&root, 500, metrics);
 
-    check(approx(root.box.contentRect.height, 30), "display:none child doesn't affect height");
+    // Strip box: the inline root reports its font strip (natural line
+    // height, 20), not the 30px inline-block child. The hidden child must
+    // not change that either way.
+    check(approx(root.box.contentRect.height, 20), "display:none child doesn't affect height");
     check(approx(hidden.box.contentRect.width, 0), "hidden child has zero width");
 }
 

@@ -761,11 +761,24 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         ? child->box.baselineOffset : cAscent;
                     it.baseline = b;
                     it.baselineFromContent = true;
-                    // Nested content taller than the element's own font
-                    // (e.g. a bigger-font span inside) still has to fit.
-                    it.above = std::max(cAscent + cHalf, b);
-                    it.below = std::max((cNatural - cAscent) + (cLead - cHalf),
-                                        child->box.contentRect.height - b);
+                    if (child->box.inlineExtentAbove >= 0) {
+                        // Strip-boxed inline (see layoutInline): the line
+                        // grows to the element's leaded box unioned with its
+                        // content extents. The element's own text is NOT in
+                        // the extents — with a negative half-leading the
+                        // leaded box is smaller than the glyphs and the line
+                        // must not grow to fit them (CSS2 §10.8.1).
+                        it.above = std::max(cAscent + cHalf,
+                                            child->box.inlineExtentAbove);
+                        it.below = std::max((cNatural - cAscent) + (cLead - cHalf),
+                                            child->box.inlineExtentBelow);
+                    } else {
+                        // Nested content taller than the element's own font
+                        // (e.g. a bigger-font span inside) still has to fit.
+                        it.above = std::max(cAscent + cHalf, b);
+                        it.below = std::max((cNatural - cAscent) + (cLead - cHalf),
+                                            child->box.contentRect.height - b);
+                    }
                     if (va == "middle") {
                         // Non-replaced inline: Blink centers the child's
                         // LEADED inline box (its line-height) on
@@ -1342,6 +1355,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // always-breakable for atomic inline elements).
             bool canBreakBefore = false;
             bool canBreakAfter = false;
+            // Line-sizing extents about the baseline for strip-boxed inline
+            // elements (see layoutInline) — the box is only the font strip,
+            // but tall children still grow the line. Negative = use
+            // baseline / height - baseline.
+            float sizeAscent = -1.0f;
+            float sizeDescent = -1.0f;
         };
         std::vector<AnonItem> anonItems;
         float anonSpaceWidth = metrics.measureWidth(" ", styleVal(style, "font-family"),
@@ -1460,6 +1479,28 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 AnonItem it{};
                 it.node = inl; it.width = cw; it.height = ch;
                 it.baseline = g.baseline; it.valign = g.valign;
+                if (inl->box.inlineExtentAbove >= 0) {
+                    // Strip-boxed inline: size the line to its leaded box
+                    // unioned with its content extents, not the strip.
+                    auto& ics = inl->computedStyle();
+                    float cfs = resolveLength(styleVal(ics, "font-size"),
+                                              fontSize, fontSize);
+                    if (cfs <= 0) cfs = fontSize;
+                    const std::string& cff = styleVal(ics, "font-family");
+                    const std::string& cfw = styleVal(ics, "font-weight");
+                    float cNat = metrics.lineHeight(cff, cfs, cfw);
+                    if (cNat <= 0) cNat = cfs * 1.2f;
+                    float cAsc = metrics.ascent(cff, cfs, cfw);
+                    if (cAsc <= 0 || cAsc >= cNat) cAsc = cNat * 0.8f;
+                    float cLH = resolveLineHeight(styleVal(ics, "line-height"),
+                                                  cfs, cff, cfw, metrics);
+                    float cLead = cLH - cNat;
+                    float cHalf = std::floor(cLead * 0.5f);
+                    it.sizeAscent = std::max(cAsc + cHalf,
+                                             inl->box.inlineExtentAbove);
+                    it.sizeDescent = std::max((cNat - cAsc) + (cLead - cHalf),
+                                              inl->box.inlineExtentBelow);
+                }
                 // Atomic inline elements offer a soft-wrap opportunity on
                 // both sides (CSS Text §5.3).
                 it.canBreakBefore = true;
@@ -1499,8 +1540,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 if (it.forceBreak || it.isFloat) continue;
                 if (it.isText) continue; // text == strut extents
                 if (it.valign == 0) {
-                    a = std::max(a, it.baseline);
-                    b = std::max(b, it.height - it.baseline);
+                    a = std::max(a, it.sizeAscent >= 0 ? it.sizeAscent
+                                                       : it.baseline);
+                    b = std::max(b, it.sizeDescent >= 0 ? it.sizeDescent
+                                                        : it.height - it.baseline);
                 } else if (it.valign == 2) {
                     float ia = it.height * 0.5f + anonStrut.xHeight * 0.5f;
                     a = std::max(a, ia);

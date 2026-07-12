@@ -34,6 +34,12 @@ struct LineItem {
     // Break opportunity flags on each side — see TextRun::canBreakBefore.
     bool canBreakBefore = false;
     bool canBreakAfter  = false;
+    // Line-sizing extents about the baseline when they differ from the
+    // box geometry (nested non-replaced inline elements: the box is only
+    // the font strip, but tall children still grow the line). Negative
+    // means "use baseline / height - baseline".
+    float sizeAscent  = -1.0f;
+    float sizeDescent = -1.0f;
 };
 
 struct LineBox {
@@ -71,16 +77,26 @@ std::vector<LineBox> buildLineBoxes(
                     static_cast<unsigned char>(it.text.front())));
     };
 
-    auto rebuildBounds = [](LineBox& line) {
+    // Ascent/descent an item contributes to line sizing: the explicit
+    // sizeAscent/sizeDescent when set (strip-boxed inline elements),
+    // otherwise derived from the box geometry.
+    auto itemAscent = [](const LineItem& it) {
+        return it.sizeAscent >= 0 ? it.sizeAscent : it.baseline;
+    };
+    auto itemDescent = [](const LineItem& it) {
+        return it.sizeDescent >= 0 ? it.sizeDescent : it.height - it.baseline;
+    };
+
+    auto rebuildBounds = [&](LineBox& line) {
         line.totalWidth = 0;
         line.maxHeight = 0;
         line.maxBaseline = 0;
         line.maxDescent = 0;
         for (auto& it : line.items) {
             line.totalWidth += it.width;
-            line.maxHeight   = std::max(line.maxHeight, it.height);
-            line.maxBaseline = std::max(line.maxBaseline, it.baseline);
-            line.maxDescent  = std::max(line.maxDescent, it.height - it.baseline);
+            line.maxHeight   = std::max(line.maxHeight, itemAscent(it) + itemDescent(it));
+            line.maxBaseline = std::max(line.maxBaseline, itemAscent(it));
+            line.maxDescent  = std::max(line.maxDescent, itemDescent(it));
         }
         line.maxHeight = std::max(line.maxHeight, line.maxBaseline + line.maxDescent);
     };
@@ -135,9 +151,10 @@ std::vector<LineBox> buildLineBoxes(
 
         currentLine.items.push_back(item);
         currentLine.totalWidth += item.width;
-        currentLine.maxHeight = std::max(currentLine.maxHeight, item.height);
-        currentLine.maxBaseline = std::max(currentLine.maxBaseline, item.baseline);
-        currentLine.maxDescent = std::max(currentLine.maxDescent, item.height - item.baseline);
+        currentLine.maxHeight = std::max(currentLine.maxHeight,
+                                         itemAscent(item) + itemDescent(item));
+        currentLine.maxBaseline = std::max(currentLine.maxBaseline, itemAscent(item));
+        currentLine.maxDescent = std::max(currentLine.maxDescent, itemDescent(item));
         currentLine.maxHeight = std::max(currentLine.maxHeight,
                                          currentLine.maxBaseline + currentLine.maxDescent);
     }
@@ -215,6 +232,8 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
 
     // Fresh layout pass: forget any baseline recorded by a previous layout.
     node->box.baselineOffset = -1.0f;
+    node->box.inlineExtentAbove = -1.0f;
+    node->box.inlineExtentBelow = -1.0f;
 
     // Resolve margin, padding, border for the node itself
     node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
@@ -587,6 +606,29 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 item.height = child->box.fullHeight();
                 item.baseline = (child->box.baselineOffset >= 0)
                     ? child->box.baselineOffset : item.height * 0.8f;
+                if (child->box.inlineExtentAbove >= 0) {
+                    // Strip-boxed inline: the box is only the font strip.
+                    // Line sizing uses the child's leaded (line-height) box
+                    // unioned with its content extents (tall inline-block
+                    // grandchildren, wrapped lines) about the baseline.
+                    float cfs = resolveLength(styleVal(childStyle, "font-size"),
+                                              fontSize, fontSize);
+                    if (cfs <= 0) cfs = fontSize;
+                    const std::string& cff = styleVal(childStyle, "font-family");
+                    const std::string& cfw = styleVal(childStyle, "font-weight");
+                    float cNatural = metrics.lineHeight(cff, cfs, cfw);
+                    if (cNatural <= 0) cNatural = cfs * 1.2f;
+                    float cAscent = metrics.ascent(cff, cfs, cfw);
+                    if (cAscent <= 0 || cAscent >= cNatural) cAscent = cNatural * 0.8f;
+                    float cLH = resolveLineHeight(styleVal(childStyle, "line-height"),
+                                                  cfs, cff, cfw, metrics);
+                    float cLead = cLH - cNatural;
+                    float cHalf = std::floor(cLead * 0.5f);
+                    item.sizeAscent = std::max(cAscent + cHalf,
+                                               child->box.inlineExtentAbove);
+                    item.sizeDescent = std::max((cNatural - cAscent) + (cLead - cHalf),
+                                                child->box.inlineExtentBelow);
+                }
                 item.node = child;
                 allItems.push_back(std::move(item));
             } else {
@@ -624,6 +666,21 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     float textIndent = resolveLength(styleVal(style, "text-indent"), contentAvail, fontSize);
 
     // Position items within line boxes
+    //
+    // While placing, track the content extents that must be reported to the
+    // parent line box (box.inlineExtentAbove/Below): element children always
+    // contribute (their boxes overflow the font strip this element's own box
+    // shrinks to below); the element's own text contributes only on wrapped
+    // lines — first-line text is covered by the parent's leaded (line-height)
+    // contribution for this element, which with a negative half-leading is
+    // deliberately SMALLER than the glyphs.
+    float extMinY = 0.0f, extMaxY = 0.0f;
+    bool anyExtent = false;
+    auto noteExtent = [&](float top, float bottom) {
+        if (!anyExtent) { extMinY = top; extMaxY = bottom; anyExtent = true; return; }
+        extMinY = std::min(extMinY, top);
+        extMaxY = std::max(extMaxY, bottom);
+    };
     float cursorY = 0;
     for (size_t lineIdx = 0; lineIdx < lineBoxes.size(); lineIdx++) {
         auto& line = lineBoxes[lineIdx];
@@ -658,11 +715,21 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     item.node->box.padding.left + item.node->box.border.left;
                 item.node->box.contentRect.y = yPos + item.node->box.margin.top +
                     item.node->box.padding.top + item.node->box.border.top;
+                if (!item.forceBreak) {
+                    float extTop = yPos, extBottom = yPos + item.height;
+                    if (item.sizeAscent >= 0) {
+                        // Strip-boxed nested inline: extent about its baseline.
+                        extTop = yPos + item.baseline - item.sizeAscent;
+                        extBottom = yPos + item.baseline + item.sizeDescent;
+                    }
+                    noteExtent(extTop, extBottom);
+                }
             } else if (item.node && item.node->isTextNode()) {
                 // Position text run so the draw traversal knows where to draw
                 // it and record it in the text node's placed-runs list for
                 // selection/caret geometry queries.
                 float yPos = cursorY + (line.maxBaseline - item.baseline);
+                if (lineIdx > 0) noteExtent(yPos, yPos + item.height);
                 PlacedTextRun placed;
                 placed.x = cursorX;
                 placed.y = yPos;
@@ -707,12 +774,51 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         maxLineWidth = std::max(maxLineWidth, line.totalWidth);
     }
     node->box.contentRect.width = maxLineWidth;
-    node->box.contentRect.height = cursorY;
 
-    // Record the first-line baseline: a parent line box aligns an inline
-    // element by the baseline of its first line box.
     if (!lineBoxes.empty()) {
-        node->box.baselineOffset = lineBoxes.front().maxBaseline;
+        // A non-replaced inline element's own box is its font strip: from
+        // first-line baseline - ascent down to last-line baseline + descent
+        // (Chromium's inline fragment geometry). Content taller than the
+        // strip — inline-block children, bigger-font descendants — overflows
+        // it without growing it; the extents recorded below let parent line
+        // boxes still size around that content.
+        float naturalH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+        if (naturalH <= 0) naturalH = fontSize * 1.2f;
+        float ascent = (ownAscent > 0 && ownAscent < naturalH)
+            ? ownAscent : naturalH * 0.8f;
+        float firstBase = lineBoxes.front().maxBaseline;
+        float lastBase = (cursorY - lineBoxes.back().maxHeight) +
+                         lineBoxes.back().maxBaseline;
+        float stripTop = firstBase - ascent;
+        float stripBottom = lastBase + (naturalH - ascent);
+
+        node->box.inlineExtentAbove = anyExtent
+            ? std::max(0.0f, firstBase - extMinY) : 0.0f;
+        node->box.inlineExtentBelow = anyExtent
+            ? std::max(0.0f, extMaxY - firstBase) : 0.0f;
+
+        if (stripTop != 0.0f) {
+            // Move the box top to the strip top; shift in-flow children the
+            // opposite way so their absolute positions are unchanged.
+            for (auto* child : getLayoutChildren(node)) {
+                if (child->isTextNode()) {
+                    child->box.contentRect.y -= stripTop;
+                    for (auto& run : child->box.textRuns) run.y -= stripTop;
+                    continue;
+                }
+                auto& cs2 = child->computedStyle();
+                if (styleVal(cs2, "display") == "none") continue;
+                const std::string& cp2 = styleVal(cs2, "position");
+                if (cp2 == "absolute" || cp2 == "fixed") continue;
+                child->box.contentRect.y -= stripTop;
+            }
+        }
+        node->box.contentRect.height = stripBottom - stripTop;
+        // The strip hangs its ascent above the baseline by construction; the
+        // parent line box aligns this element by it.
+        node->box.baselineOffset = ascent;
+    } else {
+        node->box.contentRect.height = cursorY;
     }
 
     // Text-overflow detection: mark if content was truncated

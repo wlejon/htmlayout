@@ -1185,8 +1185,13 @@ static void testInlineVerticalAlignTop() {
 
     CovMetrics m;
     layoutTree(&root, 500, m);
-    // vertical-align: top aligns top of item with top of line
-    check(approx(ib1.box.contentRect.y, 0.0f, 2.0f), "vertical-align top: y near 0");
+    // vertical-align: top aligns the item's top with the line-box top. The
+    // inline root's own box is its font strip (tall children carry negative
+    // y within it), so assert the relative geometry: the baseline-aligned
+    // 30px ib2 has its bottom on the 60px line's baseline, placing its top
+    // 30px below ib1's line-top-aligned top.
+    check(approx(ib1.box.contentRect.y, ib2.box.contentRect.y - 30.0f, 2.0f),
+          "vertical-align top: 30px above the baseline-aligned sibling");
 }
 
 static void testInlineTextAlignStartEnd() {
