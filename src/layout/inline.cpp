@@ -364,6 +364,19 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             // the line and dropped at wraps / the line end (CSS Text §4.1).
             float ibSpaceW = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight);
             float ibPending = 0.0f;
+            // Per-line placement records so text-align can shift completed
+            // lines afterwards (buttons center their labels via the UA
+            // sheet). runIdx >= 0 indexes the child's textRuns; -1 is the
+            // child's own box.
+            struct IbPlaced { LayoutNode* child; int runIdx; };
+            std::vector<IbPlaced> ibLine;
+            std::vector<std::pair<std::vector<IbPlaced>, float>> ibLines;
+            auto ibEndLine = [&](float lineW) {
+                if (!ibLine.empty()) {
+                    ibLines.emplace_back(std::move(ibLine), lineW);
+                    ibLine.clear();
+                }
+            };
             for (auto* child : getLayoutChildren(node)) {
                 if (child->isTextNode()) {
                     float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
@@ -386,6 +399,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         if (run.text.empty() && run.width == 0) continue;
                         float h = std::max(run.height, ibLineHeight);
                         if (cursorX > 0 && cursorX + ibPending + run.width > contentAvail) {
+                            ibEndLine(cursorX);
                             maxContentW = std::max(maxContentW, cursorX);
                             cursorY += lineMaxH;
                             cursorX = 0;
@@ -433,11 +447,14 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                             child->box.contentRect.height = bottom - child->box.contentRect.y;
                         }
                         child->box.textRuns.push_back(std::move(placed));
+                        ibLine.push_back({child,
+                            static_cast<int>(child->box.textRuns.size()) - 1});
                         cursorX += run.width;
                         lineMaxH = std::max(lineMaxH, h);
                         // Hard line break preserved by white-space: pre /
                         // pre-wrap / pre-line — advance to the next line.
                         if (run.forceBreakAfter) {
+                            ibEndLine(cursorX);
                             maxContentW = std::max(maxContentW, cursorX);
                             cursorY += lineMaxH;
                             cursorX = 0;
@@ -449,6 +466,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     float brH = std::max(ibLineHeight,
                         metrics.lineHeight(fontFamily, fontSize, fontWeight));
                     if (cursorX == 0 && lineMaxH == 0) lineMaxH = brH;
+                    ibEndLine(cursorX);
                     maxContentW = std::max(maxContentW, cursorX);
                     cursorY += lineMaxH;
                     cursorX = 0;
@@ -464,6 +482,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     float cw = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
                     float ch = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
                     if (cursorX > 0 && cursorX + ibPending + cw > contentAvail) {
+                        ibEndLine(cursorX);
                         maxContentW = std::max(maxContentW, cursorX);
                         cursorY += lineMaxH;
                         cursorX = 0;
@@ -476,6 +495,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         child->box.padding.left + child->box.border.left;
                     child->box.contentRect.y = cursorY + child->box.margin.top +
                         child->box.padding.top + child->box.border.top;
+                    ibLine.push_back({child, -1});
                     cursorX += cw;
                     // The line still includes the block's strut (CSS2 §10.8):
                     // a line of only atomic inlines shorter than the
@@ -497,8 +517,46 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 }
             }
             if (cursorX > 0) {
+                ibEndLine(cursorX);
                 maxContentW = std::max(maxContentW, cursorX);
                 cursorY += lineMaxH;
+            }
+
+            // text-align inside the inline-block: shift each completed line
+            // within the final content width (buttons center their labels;
+            // contentAvail is the used content width for both explicit and
+            // shrink-to-fit boxes, so single-line shrink-wrapped content
+            // shifts by 0).
+            const std::string& ibAlign = styleVal(style, "text-align");
+            if (ibAlign == "center" || ibAlign == "right" || ibAlign == "end") {
+                std::vector<LayoutNode*> shiftedText;
+                for (auto& [entries, lineW] : ibLines) {
+                    float shift = contentAvail - lineW;
+                    if (ibAlign == "center") shift *= 0.5f;
+                    if (shift <= 0.01f) continue;
+                    for (auto& e : entries) {
+                        if (e.runIdx < 0) {
+                            e.child->box.contentRect.x += shift;
+                        } else {
+                            e.child->box.textRuns[static_cast<size_t>(e.runIdx)].x += shift;
+                            if (std::find(shiftedText.begin(), shiftedText.end(),
+                                          e.child) == shiftedText.end())
+                                shiftedText.push_back(e.child);
+                        }
+                    }
+                }
+                // Re-derive shifted text nodes' contentRect from their runs.
+                for (auto* tc : shiftedText) {
+                    auto& runs2 = tc->box.textRuns;
+                    if (runs2.empty()) continue;
+                    float minX = runs2[0].x, maxX = runs2[0].x + runs2[0].width;
+                    for (auto& r : runs2) {
+                        minX = std::min(minX, r.x);
+                        maxX = std::max(maxX, r.x + r.width);
+                    }
+                    tc->box.contentRect.x = minX;
+                    tc->box.contentRect.width = maxX - minX;
+                }
             }
 
         } else {
