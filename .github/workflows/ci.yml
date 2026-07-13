@@ -89,6 +89,7 @@ jobs:
             --filter 'include/' --filter 'src/' \
             --exclude 'third_party/' --exclude 'tests/' \
             --exclude-unreachable-branches \
+            --gcov-ignore-errors=no_working_dir_found \
             --print-summary \
             --html-details coverage-html/index.html \
             | tee coverage-summary.txt
