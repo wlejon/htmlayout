@@ -1,0 +1,12 @@
+name: htmlayout CodeQL config
+
+queries:
+  - uses: security-extended
+
+# gumbo is kept out of the analysis by build order (see the pre-build step in
+# codeql.yml) — that is what excludes its compiled TUs. This paths-ignore is the
+# complement: it drops any finding that originates in a gumbo *header* pulled
+# into an htmlayout translation unit, which build order cannot catch. Together
+# they scope the Security tab to htmlayout's own code.
+paths-ignore:
+  - third_party

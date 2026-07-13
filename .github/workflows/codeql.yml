@@ -16,9 +16,7 @@ concurrency:
 # of hand-rolled pointer and index work laying it out — the tokenizer, the
 # cascade, the flex/grid track arithmetic. That is exactly the surface where an
 # off-by-one or an unchecked cast turns into an out-of-bounds read, and where a
-# checker earns its keep. The vendored gumbo parser is extracted too (it is C
-# compiled into the same build), which is fine — it is another untrusted-input
-# parser worth scanning.
+# checker earns its keep.
 jobs:
   analyze:
     name: Analyze C++
@@ -31,19 +29,39 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install Ninja
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ninja-build
+
+      # Debug / -O0 keeps the extracted IR close to the source so dataflow paths
+      # in the results point at code a human can act on.
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+      # gumbo (the vendored Google HTML parser) is compiled here, ahead of
+      # `init`. For a compiled language CodeQL only extracts what it observes the
+      # compiler build while tracing, so anything already built when `init` runs
+      # is never analysed. That is the exclusion mechanism — paths-ignore does
+      # not filter compiled sources — and it keeps gumbo's findings out of
+      # htmlayout's Security tab, where they do not belong (it is upstream code
+      # with its own maintainers).
+      - name: Pre-build gumbo (outside the traced build)
+        run: cmake --build build --parallel 4 --target gumbo
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: c-cpp
           build-mode: manual
           queries: security-extended
+          # Second line of defence: catches any finding that originates in a
+          # gumbo *header* pulled into an htmlayout TU, which build order cannot.
+          config-file: ./.github/codeql/codeql-config.yml
 
-      # Debug / -O0 keeps the extracted IR close to the source so dataflow paths
-      # in the results point at code a human can act on.
-      - name: Build
-        run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build --parallel 4
+      # Only htmlayout's own library TUs are left to compile, so only they are
+      # traced. The test binary is not built here — CodeQL does not run it, and
+      # the library is the surface worth analysing.
+      - name: Build htmlayout (traced)
+        run: cmake --build build --parallel 4 --target htmlayout
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4
