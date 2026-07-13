@@ -57,11 +57,12 @@ jobs:
           # gumbo *header* pulled into an htmlayout TU, which build order cannot.
           config-file: ./.github/codeql/codeql-config.yml
 
-      # Only htmlayout's own library TUs are left to compile, so only they are
-      # traced. The test binary is not built here — CodeQL does not run it, and
-      # the library is the surface worth analysing.
-      - name: Build htmlayout (traced)
-        run: cmake --build build --parallel 4 --target htmlayout
+      # htmlayout is a header-only INTERFACE library, so the test binary is the
+      # only TU that instantiates it — that is what gets traced, and it carries
+      # the layout headers into the analysis. gumbo is already built, so it is
+      # not.
+      - name: Build htmlayout test (traced — instantiates the headers)
+        run: cmake --build build --parallel 4 --target htmlayout_test
 
       - name: Analyze
         uses: github/codeql-action/analyze@v4
