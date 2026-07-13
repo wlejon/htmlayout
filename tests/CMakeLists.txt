@@ -27,3 +27,7 @@ add_executable(htmlayout_test
 )
 target_include_directories(htmlayout_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(htmlayout_test PRIVATE htmlayout gumbo)
+
+# One aggregate binary runs every suite from main() and returns non-zero on any
+# failure, so a single ctest entry is the whole surface.
+add_test(NAME htmlayout_test COMMAND htmlayout_test)

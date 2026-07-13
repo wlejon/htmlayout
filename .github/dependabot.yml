@@ -1,0 +1,17 @@
+version: 2
+
+# gumbo is vendored in tree (third_party/gumbo), not a package manager
+# dependency, so there is no manifest to watch. The only versioned things in the
+# repo are the pinned actions in .github/workflows/.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ["*"]
+    labels: [ci]
+    commit-message:
+      prefix: "ci"

@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# htmlayout is self-contained: gumbo is vendored in tree (third_party/gumbo),
+# there are no siblings and no submodules, so a plain checkout is the whole
+# build context. The library is C++20 over a C parser; the test binary links
+# both, which is why the toolchain matrix matters — this layout engine is
+# compiled into `bro` under whatever compiler that build uses.
+#
+# Debug, not Release: the suite is assertion-driven and -O0 keeps the layout
+# math (line-fit slack, leaded-box heights, flex/grid resolution) exactly as
+# written rather than folded by the optimizer.
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-gcc,    os: ubuntu-24.04, cc: gcc,   cxx: g++ }
+          - { name: linux-clang,  os: ubuntu-24.04, cc: clang, cxx: clang++ }
+          - { name: windows-msvc, os: windows-2022 }
+          - { name: macos-arm64,  os: macos-14 }
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build --config Debug --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build -C Debug --output-on-failure
+
+  # ── Coverage ──────────────────────────────────────────────────────────────
+  #
+  # --coverage is passed as a compile/link flag rather than through a CMake
+  # option: the library has no coverage switch of its own, and instrumenting
+  # via CMAKE_{C,CXX}_FLAGS keeps the report machinery entirely inside CI. The
+  # C flag is there too — gumbo is C, and while it is filtered out of the
+  # report, the objects still have to link against the same runtime.
+  #
+  # --filter scopes the numbers to the library itself (include/ + src/); gumbo
+  # and the tests that drive it are excluded.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install gcovr
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends gcovr
+
+      - name: Configure (instrumented)
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_FLAGS="--coverage" \
+            -DCMAKE_CXX_FLAGS="--coverage" \
+            -DCMAKE_EXE_LINKER_FLAGS="--coverage"
+
+      - name: Build
+        run: cmake --build build --parallel 4
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      # pipefail: piping gcovr into tee otherwise hands the step tee's exit
+      # status, so a gcovr crash produces no report and the job still goes green.
+      - name: Report
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p coverage-html
+          gcovr --root . \
+            --filter 'include/' --filter 'src/' \
+            --exclude 'third_party/' --exclude 'tests/' \
+            --exclude-unreachable-branches \
+            --print-summary \
+            --html-details coverage-html/index.html \
+            | tee coverage-summary.txt
+          test -s coverage-html/index.html
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo '## Coverage — `include/` + `src/`'
+            echo
+            echo 'gumbo (vendored C parser) and the test TUs are filtered out.'
+            echo
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload HTML report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: coverage-html/
+          retention-days: 14
