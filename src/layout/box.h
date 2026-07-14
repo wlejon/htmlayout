@@ -250,6 +250,25 @@ struct LayoutNode {
     float cachedMinContentW = -1.0f;
     float cachedMaxContentW = -1.0f;
 
+    // Flex measure cache. A flex container computes an auto-basis item's
+    // hypothetical size by laying it out once before the real layout — for a
+    // column container that measure is the item's laid-out height at the
+    // container's inner width. Cache that scalar (keyed by the width it was
+    // measured at) so a clean item doesn't re-lay its whole subtree just to
+    // re-derive it. Invalidated by the markDirty()/markSubtreeDirty() walks,
+    // like the intrinsic widths above.
+    float measuredAtW = std::numeric_limits<float>::quiet_NaN();
+    float measuredOuterMain = -1.0f;
+
+    // The flex item cross size this node reported when it was last actually
+    // laid out by its flex container (outer: content + padding + border +
+    // margin). The box itself can't provide it later: align stretch writes
+    // the stretched size back into the box, so re-deriving the cross size
+    // from a reused box would feed the previous line height back into the
+    // next line calculation and lines could never shrink. Recomputed on
+    // every real (non-reused) item layout.
+    float flexNaturalCross = -1.0f;
+
     // Whether this subtree contains any absolute/fixed element (the node
     // itself included). Lets layoutAbsoluteElements() skip whole clean
     // branches instead of reading position/display on every node each pass.
@@ -396,6 +415,15 @@ struct LayoutStats {
     // node's style from string keys on every visit, so this scales with
     // visits × properties-consulted — the constant factor of the pass.
     uint64_t styleLookups = 0;
+
+    // Why beginLayoutNode() declined to reuse, by first failing condition.
+    // `reused` low with laidOut high is only half a diagnosis — these say
+    // whether the invalidation was real dirt or a changed layout input
+    // (available width/height, flex override) cascading down a clean tree.
+    uint32_t reuseFailDirty    = 0;
+    uint32_t reuseFailAvailW   = 0;
+    uint32_t reuseFailAvailH   = 0;
+    uint32_t reuseFailOverride = 0;
 };
 const LayoutStats& lastLayoutStats();
 

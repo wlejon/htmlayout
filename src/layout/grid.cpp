@@ -1254,6 +1254,15 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 item.node->box.contentRect.x -= resolveLength(rightVal, containerWidth, childFontSize);
             }
         }
+
+        // Grid's layout sequence writes container decisions straight into the
+        // item's box (justify stretch width, align stretch height), and the
+        // auto-track sizing pass reads the box back as the item's contribution.
+        // A reused box would hand last pass's STRETCHED size to next pass's
+        // track sizing and tracks could never shrink — so keep grid items on
+        // always-relay semantics until they get the natural-size bookkeeping
+        // flex items have. See layoutNode()'s re-visit re-keying.
+        item.node->cachedAvailWidth = std::numeric_limits<float>::quiet_NaN();
     }
 
     // Set container dimensions

@@ -840,6 +840,10 @@ bool beginLayoutNode(LayoutNode* node, float availableWidth) {
         layoutStatsMut().reused++;
         return false;   // cached subtree still valid — don't touch the box
     }
+    if (node->box.dirty)                                           layoutStatsMut().reuseFailDirty++;
+    else if (!(node->cachedAvailWidth == availableWidth)) layoutStatsMut().reuseFailAvailW++;
+    else if (!(node->cachedAvailHeight == node->availableHeight))  layoutStatsMut().reuseFailAvailH++;
+    else                                                           layoutStatsMut().reuseFailOverride++;
     layoutStatsMut().laidOut++;
     claimLayoutNode(node, availableWidth);
     return true;
@@ -864,13 +868,25 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // the box it was re-entered with — by now the box carries the container's
         // decision about this item and is itself an input.
         //
-        // Its final geometry is then the product of the whole call sequence, not
-        // of any single call's inputs, so there is no key under which it could be
-        // safely reused next pass. Poison the cache and let it start fresh. This
-        // costs nothing in practice: an item is only re-visited when its container
-        // re-lays out, and a container that doesn't re-lay out never reaches its
-        // items at all.
-        node->cachedAvailWidth = std::numeric_limits<float>::quiet_NaN();
+        // Re-key the cache to THIS call's inputs. The final call of the sequence
+        // is what produced the geometry the box will hold, and a container that
+        // re-lays with unchanged resolved sizes re-issues that same final call —
+        // so a next-pass first call matching these keys means the whole sequence's
+        // result is unchanged and the subtree can be handed back. (Poisoning the
+        // cache here instead — the old behavior — meant a node that was ever
+        // re-visited could never be reused again: every ancestor container
+        // re-lay swept the entire subtree, every pass, forever.)
+        //
+        // The contract this rests on: everything a container decides for the
+        // node between visits must arrive through the keyed channels
+        // (availableWidth, availableHeight, overrideContentWidth) or be
+        // derivable from them plus the node's own style. Callers whose
+        // sequence writes other inputs straight into the box (grid's track
+        // stretch, multicol balancing, flex auto-margin distribution) poison
+        // the cache at their call site to keep their always-relay semantics.
+        node->cachedAvailWidth = availableWidth;
+        node->cachedAvailHeight = node->availableHeight;
+        node->cachedOverrideWidth = node->overrideContentWidth;
         node->box.dirty = false;
     }
 

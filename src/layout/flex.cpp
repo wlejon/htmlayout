@@ -407,13 +407,27 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 item.hypotheticalMain = intrinsic + ph + bh;
                 if (item.hypotheticalMain > mainAvailable)
                     item.hypotheticalMain = mainAvailable;
-                // Now lay out at this width to compute cross size
-                layoutNode(item.node, item.hypotheticalMain, metrics);
+                // Lay out at this width to compute cross size — but only if the
+                // item actually changed. The measure's downstream inputs (the
+                // hypothetical main above, margins re-resolved from style for
+                // every item each pass) don't come from this layout, so a clean,
+                // previously-laid item can skip straight to the final layout,
+                // where its cached subtree is checked against the final inputs.
+                if (item.node->box.dirty || std::isnan(item.node->cachedAvailWidth))
+                    layoutNode(item.node, item.hypotheticalMain, metrics);
             } else {
-                layoutNode(item.node, containerMain, metrics);
-                item.hypotheticalMain = item.node->box.contentRect.height +
-                                         item.node->box.padding.top + item.node->box.padding.bottom +
-                                         item.node->box.border.top + item.node->box.border.bottom;
+                // Column: the measure produces the item's laid-out outer height
+                // at the container's inner width. Cache that scalar per node so
+                // a clean item doesn't re-lay its subtree to re-derive it.
+                if (item.node->box.dirty || !(item.node->measuredAtW == containerMain)) {
+                    layoutNode(item.node, containerMain, metrics);
+                    item.node->measuredAtW = containerMain;
+                    item.node->measuredOuterMain =
+                        item.node->box.contentRect.height +
+                        item.node->box.padding.top + item.node->box.padding.bottom +
+                        item.node->box.border.top + item.node->box.border.bottom;
+                }
+                item.hypotheticalMain = item.node->measuredOuterMain;
                 // Resolve the deferred column auto-min: with the cross size definite
                 // (containerMain), the item's laid-out outer height is its block-axis
                 // content-min, so it must not be shrunk below it in a height-limited
@@ -684,7 +698,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // layout IS its first visit. beginLayoutNode returns false when the
                 // item's cached subtree is still valid — then nothing is laid out
                 // and the writes below simply re-state what the box already holds.
-                if (beginLayoutNode(item->node, contentWidth)) {
+                bool laidNow = beginLayoutNode(item->node, contentWidth);
+                if (laidNow) {
                     if (preStretchH > 0) item->node->box.contentRect.height = preStretchH;
                     layoutNode(item->node, contentWidth, metrics);
                 }
@@ -694,10 +709,19 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     item->node->box.border.left - item->node->box.border.right;
                 if (item->node->box.contentRect.width < 0) item->node->box.contentRect.width = 0;
 
-                item->crossSize = item->node->box.contentRect.height +
-                    item->node->box.padding.top + item->node->box.padding.bottom +
-                    item->node->box.border.top + item->node->box.border.bottom +
-                    item->node->box.margin.top + item->node->box.margin.bottom;
+                // A reused box holds last pass's FINAL height — align stretch
+                // included — so deriving the cross size from it would feed the
+                // previous line height back in and lines could never shrink.
+                // Use the cross size recorded when the item was last laid.
+                if (laidNow || item->node->flexNaturalCross < 0) {
+                    item->crossSize = item->node->box.contentRect.height +
+                        item->node->box.padding.top + item->node->box.padding.bottom +
+                        item->node->box.border.top + item->node->box.border.bottom +
+                        item->node->box.margin.top + item->node->box.margin.bottom;
+                    item->node->flexNaturalCross = item->crossSize;
+                } else {
+                    item->crossSize = item->node->flexNaturalCross;
+                }
             } else {
                 // Main = height, cross = width
                 // Pass allocated height so nested column-flex children know their constraint.
@@ -754,7 +778,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // layout IS its first visit. beginLayoutNode returns false when the
                 // item's cached subtree is still valid — then nothing is laid out and
                 // the re-apply below simply re-states what the box already holds.
-                if (beginLayoutNode(item->node, itemAvailW)) {
+                bool laidNow = beginLayoutNode(item->node, itemAvailW);
+                if (laidNow) {
                     item->node->box.contentRect.height = grownContentH;
                     layoutNode(item->node, itemAvailW, metrics);
                 }
@@ -763,10 +788,17 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 item->node->box.contentRect.height = grownContentH;
                 if (item->node->box.contentRect.height < 0) item->node->box.contentRect.height = 0;
 
-                item->crossSize = item->node->box.contentRect.width +
-                    item->node->box.padding.left + item->node->box.padding.right +
-                    item->node->box.border.left + item->node->box.border.right +
-                    item->node->box.margin.left + item->node->box.margin.right;
+                // Same as the row branch: a reused box's width may carry last
+                // pass's cross stretch, so use the recorded natural cross size.
+                if (laidNow || item->node->flexNaturalCross < 0) {
+                    item->crossSize = item->node->box.contentRect.width +
+                        item->node->box.padding.left + item->node->box.padding.right +
+                        item->node->box.border.left + item->node->box.border.right +
+                        item->node->box.margin.left + item->node->box.margin.right;
+                    item->node->flexNaturalCross = item->crossSize;
+                } else {
+                    item->crossSize = item->node->flexNaturalCross;
+                }
             }
         }
 
