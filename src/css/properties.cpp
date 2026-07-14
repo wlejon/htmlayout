@@ -302,7 +302,7 @@ namespace {
 
 // Cached property lookup map, built once from knownProperties().
 struct PropertyCache {
-    std::unordered_map<std::string, const PropertyDef*> map;
+    std::unordered_map<std::string, const PropertyDef*, SvHash, SvEq> map;
 
     PropertyCache() {
         for (auto& p : knownProperties()) {
@@ -310,7 +310,7 @@ struct PropertyCache {
         }
     }
 
-    const PropertyDef* find(const std::string& name) const {
+    const PropertyDef* find(std::string_view name) const {
         auto it = map.find(name);
         return it != map.end() ? it->second : nullptr;
     }
@@ -332,17 +332,17 @@ int safeStoi(const std::string& s, int defaultVal = 0) {
 
 } // anonymous namespace
 
-bool isInherited(const std::string& property) {
+bool isInherited(std::string_view property) {
     auto* def = cache().find(property);
     return def ? def->inherited : false;
 }
 
-std::string initialValue(const std::string& property) {
+std::string initialValue(std::string_view property) {
     auto* def = cache().find(property);
     return def ? def->initialValue : std::string{};
 }
 
-const std::string& initialValueRef(const std::string& property) {
+const std::string& initialValueRef(std::string_view property) {
     static const std::string empty;
     auto* def = cache().find(property);
     return def ? def->initialValue : empty;

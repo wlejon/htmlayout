@@ -11,8 +11,13 @@
 
 namespace htmlayout::css {
 
-// Computed style: the final resolved CSS properties for one element
-using ComputedStyle = std::unordered_map<std::string, std::string>;
+// Computed style: the final resolved CSS properties for one element.
+//
+// Keyed heterogeneously (see SvHash/SvEq in properties.h): layout reads this map
+// hundreds of thousands of times per pass, almost always with a string literal,
+// and a plain std::string-keyed map would build — and for any name longer than
+// the 15-char small-string limit, heap-allocate — a key on every single read.
+using ComputedStyle = std::unordered_map<std::string, std::string, SvHash, SvEq>;
 
 // Stylesheet origin for the cascade
 enum class Origin { UserAgent, Author };
@@ -25,20 +30,10 @@ using ImportResolver = std::function<std::string(const std::string& url)>;
 // It supports scoping for shadow DOM: rules in a shadow scope only match
 // elements in that same scope.
 class Cascade {
-    // Heterogeneous lookup: an element's classes and tag name are string_views
-    // into the DOM, and a bucket probe must not allocate a std::string per class
-    // per element to ask.
-    struct SvHash {
-        using is_transparent = void;
-        size_t operator()(std::string_view s) const {
-            return std::hash<std::string_view>{}(s);
-        }
-    };
-    struct SvEq {
-        using is_transparent = void;
-        bool operator()(std::string_view a, std::string_view b) const { return a == b; }
-    };
     // Rule indices, keyed by something an element must have to match them.
+    // Heterogeneous (SvHash/SvEq): an element's classes and tag name are
+    // string_views into the DOM, and a bucket probe must not allocate a
+    // std::string per class per element to ask.
     using RuleBuckets =
         std::unordered_map<std::string, std::vector<size_t>, SvHash, SvEq>;
     using KeySet = std::unordered_set<std::string, SvHash, SvEq>;
