@@ -1,5 +1,9 @@
 # htmlayout
 
+[![CI](https://github.com/wlejon/htmlayout/actions/workflows/ci.yml/badge.svg)](https://github.com/wlejon/htmlayout/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/wlejon/htmlayout/actions/workflows/codeql.yml/badge.svg)](https://github.com/wlejon/htmlayout/actions/workflows/codeql.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A standalone C++20 library for CSS parsing, selector matching, style cascade, and box layout. Designed to be embedded in applications that need CSS styling and layout without the overhead of a full browser engine.
 
 htmlayout does **not** own the DOM, render anything, or run JavaScript. You provide the DOM tree and text measurement; htmlayout computes styles and positioned boxes.
@@ -73,12 +77,22 @@ cmake --build build --config Debug
 Run tests:
 
 ```bash
-# Windows
-./build/tests/Debug/htmlayout_test.exe
+# Via ctest (registered as a single test)
+ctest --test-dir build -C Debug --output-on-failure
 
-# Linux
-./build/tests/htmlayout_test
+# Or run the binary directly
+./build/tests/Debug/htmlayout_test.exe   # Windows
+./build/tests/htmlayout_test             # Linux
 ```
+
+## Continuous Integration
+
+GitHub Actions runs on every push to `main` and every pull request:
+
+- **[CI](.github/workflows/ci.yml)** — builds and runs the test suite via `ctest` across four toolchains: Linux/GCC, Linux/Clang, Windows/MSVC, and macOS/arm64. Debug builds, since the suite is assertion-driven and unoptimized layout math is easier to debug when it fails.
+- **Coverage** — a separate job in the same workflow builds with `--coverage` and reports line/branch coverage for `include/` and `src/` with `gcovr` (the vendored gumbo parser and the tests themselves are filtered out). The summary is posted to the job page and the full HTML report is uploaded as a build artifact.
+- **[CodeQL](.github/workflows/codeql.yml)** — `security-extended` static analysis of the C++ sources, also on a weekly schedule. gumbo is built ahead of the traced build so upstream findings stay out of this repo's Security tab.
+- **[Dependabot](.github/dependabot.yml)** — weekly updates for the pinned GitHub Actions. gumbo is vendored in tree, so there is no package manifest to watch.
 
 ## Usage
 
