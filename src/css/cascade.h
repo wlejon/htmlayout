@@ -4,6 +4,7 @@
 #include "css/properties.h"
 #include <functional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -24,6 +25,24 @@ using ImportResolver = std::function<std::string(const std::string& url)>;
 // It supports scoping for shadow DOM: rules in a shadow scope only match
 // elements in that same scope.
 class Cascade {
+    // Heterogeneous lookup: an element's classes and tag name are string_views
+    // into the DOM, and a bucket probe must not allocate a std::string per class
+    // per element to ask.
+    struct SvHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view s) const {
+            return std::hash<std::string_view>{}(s);
+        }
+    };
+    struct SvEq {
+        using is_transparent = void;
+        bool operator()(std::string_view a, std::string_view b) const { return a == b; }
+    };
+    // Rule indices, keyed by something an element must have to match them.
+    using RuleBuckets =
+        std::unordered_map<std::string, std::vector<size_t>, SvHash, SvEq>;
+    using KeySet = std::unordered_set<std::string, SvHash, SvEq>;
+
 public:
     // Set a callback to resolve @import URLs into CSS text.
     // When set, addStylesheet() will automatically resolve and inline imports.
@@ -67,6 +86,51 @@ public:
     // Lets the consumer skip all hover-driven restyle work — a hover-target
     // change cannot alter computed style on a page with no :hover rules.
     bool usesHoverPseudo() const { return usesHover_; }
+
+    // When the pointer moves, :hover flips on one chain of elements and the
+    // consumer re-resolves them. Which OTHER elements around them can now match
+    // different rules? Only those named as the subject of a rule that mentions
+    // :hover in a non-subject compound (`.row:hover .label`, `.tab:hover + .x`)
+    // — for every other element in the neighbourhood the rule set is exactly
+    // what it was, so its computed style cannot have changed and it does not
+    // have to re-resolve. Ask this per element instead of re-resolving the
+    // whole subtree under the hovered element, which on a big app is thousands
+    // of selector matches per mouse move.
+    //
+    // `classList` is the raw class attribute (space-separated). Returns true
+    // conservatively when a hover-descendant rule's subject names nothing this
+    // can key on (`.row:hover > *`, `.row:hover [data-x]`) or when the sheet
+    // uses :has(), whose matching runs the other way.
+    // Can a :hover flip re-match an element OUTSIDE the hovered element's own
+    // subtree? Only through a sibling combinator hanging directly off the
+    // :hover compound (`.tab:hover + .panel`, `.tab:hover ~ .panel p`) — with a
+    // descendant or child combinator there (`.row:hover .label`) every element
+    // the rule can reach is under the hovered element. Lets the consumer scope
+    // the hover re-match to the flipped elements' subtrees, instead of having to
+    // include their siblings' subtrees too.
+    bool hoverAffectsSiblings() const { return hoverSiblings_ || usesHas_; }
+
+    // The other half of the question: is THIS element one that a hover-descendant
+    // rule names on the :hover side (`.row:hover .label` → the `.row`)? A flip on
+    // anything else — the container the pointer crossed on its way, the gap
+    // between two rows — re-matches nothing below it, so it opens no scope at
+    // all. Without this the mere act of hovering a big container would re-resolve
+    // every element under it that any hover rule anywhere names.
+    bool hoverInvalidatesDescendants(std::string_view tag, std::string_view id,
+                                     std::string_view classList) const {
+        if (!usesHover_) return false;
+        if (hoverSrcUniversal_ || usesHas_) return true;
+        return keysHit(hoverSrcIds_, hoverSrcClasses_, hoverSrcTags_,
+                       tag, id, classList);
+    }
+
+    bool hoverCanAffect(std::string_view tag, std::string_view id,
+                        std::string_view classList) const {
+        if (!usesHover_) return false;
+        if (hoverDescUniversal_ || usesHas_) return true;
+        return keysHit(hoverDescIds_, hoverDescClasses_, hoverDescTags_,
+                       tag, id, classList);
+    }
 
     // True if any @container rule was added. Container queries read the
     // container's laid-out size, which trails style resolution by one layout
@@ -230,7 +294,8 @@ private:
         }
         if (rule.selector.chain.entries.empty()) return;
         size_t idx = rules_.size() - 1;
-        for (auto& s : rule.selector.chain.entries[0].compound.simples) {
+        const auto& subject = rule.selector.chain.entries[0].compound;
+        for (auto& s : subject.simples) {
             if (s.type == SimpleSelectorType::PseudoClass &&
                 (s.value == "host" || s.value == "host-context")) {
                 rule.isHostSelector = true;
@@ -245,6 +310,107 @@ private:
                 pseudoRules_[s.value].push_back(idx);
             }
         }
+        const SimpleSelector *idSimple, *classSimple, *tagSimple;
+        compoundKey(subject, idSimple, classSimple, tagSimple);
+
+        // A :hover in a non-subject compound (`.row:hover .label`) makes this
+        // rule's subject re-match when the hover of the element that compound
+        // names flips. Record BOTH sides: what the hovered element must be
+        // (hoverSrc*, so a flip on anything else opens no scope) and what the
+        // subject must be (hoverDesc*, so only elements that can be it re-resolve
+        // inside that scope).
+        for (size_t i = 1; i < rule.selector.chain.entries.size(); i++) {
+            auto& entry = rule.selector.chain.entries[i];
+            bool mentions = false;
+            for (auto& s : entry.compound.simples)
+                if (simpleMentionsHover(s)) { mentions = true; break; }
+            if (!mentions) continue;
+            addKey(entry.compound, hoverSrcIds_, hoverSrcClasses_, hoverSrcTags_,
+                   hoverSrcUniversal_);
+            addKey(subject, hoverDescIds_, hoverDescClasses_, hoverDescTags_,
+                   hoverDescUniversal_);
+            // entry.combinator is what connects this compound toward the
+            // subject. A sibling one steps out of the hovered element's subtree;
+            // a descendant or child one cannot (a sibling of a descendant is
+            // still a descendant), and neither can anything further right.
+            if (entry.combinator == Combinator::AdjacentSibling ||
+                entry.combinator == Combinator::GeneralSibling)
+                hoverSiblings_ = true;
+        }
+
+        // Index the rule by one simple selector its subject compound REQUIRES —
+        // an id, else a class, else a tag name. An element that lacks that id /
+        // class / tag cannot match the rule, so resolve() only has to consider
+        // the buckets its own name and attributes reach, plus the rules that
+        // require nothing (`*`, `[attr]`, `:hover` alone). Without this every
+        // element matched against every rule in the sheet: with a 300-rule app
+        // sheet that is ~300 selector matches (each lowercasing the tag name,
+        // each re-splitting the class list) per element per restyle, and a
+        // hover that re-resolves a subtree pays it for the whole subtree.
+        //
+        // Only positive top-level simples index: a class named inside :not() or
+        // :is() is not required, and host/slotted/part rules match on channels
+        // (shadow scope, part name) that have nothing to do with the subject's
+        // tag, so they all stay in the always-considered bucket.
+        if (rule.isHostSelector || rule.isSlottedSelector || rule.isPartSelector)
+            universalRules_.push_back(idx);
+        else if (idSimple)    idRules_[idSimple->value].push_back(idx);
+        else if (classSimple) classRules_[classSimple->value].push_back(idx);
+        else if (tagSimple)   tagRules_[toLowerKey(tagSimple->value)].push_back(idx);
+        else                  universalRules_.push_back(idx);
+    }
+
+    // Does the element's id / tag / class list hit any of these key sets?
+    bool keysHit(const KeySet& ids, const KeySet& classes, const KeySet& tags,
+                 std::string_view tag, std::string_view id,
+                 std::string_view classList) const {
+        if (!id.empty() && !ids.empty() && ids.count(id)) return true;
+        if (!tags.empty() && tags.count(toLowerKey(tag))) return true;
+        if (classes.empty()) return false;
+        size_t pos = 0;
+        while (pos < classList.size()) {
+            size_t start = classList.find_first_not_of(" \t\n\r\f", pos);
+            if (start == std::string_view::npos) break;
+            size_t end = classList.find_first_of(" \t\n\r\f", start);
+            if (end == std::string_view::npos) end = classList.size();
+            if (classes.count(classList.substr(start, end - start))) return true;
+            pos = end;
+        }
+        return false;
+    }
+
+    // The one simple selector a compound REQUIRES of an element, most selective
+    // first: an id, else a class, else a tag. Only positive top-level simples —
+    // a name inside :not() / :is() is not required.
+    static void compoundKey(const CompoundSelector& c,
+                            const SimpleSelector*& idS,
+                            const SimpleSelector*& classS,
+                            const SimpleSelector*& tagS) {
+        idS = classS = tagS = nullptr;
+        for (auto& s : c.simples) {
+            if (s.type == SimpleSelectorType::Id && !idS) idS = &s;
+            else if (s.type == SimpleSelectorType::Class && !classS) classS = &s;
+            else if (s.type == SimpleSelectorType::Tag && !tagS) tagS = &s;
+        }
+    }
+
+    // Record what a compound requires into one of the key sets, or flag the set
+    // as unkeyed when it requires nothing (`:hover .label`, `.row:hover > *`).
+    void addKey(const CompoundSelector& c, KeySet& ids, KeySet& classes,
+                KeySet& tags, bool& universal) {
+        const SimpleSelector *idS, *classS, *tagS;
+        compoundKey(c, idS, classS, tagS);
+        if (idS)         ids.insert(idS->value);
+        else if (classS) classes.insert(classS->value);
+        else if (tagS)   tags.insert(toLowerKey(tagS->value));
+        else             universal = true;
+    }
+
+    static std::string toLowerKey(std::string_view s) {
+        std::string out(s);
+        for (auto& c : out)
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        return out;
     }
 
     std::vector<ScopedRule> rules_;
@@ -253,6 +419,19 @@ private:
     // Pseudo-element name -> indices into rules_ whose subject targets it.
     // Indices stay valid: rules_ is only appended to, and clear() drops both.
     std::unordered_map<std::string, std::vector<size_t>> pseudoRules_;
+    // Subject-key rule index (see classifyLastRule). Same index validity.
+    RuleBuckets idRules_;
+    RuleBuckets classRules_;
+    RuleBuckets tagRules_;            // keys lowercased
+    std::vector<size_t> universalRules_;   // rules whose subject requires no name
+    // The two sides of a hover-descendant rule (`.row:hover .label`): what the
+    // hovered element must be (Src, the `.row`) and what its subject must be
+    // (Desc, the `.label`). See hoverInvalidatesDescendants / hoverCanAffect.
+    KeySet hoverSrcIds_,  hoverSrcClasses_,  hoverSrcTags_;
+    KeySet hoverDescIds_, hoverDescClasses_, hoverDescTags_;   // tags lowercased
+    bool hoverSrcUniversal_ = false;       // a `:hover` with no name of its own
+    bool hoverDescUniversal_ = false;      // a hover-descendant subject requires no name
+    bool hoverSiblings_ = false;           // a :hover reaches its subject through + or ~
     size_t nextOrder_ = 0;
     bool usesHover_ = false;  // any rule uses :hover (set in classifyLastRule)
     bool usesContainers_ = false; // any @container rule added

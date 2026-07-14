@@ -406,7 +406,35 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
-    for (auto& rule : rules_) {
+    // 1a. Candidate rules: everything in the buckets this element's id, classes
+    //     and tag name can reach, plus the rules that require no name at all.
+    //     Sorted back into source order so `matched` is built exactly as a scan
+    //     of every rule would have built it — the stable_sort below leans on it.
+    std::vector<size_t> candidates = universalRules_;
+    auto addBucket = [&](const RuleBuckets& buckets, std::string_view key) {
+        if (key.empty() || buckets.empty()) return;
+        auto it = buckets.find(key);
+        if (it == buckets.end()) return;
+        candidates.insert(candidates.end(), it->second.begin(), it->second.end());
+    };
+    addBucket(idRules_, elem.id());
+    if (!classRules_.empty()) {
+        std::string_view classes = elem.className();
+        size_t pos = 0;
+        while (pos < classes.size()) {
+            size_t start = classes.find_first_not_of(" \t\n\r\f", pos);
+            if (start == std::string_view::npos) break;
+            size_t end = classes.find_first_of(" \t\n\r\f", start);
+            if (end == std::string_view::npos) end = classes.size();
+            addBucket(classRules_, classes.substr(start, end - start));
+            pos = end;
+        }
+    }
+    addBucket(tagRules_, toLowerKey(elem.tagName()));
+    std::sort(candidates.begin(), candidates.end());
+
+    for (size_t ruleIdx : candidates) {
+        const auto& rule = rules_[ruleIdx];
         // Container query check: if the rule has a container condition, evaluate it
         if (!rule.containerCondition.empty()) {
             if (!evaluateContainerQuery(elem, rule.containerName, rule.containerCondition)) {
@@ -1004,6 +1032,19 @@ void Cascade::clear() {
     keyframes_.clear();
     fontFaces_.clear();
     pseudoRules_.clear();
+    idRules_.clear();
+    classRules_.clear();
+    tagRules_.clear();
+    universalRules_.clear();
+    hoverSrcIds_.clear();
+    hoverSrcClasses_.clear();
+    hoverSrcTags_.clear();
+    hoverDescIds_.clear();
+    hoverDescClasses_.clear();
+    hoverDescTags_.clear();
+    hoverSrcUniversal_ = false;
+    hoverDescUniversal_ = false;
+    hoverSiblings_ = false;
     nextOrder_ = 0;
     usesHover_ = false;
     usesContainers_ = false;
