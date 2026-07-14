@@ -35,6 +35,9 @@ LayoutStats& layoutStatsMut() { return g_layoutStats; }
 void markSubtreeDirty(LayoutNode* node) {
     if (!node) return;
     node->box.dirty = true;
+    node->cachedMinContentW = -1.0f;
+    node->cachedMaxContentW = -1.0f;
+    node->subtreeHasPositioned = -1;
     for (auto* child : node->children()) markSubtreeDirty(child);
     // ::before / ::after wrappers hang off the node outside children().
     if (auto* p = node->pseudoBefore()) markSubtreeDirty(p);
@@ -491,6 +494,9 @@ LayoutNode* hitTest(LayoutNode* root, float x, float y) {
 void markDirty(LayoutNode* node) {
     if (!node) return;
     node->box.dirty = true;
+    node->cachedMinContentW = -1.0f;
+    node->cachedMaxContentW = -1.0f;
+    node->subtreeHasPositioned = -1;
     // Walk all the way to the root. Stopping at the first already-dirty
     // ancestor would assume every dirty node eventually reaches layoutNode()
     // and has its flag cleared — which is false for the structural nodes some
@@ -498,8 +504,14 @@ void markDirty(LayoutNode* node) {
     // their boxes written directly by layoutTable, never via layoutNode). Such
     // a node stays dirty forever and would swallow the walk, leaving the
     // container above it clean and its whole subtree skipped as unchanged.
-    for (LayoutNode* p = node->parent(); p; p = p->parent())
+    // Intrinsic widths are content-based, so the same walk is what keeps the
+    // ancestors' cachedMin/MaxContentW honest.
+    for (LayoutNode* p = node->parent(); p; p = p->parent()) {
         p->box.dirty = true;
+        p->cachedMinContentW = -1.0f;
+        p->cachedMaxContentW = -1.0f;
+        p->subtreeHasPositioned = -1;
+    }
 }
 
 void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {

@@ -239,6 +239,28 @@ struct LayoutNode {
     float hitBoundsOriginX = 0.0f;
     float hitBoundsOriginY = 0.0f;
 
+    // Cached intrinsic (content-based) widths — the result of
+    // computeMin/MaxContentWidth over this subtree. Those walks are recursive
+    // over every descendant, so without a cache one dirty flex/grid/shrink-to-fit
+    // ancestor re-measures its entire subtree per pass. Intrinsic widths depend
+    // only on subtree content and style, and any change to either arrives via
+    // markDirty()/markSubtreeDirty() on a node inside the subtree — whose
+    // walk-to-root passes through here — so those are the invalidation points.
+    // -1 = not computed (intrinsic widths are never negative).
+    float cachedMinContentW = -1.0f;
+    float cachedMaxContentW = -1.0f;
+
+    // Whether this subtree contains any absolute/fixed element (the node
+    // itself included). Lets layoutAbsoluteElements() skip whole clean
+    // branches instead of reading position/display on every node each pass.
+    // Positioned elements themselves are still re-laid every pass — their
+    // containing block can move without any signal reaching them — so this
+    // only prunes branches with none. Invalidated (-1) by the same
+    // markDirty()/markSubtreeDirty() walks that keep the caches above honest;
+    // a position/display change is a layout-affecting style change, so it
+    // always arrives through one of them.
+    int8_t subtreeHasPositioned = -1;
+
     // Root node only: the document-global inputs that any node's lengths may
     // resolve against — the viewport (vw/vh/vmin/vmax) and the root font-size
     // (rem). A subtree that is otherwise untouched still has to re-layout when
@@ -369,6 +391,11 @@ struct LayoutStats {
     double treeMs = 0;        // in-flow layout (incremental)
     double absoluteMs = 0;    // positioning absolute/fixed boxes
     double hitBoundsMs = 0;   // caching per-node subtree hit bounds
+
+    // Every styleVal() map lookup during the pass. Layout re-derives all of a
+    // node's style from string keys on every visit, so this scales with
+    // visits × properties-consulted — the constant factor of the pass.
+    uint64_t styleLookups = 0;
 };
 const LayoutStats& lastLayoutStats();
 

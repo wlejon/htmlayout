@@ -276,7 +276,29 @@ bool isIntrinsicSizingKeyword(const std::string& value) {
     return value == "min-content" || value == "max-content" || value == "fit-content";
 }
 
+// The uncached walks. Callers go through the caching wrappers below — the
+// recursive per-child calls inside these bodies do too, so a cold pass fills
+// the cache bottom-up and later passes only descend into invalidated subtrees.
+static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics);
+static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics);
+
 float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
+    if (!node) return 0.0f;
+    if (node->cachedMinContentW >= 0.0f) return node->cachedMinContentW;
+    float w = computeMinContentWidthImpl(node, metrics);
+    node->cachedMinContentW = w;
+    return w;
+}
+
+float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
+    if (!node) return 0.0f;
+    if (node->cachedMaxContentW >= 0.0f) return node->cachedMaxContentW;
+    float w = computeMaxContentWidthImpl(node, metrics);
+    node->cachedMaxContentW = w;
+    return w;
+}
+
+static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics) {
     if (!node) return 0.0f;
 
     // Replaced elements (<input>, <canvas>, <svg>, etc.) report their content
@@ -436,7 +458,7 @@ float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
     return maxChildMin;
 }
 
-float computeMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
+static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) {
     if (!node) return 0.0f;
 
     // Replaced elements report their own content width via intrinsicSize().
@@ -1133,8 +1155,16 @@ Offset computeAbsolutePosition(LayoutNode* node) {
 // Recursive tree walk to find and position all absolute/fixed elements.
 // Processes in depth-first pre-order so ancestor absolutes are positioned
 // before their descendant absolutes.
-void layoutAbsoluteElementsRecursive(LayoutNode* node, const Viewport& viewport,
+//
+// Returns whether any positioned element lives strictly below `node`, and
+// caches it in node->subtreeHasPositioned so later passes skip branches with
+// none. Branches that do contain one are walked fully every pass — a
+// positioned box must re-resolve against its containing block's current
+// geometry, which can move without anything in this branch being dirty.
+bool layoutAbsoluteElementsRecursive(LayoutNode* node, const Viewport& viewport,
                                       TextMetrics& metrics) {
+    if (node->subtreeHasPositioned == 0) return false;
+    bool any = false;
     for (auto* child : node->children()) {
         if (!child || child->isTextNode()) continue;
 
@@ -1160,6 +1190,7 @@ void layoutAbsoluteElementsRecursive(LayoutNode* node, const Viewport& viewport,
                                 cbOriginX, cbOriginY,
                                 parentPos.x, parentPos.y,
                                 viewport.height, metrics);
+            any = true;
         } else if (pos == "absolute") {
             // Find the containing block
             LayoutNode* cb = findContainingBlock(child);
@@ -1192,12 +1223,15 @@ void layoutAbsoluteElementsRecursive(LayoutNode* node, const Viewport& viewport,
                                 cbOriginX, cbOriginY,
                                 parentPos.x, parentPos.y,
                                 viewport.height, metrics);
+            any = true;
         }
 
         // Recurse into children (including into absolute elements, which can
         // contain further absolute descendants)
-        layoutAbsoluteElementsRecursive(child, viewport, metrics);
+        if (layoutAbsoluteElementsRecursive(child, viewport, metrics)) any = true;
     }
+    node->subtreeHasPositioned = any ? 1 : 0;
+    return any;
 }
 
 } // anonymous namespace
