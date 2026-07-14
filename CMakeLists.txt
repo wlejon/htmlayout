@@ -12,6 +12,7 @@ endif()
 
 add_subdirectory(third_party)
 add_subdirectory(src)
+add_subdirectory(bench)
 
 enable_testing()
 add_subdirectory(tests)

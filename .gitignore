@@ -1,4 +1,5 @@
 build/
+build-release/
 .vs/
 *.user
 CMakeSettings.json
