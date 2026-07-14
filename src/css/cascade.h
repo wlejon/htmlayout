@@ -74,6 +74,30 @@ public:
     // is set.
     bool usesContainerQueries() const { return usesContainers_; }
 
+    // True if any rule targets ::<name> (e.g. "before", "after"). A document
+    // with no such rule can generate no content, so the consumer can skip the
+    // whole generated-content pass instead of asking every element.
+    bool hasPseudoElementRules(const std::string& name) const {
+        auto it = pseudoRules_.find(name);
+        return it != pseudoRules_.end() && !it->second.empty();
+    }
+
+    // Does a `content` value depend on state that accumulates across the whole
+    // document — a counter scope, or the quote-nesting depth — rather than only
+    // on its originating element? These are the only generated-content features
+    // that force a document-order pass over every element; anything else (a
+    // literal, attr(), a url()) a consumer can resolve for one element alone.
+    //
+    // Test the value a pseudo-element actually RESOLVED, not the stylesheet: a
+    // UA sheet carries `q::before { content: open-quote }`, so "does any rule
+    // use quotes" is true for every document ever and gates nothing.
+    static bool contentIsStateful(const std::string& v) {
+        return v.find("counter(") != std::string::npos ||
+               v.find("counters(") != std::string::npos ||
+               v.find("open-quote") != std::string::npos ||   // also no-open-quote
+               v.find("close-quote") != std::string::npos;    // also no-close-quote
+    }
+
     // Clear all stylesheets
     void clear();
 
@@ -125,6 +149,7 @@ private:
             }
         }
         if (rule.selector.chain.entries.empty()) return;
+        size_t idx = rules_.size() - 1;
         for (auto& s : rule.selector.chain.entries[0].compound.simples) {
             if (s.type == SimpleSelectorType::PseudoClass &&
                 (s.value == "host" || s.value == "host-context")) {
@@ -133,6 +158,11 @@ private:
                 rule.isSlottedSelector = true;
             } else if (s.type == SimpleSelectorType::PseudoElement && s.value == "part") {
                 rule.isPartSelector = true;
+            } else if (s.type == SimpleSelectorType::PseudoElement) {
+                // Bucket by pseudo-element name so resolvePseudo() considers only
+                // the handful of rules that could target it, rather than rescanning
+                // every rule in the sheet (UA sheet included) once per element.
+                pseudoRules_[s.value].push_back(idx);
             }
         }
     }
@@ -140,6 +170,9 @@ private:
     std::vector<ScopedRule> rules_;
     std::vector<KeyframeBlock> keyframes_;
     std::vector<FontFaceRule> fontFaces_;
+    // Pseudo-element name -> indices into rules_ whose subject targets it.
+    // Indices stay valid: rules_ is only appended to, and clear() drops both.
+    std::unordered_map<std::string, std::vector<size_t>> pseudoRules_;
     size_t nextOrder_ = 0;
     bool usesHover_ = false;  // any rule uses :hover (set in classifyLastRule)
     bool usesContainers_ = false; // any @container rule added

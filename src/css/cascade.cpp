@@ -890,22 +890,19 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
 
     std::vector<MatchedDecl> matched;
 
-    for (auto& rule : rules_) {
+    // Only rules whose subject targets ::pseudoName can contribute. They were
+    // bucketed at insertion time, so a page with no ::before rule pays nothing
+    // here — the alternative, rescanning every rule in the sheet for every
+    // element on every restyle, is what made a hover over a long list crawl.
+    auto bucket = pseudoRules_.find(pseudoName);
+    if (bucket == pseudoRules_.end()) return {};
+
+    for (size_t ruleIdx : bucket->second) {
+        auto& rule = rules_[ruleIdx];
         if (rule.scope != nullptr && rule.scope != elem.scope()) continue;
 
-        // Check if the subject compound has a pseudo-element matching pseudoName
         auto& chain = rule.selector.chain;
-        if (chain.entries.empty()) continue;
-
         auto& subject = chain.entries[0].compound;
-        bool hasPseudo = false;
-        for (auto& s : subject.simples) {
-            if (s.type == SimpleSelectorType::PseudoElement && s.value == pseudoName) {
-                hasPseudo = true;
-                break;
-            }
-        }
-        if (!hasPseudo) continue;
 
         // Now match the selector against the element, ignoring the pseudo-element part.
         // Build a temporary compound without the pseudo-element.
@@ -1006,6 +1003,7 @@ void Cascade::clear() {
     rules_.clear();
     keyframes_.clear();
     fontFaces_.clear();
+    pseudoRules_.clear();
     nextOrder_ = 0;
     usesHover_ = false;
     usesContainers_ = false;
