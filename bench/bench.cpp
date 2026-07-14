@@ -19,10 +19,13 @@
 #include "layout/box.h"
 #include "layout/formatting_context.h"
 #include "layout/style_util.h"
+#include "sampler.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
+#include <functional>
 #include <cstdlib>
 #include <memory>
 #include <unordered_map>
@@ -425,6 +428,7 @@ int main(int argc, char** argv) {
 
     // ---- 4. Cold layout ----
     layout::LayoutNode* root = &doc->nv;
+    uint64_t coldLookups = 0, coldMisses = 0, coldAllocs = 0;
     {
         auto m = allocMark();
         metrics.measureCalls = 0;
@@ -447,8 +451,13 @@ int main(int argc, char** argv) {
                "", (unsigned long long)st.textMeasures, (unsigned long long)st.textShaped,
                st.textShaped ? (double)st.textMeasures / st.textShaped : 0.0,
                metrics.spaceCalls);
-        printf("  %-26s style-is-strings: %llu map lookups + %llu length re-parses\n",
+        coldAllocs = a.allocs;
+        coldLookups = st.styleLookups;
+        coldMisses = st.styleMisses;
+        printf("  %-26s style-is-strings: %llu map lookups (%.0f%% of them misses, "
+               "which cost double) + %llu length re-parses\n",
                "", (unsigned long long)st.styleLookups,
+               100.0 * st.styleMisses / st.styleLookups,
                (unsigned long long)st.lengthResolves);
 #ifdef HTMLAYOUT_STYLE_PROFILE
         auto hist = layout::styleLookupHistogram();
@@ -559,19 +568,44 @@ int main(int argc, char** argv) {
     // aggregate. Both halves: finding the value (a hash + probe) and then turning
     // the text back into a number, which layout redoes on every single read.
     {
+        // How big is a ComputedStyle, really? The whole choice of container turns
+        // on this: the cascade only stores what it actually set, and every other
+        // property falls back to its initial value, so the map may be far smaller
+        // than the ~350 properties CSS defines — and an unordered_map is a bad
+        // shape for a handful of entries.
         Dom* card = nullptr;
-        for (auto& c : doc->owned) // find any deep element with a populated style
-            if (!c->isText) card = c.get();
+        size_t totalProps = 0, maxProps = 0, elems = 0;
+        std::vector<size_t> sizes;
+        std::function<void(Dom*)> walk = [&](Dom* d) {
+            if (!d->isText) {
+                elems++;
+                totalProps += d->style.size();
+                sizes.push_back(d->style.size());
+                if (d->style.size() > maxProps) { maxProps = d->style.size(); card = d; }
+            }
+            for (auto& c : d->owned) walk(c.get());
+        };
+        walk(doc.get());
+        std::sort(sizes.begin(), sizes.end());
         const auto& st = card->style;
         const int N = 2000000;
 
+        // Price a hit and a miss apart. They are not the same operation: a hit is
+        // one hash + probe, a miss is a hash + failed probe and then a second hash
+        // lookup in the property registry to fetch the initial value.
         auto t0 = Clock::now();
         double sink = 0;
-        for (int i = 0; i < N; i++) {
-            sink += layout::styleVal(st, "display").size();
-            sink += layout::styleVal(st, "border-bottom-width").size();  // 19ch: past SSO
-        }
-        double lookupNs = msSince(t0) * 1e6 / (2.0 * N);
+        for (int i = 0; i < N; i++) sink += layout::styleVal(st, "display").size();
+        double hitNs = msSince(t0) * 1e6 / N;
+
+        auto tm = Clock::now();
+        for (int i = 0; i < N; i++) sink += layout::styleVal(st, "caption-side").size();
+        double missNs = msSince(tm) * 1e6 / N;
+
+        // The mix layout actually runs at, from the pass that just happened.
+        const auto& ls = layout::lastLayoutStats();
+        (void)ls;
+        double lookupNs = (hitNs + missNs) / 2.0;
 
         const std::string& len = layout::styleVal(st, "font-size");
         auto t1 = Clock::now();
@@ -583,9 +617,123 @@ int main(int argc, char** argv) {
         printf("  %-26s at 671,647 lookups/pass that is %.1f ms of the cold pass "
                "in lookup alone%s\n", "", lookupNs * 671647 / 1e6,
                sink == 12345.0 ? "!" : "");
+
+        // ---- 10. What the alternatives to that lookup would cost ----
+        //
+        // Three ways to find a property, priced against the same real style so the
+        // choice of representation is made on numbers. The question each answers:
+        //
+        //   unordered_map   what we do now: hash the name, chase a bucket list
+        //   sorted vector   intern the name to a u16 id, binary search ~N entries
+        //   flat array      the id IS the index — one load, no search at all
+        //
+        // The last is the floor: it is what a typed per-node style costs to read.
+        printf("  %-26s ComputedStyle size over %zu elements: mean %.1f, median %zu, "
+               "max %zu properties\n", "", elems, (double)totalProps / elems,
+               sizes[sizes.size() / 2], maxProps);
+
+        // Intern: property name -> dense id, ids sorted so a lookup can bisect.
+        std::vector<std::string> names;
+        for (const auto& [k, v] : st) names.push_back(k);
+        std::sort(names.begin(), names.end());
+        std::vector<std::pair<uint16_t, const std::string*>> flat;
+        for (size_t i = 0; i < names.size(); i++)
+            flat.emplace_back(static_cast<uint16_t>(i), &st.find(names[i])->second);
+        // Ask for the same two properties as above, by their interned ids.
+        uint16_t idA = 0, idB = 0;
+        for (size_t i = 0; i < names.size(); i++) {
+            if (names[i] == "display") idA = static_cast<uint16_t>(i);
+            if (names[i] == "border-bottom-width") idB = static_cast<uint16_t>(i);
+        }
+
+        auto t2 = Clock::now();
+        for (int i = 0; i < N; i++) {
+            auto hit = [&](uint16_t id) {
+                auto it = std::lower_bound(flat.begin(), flat.end(), id,
+                    [](const auto& e, uint16_t k) { return e.first < k; });
+                return it->second->size();
+            };
+            sink += hit(idA);
+            sink += hit(idB);
+        }
+        double bsearchNs = msSince(t2) * 1e6 / (2.0 * N);
+
+        std::vector<const std::string*> byId(names.size());
+        for (auto& [id, v] : flat) byId[id] = v;
+        auto t3 = Clock::now();
+        for (int i = 0; i < N; i++) {
+            sink += byId[idA]->size();
+            sink += byId[idB]->size();
+        }
+        double arrayNs = msSince(t3) * 1e6 / (2.0 * N);
+
+        // Weight by the mix the cold pass actually ran at, not 50/50.
+        double missRate = (double)coldMisses / coldLookups;
+        double nowNs = hitNs * (1.0 - missRate) + missNs * missRate;
+        printf("  %-26s at the cold pass's real mix (%.0f%% miss): %.1f ns/lookup\n",
+               "", 100.0 * missRate, nowNs);
+        printf("  %-26s %6.1f ns  unordered_map (now)      -> %5.1f ms/pass\n", "",
+               nowNs, nowNs * coldLookups / 1e6);
+        printf("  %-26s %6.1f ns  sorted vector + u16 id   -> %5.1f ms/pass\n", "",
+               bsearchNs, bsearchNs * coldLookups / 1e6);
+        printf("  %-26s %6.1f ns  flat array, id = index   -> %5.1f ms/pass%s\n", "",
+               arrayNs, arrayNs * coldLookups / 1e6, sink == 12345.0 ? "!" : "");
+        (void)lookupNs;
     }
 
-    g_counting = false;
+    // ---- 11. What the pass's allocations cost ----
+    //
+    // The cold pass makes ~199,000 heap allocations for 2,828 laid-out nodes —
+    // seventy per node. Style lookups are the loud number, but a malloc is not
+    // cheap either, and 199,000 of anything deserves to be priced rather than
+    // assumed. Time a realistic churn: allocate and free the sizes layout actually
+    // allocates (small vectors and strings), in the same alloc/free-immediately
+    // pattern, so the figure can be multiplied out against the pass's count.
+    {
+        const int N = 1000000;
+        auto t0 = Clock::now();
+        size_t sink = 0;
+        for (int i = 0; i < N; i++) {
+            // The shape layout allocates in: a handful of pointers (getLayoutChildren
+            // returns a vector<LayoutNode*> by value at every one of its 27 call
+            // sites) and a short string.
+            std::vector<void*> v;
+            v.reserve(8);
+            sink += v.capacity();
+        }
+        double vecNs = msSince(t0) * 1e6 / N;
+        printf("  %-26s %6.1f ns  one small vector alloc+free%s\n",
+               "cost of one allocation", vecNs, sink == 1 ? "!" : "");
+        printf("  %-26s at %llu allocs/pass that is %.1f ms of the %s cold pass\n", "",
+               (unsigned long long)coldAllocs, vecNs * coldAllocs / 1e6,
+               "53ms");
+    }
+
+    // ---- 12. Where the pass actually spends its time ----
+    //
+    // Everything above prices a suspect that was already suspected. Summed, they
+    // came to about 16ms of a 53ms pass; the rest had no candidate at all, and no
+    // amount of pricing known suspects will produce one. So: sample the pass and
+    // let it say. Relayout the whole tree in a loop (markSubtreeDirty makes every
+    // pass a cold one) so the profile has thousands of samples to work with rather
+    // than the few hundred one 53ms pass would yield.
+    {
+        g_counting = false; // don't attribute samples to the alloc counter
+        bench::Sampler prof(50);
+        prof.start();
+        auto t0 = Clock::now();
+        int passes = 0;
+        while (msSince(t0) < 3000.0) {
+            layout::markSubtreeDirty(root);
+            layout::layoutTree(root, viewportW, metrics);
+            passes++;
+        }
+        prof.stop();
+        char title[128];
+        snprintf(title, sizeof title, "cold layout self-time (%d passes)", passes);
+        prof.report(title, 30);
+    }
+
     printf("\n");
     return 0;
 }

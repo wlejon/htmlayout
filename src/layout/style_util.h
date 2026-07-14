@@ -36,6 +36,7 @@ inline const std::string& styleVal(const css::ComputedStyle& style, std::string_
 #endif
     auto it = style.find(prop);
     if (it != style.end()) return it->second;
+    layoutStatsMut().styleMisses++;
     return css::initialValueRef(prop);
 }
 

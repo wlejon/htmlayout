@@ -442,6 +442,14 @@ struct LayoutStats {
     // visits × properties-consulted — the constant factor of the pass.
     uint64_t styleLookups = 0;
 
+    // How many of those found nothing and fell back to the property's initial
+    // value. A miss is not the cheap case: it probes the style map, fails, and
+    // then does a *second* hash lookup in the property registry to find the
+    // initial value. The cascade only stores what it set, and layout asks every
+    // node for all 79 properties it knows about, so the miss rate is high and
+    // sets the real cost of a lookup — not the hit rate.
+    uint64_t styleMisses = 0;
+
     // measureWidth() calls layout made, and how many of those the per-pass
     // MeasureCache had to forward to the consumer's shaper. Shaping is the most
     // expensive thing layout asks anyone to do, so the gap between these two is
