@@ -258,7 +258,7 @@ private:
     bool usesContainers_ = false; // any @container rule added
     bool usesForcedInherit_ = false; // any `inherit` on a non-inherited property
     bool usesHas_ = false;           // any rule uses :has()
-    // Class names appearing in a non-subject compound of some selector — the
+    // Class names appearing in a non-subject compound of some selector â€” the
     // only classes whose presence on an element decides a DESCENDANT's match.
     std::unordered_set<std::string> ancestorClasses_;
 

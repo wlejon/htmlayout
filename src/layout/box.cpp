@@ -1,3 +1,4 @@
+#include <chrono>
 #include "layout/box.h"
 #include "css/transform.h"
 #include "layout/formatting_context.h"
@@ -25,6 +26,12 @@ static uint32_t g_layoutPass = 0;
 
 uint32_t currentLayoutPass() { return g_layoutPass; }
 
+// Same single-threaded, one-tree-at-a-time reasoning as g_layoutPass.
+static LayoutStats g_layoutStats;
+
+const LayoutStats& lastLayoutStats() { return g_layoutStats; }
+LayoutStats& layoutStatsMut() { return g_layoutStats; }
+
 void markSubtreeDirty(LayoutNode* node) {
     if (!node) return;
     node->box.dirty = true;
@@ -37,6 +44,7 @@ void markSubtreeDirty(LayoutNode* node) {
 void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
     if (!root) return;
     ++g_layoutPass;
+    g_layoutStats = {};
     setLayoutViewport(viewport.width, viewport.height);
     // rem resolves against the root element's font-size. The root's computed
     // font-size is already absolute (px/unitless) by the time it reaches layout,
@@ -59,16 +67,28 @@ void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics
 
     root->availableHeight = viewport.height;
     root->viewportHeight = viewport.height;
+    using clk = std::chrono::steady_clock;
+    const auto ms = [](clk::time_point a, clk::time_point b) {
+        return std::chrono::duration<double, std::milli>(b - a).count();
+    };
+    auto t0 = clk::now();
     layoutNode(root, viewport.width, metrics);
     root->box.contentRect.x = root->box.margin.left + root->box.padding.left + root->box.border.left;
     root->box.contentRect.y = root->box.margin.top + root->box.padding.top + root->box.border.top;
+    auto t1 = clk::now();
 
     // Pass 2: position all absolute/fixed elements against their correct containing blocks
     layoutAbsoluteElements(root, viewport, metrics);
+    auto t2 = clk::now();
 
     // Pass 3: cache per-node subtree hit-bounds so hit testing can prune whole
     // branches instead of walking every element on each mouse move.
     computeSubtreeHitBounds(root);
+    auto t3 = clk::now();
+
+    g_layoutStats.treeMs = ms(t0, t1);
+    g_layoutStats.absoluteMs = ms(t1, t2);
+    g_layoutStats.hitBoundsMs = ms(t2, t3);
 }
 
 namespace {
@@ -140,9 +160,34 @@ bool clipsHitTesting(const css::ComputedStyle& style) {
 // disagree.
 Rect computeSubtreeHitBounds(LayoutNode* node) {
     if (!node) return {0, 0, 0, 0};
+
+    // Nothing in this subtree ran a formatting context this pass, so its shape is
+    // exactly the shape it already has. The parent may still have *moved* it —
+    // a reused node's position is written by its parent after layoutNode()
+    // returns — and hitBounds lives in the parent's content space, so it shifts
+    // with the box. But everything below is expressed relative to this box and
+    // travels with it, so none of it has to be revisited.
+    //
+    // Without this the pass is O(document) on every layout, which quietly undoes
+    // the incremental layout above it: a one-element change would still walk and
+    // re-derive bounds for every node in the document.
+    if (node->lastLayoutPass != currentLayoutPass() && node->box.hitBounds.width >= 0) {
+        float dx = node->box.contentRect.x - node->hitBoundsOriginX;
+        float dy = node->box.contentRect.y - node->hitBoundsOriginY;
+        if (dx != 0.0f || dy != 0.0f) {
+            node->box.hitBounds.x += dx;
+            node->box.hitBounds.y += dy;
+            node->hitBoundsOriginX = node->box.contentRect.x;
+            node->hitBoundsOriginY = node->box.contentRect.y;
+        }
+        return node->box.hitBounds;
+    }
+
     const auto& style = node->computedStyle();
     if (styleVal(style, "display") == "none") {
         node->box.hitBounds = {0, 0, 0, 0};
+        node->hitBoundsOriginX = node->box.contentRect.x;
+        node->hitBoundsOriginY = node->box.contentRect.y;
         return {0, 0, 0, 0};
     }
 
@@ -197,6 +242,10 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     }
 
     node->box.hitBounds = bounds;
+    // The box position these bounds were derived against, so a later pass that
+    // skips this subtree can tell how far its parent has since moved it.
+    node->hitBoundsOriginX = node->box.contentRect.x;
+    node->hitBoundsOriginY = node->box.contentRect.y;
     return bounds;
 }
 

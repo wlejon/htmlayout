@@ -232,6 +232,13 @@ struct LayoutNode {
     // alone on the rest, which is what lets those writes survive as inputs.
     uint32_t lastLayoutPass = 0;
 
+    // The box position box.hitBounds was last derived against. A pass that skips
+    // this subtree (nothing in it laid out) compares it to the current position
+    // to see how far the parent has moved the box, and translates the cached
+    // bounds by that much instead of re-deriving them. See computeSubtreeHitBounds.
+    float hitBoundsOriginX = 0.0f;
+    float hitBoundsOriginY = 0.0f;
+
     // Root node only: the document-global inputs that any node's lengths may
     // resolve against — the viewport (vw/vh/vmin/vmax) and the root font-size
     // (rem). A subtree that is otherwise untouched still has to re-layout when
@@ -245,6 +252,13 @@ struct LayoutNode {
 // Text measurement callback — consumers provide this (e.g. via Skia)
 struct TextMetrics {
     virtual ~TextMetrics() = default;
+
+    // Instrumentation: bumped by the consumer's implementation on every
+    // measurement it serves. Layout never reads or resets it; the consumer does,
+    // around a pass it wants to attribute. Shaping text is the most expensive
+    // thing layout asks anyone to do, so this is the number that explains a pass
+    // whose cost the node counts alone do not.
+    uint64_t measureCalls = 0;
     virtual float measureWidth(std::string_view text,
                                 std::string_view fontFamily,
                                 float fontSize,
@@ -332,6 +346,34 @@ void markSubtreeDirty(LayoutNode* node);
 
 // Monotonic counter, bumped once per layoutTree() call. See LayoutNode::lastLayoutPass.
 uint32_t currentLayoutPass();
+
+// What the last layoutTree() call actually did. Reset at the top of every pass,
+// so after one it describes exactly that pass.
+//
+// This is the signal for "is the incremental layout actually incremental".
+// Wall-clock alone can't tell a slow pass from a big one: a change to a single
+// element that comes back with `laidOut` in the thousands did not reuse the
+// tree, and no amount of making layout faster will fix that — something
+// upstream invalidated more than it had to.
+struct LayoutStats {
+    uint32_t laidOut = 0;   // ran a formatting context (first visit this pass)
+    uint32_t reused  = 0;   // handed back its cached subtree untouched
+    // Every layoutNodeInner() call, including the re-entrant ones: a flex or grid
+    // container lays an item out to measure it, then again to push the resolved
+    // size through. `visits` far above `laidOut` means the pass is dominated by
+    // that re-measurement, not by the nodes that actually changed.
+    uint32_t visits  = 0;
+    // The three passes layoutTree() runs, separately: only the first is
+    // incremental, so a pass whose cost doesn't move with `laidOut` is being
+    // spent in one of the other two.
+    double treeMs = 0;        // in-flow layout (incremental)
+    double absoluteMs = 0;    // positioning absolute/fixed boxes
+    double hitBoundsMs = 0;   // caching per-node subtree hit bounds
+};
+const LayoutStats& lastLayoutStats();
+
+// Internal: the counters the layout pass writes through.
+LayoutStats& layoutStatsMut();
 
 // Deprecated: layoutTree() is itself incremental now. Kept as an alias.
 void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& metrics);

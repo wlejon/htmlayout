@@ -815,8 +815,10 @@ bool beginLayoutNode(LayoutNode* node, float availableWidth) {
         node->cachedAvailWidth == availableWidth &&
         node->cachedAvailHeight == node->availableHeight &&
         node->cachedOverrideWidth == node->overrideContentWidth) {
+        layoutStatsMut().reused++;
         return false;   // cached subtree still valid — don't touch the box
     }
+    layoutStatsMut().laidOut++;
     claimLayoutNode(node, availableWidth);
     return true;
 }
@@ -850,6 +852,7 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         node->box.dirty = false;
     }
 
+    layoutStatsMut().visits++;
     layoutNodeInner(node, availableWidth, metrics);
 }
 
