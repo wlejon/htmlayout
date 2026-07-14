@@ -3,6 +3,7 @@
 #include "css/transform.h"
 #include "layout/formatting_context.h"
 #include "layout/style_util.h"
+#include "layout/measure_cache.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -46,10 +47,18 @@ void markSubtreeDirty(LayoutNode* node) {
     if (auto* p = node->pseudoAfter())  markSubtreeDirty(p);
 }
 
-void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
+void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& consumerMetrics) {
     if (!root) return;
     ++g_layoutPass;
     g_layoutStats = {};
+
+    // Everything below measures text through a memo that lives exactly as long as
+    // this pass. Layout asks the same question ~130 times over (min-content sizing,
+    // max-content sizing and line breaking each walk the same words; a third of the
+    // asks are the width of one space), and shaping is the most expensive thing it
+    // asks the consumer to do. See MeasureCache.
+    MeasureCache cache(consumerMetrics);
+    TextMetrics& metrics = cache;
     setLayoutViewport(viewport.width, viewport.height);
     // rem resolves against the root element's font-size. The root's computed
     // font-size is already absolute (px/unitless) by the time it reaches layout,

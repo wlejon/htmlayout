@@ -24,6 +24,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <unordered_map>
 #include <new>
 #include <span>
 #include <string>
@@ -220,9 +221,23 @@ const htmlayout::css::ComputedStyle& NodeView::computedStyle() const {
 // time this contributes — as the honest signal for text cost.
 // ---------------------------------------------------------------------------
 struct BenchMetrics : htmlayout::layout::TextMetrics {
+    // What is actually being measured, so a big measureCalls can be read as
+    // *why*. A consumer's shaper sits behind a cache (bro's does), so the
+    // number that matters is not the call count alone but how much of it is
+    // re-asking for something already known — a single space, or a word that
+    // was measured moments ago in another sizing phase.
+    long long spaceCalls = 0;   // measureWidth(" ") — a constant per font
+    long long distinctAsks = 0; // (text, size) pairs never seen before
+    std::unordered_map<std::string, int> seen;
+
     float measureWidth(std::string_view text, std::string_view, float fontSize,
                        std::string_view) override {
         measureCalls++;
+        if (text == " ") spaceCalls++;
+        std::string k(text);
+        k += '@';
+        k += std::to_string((int)fontSize);
+        if (seen.emplace(k, 1).second) distinctAsks++;
         float w = 0;
         for (char c : text) w += (c == ' ' ? 0.30f : 0.55f) * fontSize;
         return w;
@@ -230,6 +245,7 @@ struct BenchMetrics : htmlayout::layout::TextMetrics {
     float lineHeight(std::string_view, float fontSize, std::string_view) override {
         return fontSize * 1.25f;
     }
+    void resetProfile() { spaceCalls = 0; distinctAsks = 0; seen.clear(); }
 };
 
 // ---------------------------------------------------------------------------
@@ -411,6 +427,7 @@ int main(int argc, char** argv) {
     {
         auto m = allocMark();
         metrics.measureCalls = 0;
+        metrics.resetProfile();
         auto t0 = Clock::now();
         layout::layoutTree(root, viewportW, metrics);
         double ms = msSince(t0);
@@ -421,6 +438,11 @@ int main(int argc, char** argv) {
         printf("  %-26s laidOut=%u reused=%u visits=%u  tree=%.2fms abs=%.2fms hit=%.2fms\n",
                "", st.laidOut, st.reused, st.visits, st.treeMs, st.absoluteMs,
                st.hitBoundsMs);
+        printf("  %-26s text: layout asked %llu, shaper saw %llu (%.0fx absorbed); "
+               "%lld of the shaper's were measureWidth(\" \")\n",
+               "", (unsigned long long)st.textMeasures, (unsigned long long)st.textShaped,
+               st.textShaped ? (double)st.textMeasures / st.textShaped : 0.0,
+               metrics.spaceCalls);
     }
 
     // ---- 5. Re-layout with nothing dirty (the pure reuse path) ----

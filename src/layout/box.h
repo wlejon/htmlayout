@@ -441,6 +441,13 @@ struct LayoutStats {
     // visits × properties-consulted — the constant factor of the pass.
     uint64_t styleLookups = 0;
 
+    // measureWidth() calls layout made, and how many of those the per-pass
+    // MeasureCache had to forward to the consumer's shaper. Shaping is the most
+    // expensive thing layout asks anyone to do, so the gap between these two is
+    // the work the cache is absorbing; `textShaped` is what the consumer pays.
+    uint64_t textMeasures = 0;
+    uint64_t textShaped   = 0;
+
     // Why beginLayoutNode() declined to reuse, by first failing condition.
     // `reused` low with laidOut high is only half a diagnosis — these say
     // whether the invalidation was real dirt or a changed layout input
