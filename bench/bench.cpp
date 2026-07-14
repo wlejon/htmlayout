@@ -18,6 +18,7 @@
 #include "css/ua_stylesheet.h"
 #include "layout/box.h"
 #include "layout/formatting_context.h"
+#include "layout/style_util.h"
 
 #include <atomic>
 #include <chrono>
@@ -443,6 +444,9 @@ int main(int argc, char** argv) {
                "", (unsigned long long)st.textMeasures, (unsigned long long)st.textShaped,
                st.textShaped ? (double)st.textMeasures / st.textShaped : 0.0,
                metrics.spaceCalls);
+        printf("  %-26s style-is-strings: %llu map lookups + %llu length re-parses\n",
+               "", (unsigned long long)st.styleLookups,
+               (unsigned long long)st.lengthResolves);
     }
 
     // ---- 5. Re-layout with nothing dirty (the pure reuse path) ----
@@ -517,6 +521,40 @@ int main(int argc, char** argv) {
         printf("  %-26s %9.1f lookups/hittest  %9.1f allocs/hittest  (document is %d nodes)\n",
                "", static_cast<double>(lookups) / 1000.0,
                static_cast<double>(a.allocs) / 1000.0, nodes);
+    }
+
+    // ---- 9. What a style read actually costs ----
+    //
+    // Layout does 671,647 styleVal() lookups on a cold pass. Whether that is worth
+    // restructuring ComputedStyle over depends on what one costs, so price it
+    // directly against a real element's style rather than guessing from the
+    // aggregate. Both halves: finding the value (a hash + probe) and then turning
+    // the text back into a number, which layout redoes on every single read.
+    {
+        Dom* card = nullptr;
+        for (auto& c : doc->owned) // find any deep element with a populated style
+            if (!c->isText) card = c.get();
+        const auto& st = card->style;
+        const int N = 2000000;
+
+        auto t0 = Clock::now();
+        double sink = 0;
+        for (int i = 0; i < N; i++) {
+            sink += layout::styleVal(st, "display").size();
+            sink += layout::styleVal(st, "border-bottom-width").size();  // 19ch: past SSO
+        }
+        double lookupNs = msSince(t0) * 1e6 / (2.0 * N);
+
+        const std::string& len = layout::styleVal(st, "font-size");
+        auto t1 = Clock::now();
+        for (int i = 0; i < N; i++) sink += layout::resolveLength(len, 1280.0f, 16.0f);
+        double parseNs = msSince(t1) * 1e6 / N;
+
+        printf("  %-26s %6.1f ns per styleVal()   %6.1f ns per resolveLength()\n",
+               "cost of one style read", lookupNs, parseNs);
+        printf("  %-26s at 671,647 lookups/pass that is %.1f ms of the cold pass "
+               "in lookup alone%s\n", "", lookupNs * 671647 / 1e6,
+               sink == 12345.0 ? "!" : "");
     }
 
     g_counting = false;

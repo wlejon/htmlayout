@@ -57,10 +57,12 @@ void setLengthFontContext(float chPx, float exPx) {
 }
 
 // Resolve a single CSS length token (number + unit) to pixels.
+// Both resolveLength() overloads screen out the keywords before calling this, and
+// from_chars rejects them anyway (falling through to the thin/medium/thick ladder,
+// which returns 0 for them) — so re-testing them here would just be a second round
+// of strlen-per-literal on the hottest path in layout.
 static float resolveSingleLength(const std::string& value, float referenceSize, float fontSize) {
-    if (value.empty() || value == "auto" || value == "none" || value == "normal") {
-        return 0.0f;
-    }
+    if (value.empty()) return 0.0f;
 
     const char* begin = value.data();
     const char* end = begin + value.size();
@@ -74,29 +76,48 @@ static float resolveSingleLength(const std::string& value, float referenceSize, 
         return 0.0f;
     }
 
-    std::string unit(ptr, end);
-
-    if (unit.empty() || unit == "px") return num;
-    if (unit == "em") return num * fontSize;
-    if (unit == "rem") return num * g_rootFontSize;
-    if (unit == "%") return num * referenceSize / 100.0f;
+    // The unit is a view of the tail, not a copy of it: this runs on every length
+    // of every node of every pass, and building a std::string here to compare it
+    // against a ladder of literals was most of what the ladder cost.
+    //
+    // Dispatched on length first, so `px` — far and away the common case — is
+    // reached in one compare instead of walking past thirteen others.
+    std::string_view unit(ptr, static_cast<size_t>(end - ptr));
     // Viewport units resolve against the real viewport (set by layoutTree). When a
     // viewport dimension is unknown (0), fall back to the percentage reference so
     // behavior matches the pre-viewport resolver rather than collapsing to 0.
-    if (unit == "vw") return num * (g_viewportWidth  > 0.0f ? g_viewportWidth  : referenceSize) / 100.0f;
-    if (unit == "vh") return num * (g_viewportHeight > 0.0f ? g_viewportHeight : referenceSize) / 100.0f;
-    if (unit == "vmin" || unit == "vmax") {
-        float vw = g_viewportWidth  > 0.0f ? g_viewportWidth  : referenceSize;
-        float vh = g_viewportHeight > 0.0f ? g_viewportHeight : referenceSize;
-        return num * (unit == "vmin" ? std::min(vw, vh) : std::max(vw, vh)) / 100.0f;
+    const auto vwRef = [&] { return g_viewportWidth  > 0.0f ? g_viewportWidth  : referenceSize; };
+    const auto vhRef = [&] { return g_viewportHeight > 0.0f ? g_viewportHeight : referenceSize; };
+
+    switch (unit.size()) {
+    case 0:
+        return num;
+    case 1:
+        if (unit[0] == '%') return num * referenceSize / 100.0f;
+        break;
+    case 2:
+        if (unit == "px") return num;
+        if (unit == "em") return num * fontSize;
+        if (unit == "vw") return num * vwRef() / 100.0f;
+        if (unit == "vh") return num * vhRef() / 100.0f;
+        if (unit == "pt") return num * 96.0f / 72.0f;
+        if (unit == "ch") return num * (g_chPx > 0.0f ? g_chPx : fontSize * 0.5f);
+        if (unit == "ex") return num * (g_exPx > 0.0f ? g_exPx : fontSize * 0.5f);
+        if (unit == "cm") return num * 96.0f / 2.54f;
+        if (unit == "mm") return num * 96.0f / 25.4f;
+        if (unit == "in") return num * 96.0f;
+        if (unit == "pc") return num * 96.0f / 6.0f;
+        break;
+    case 3:
+        if (unit == "rem") return num * g_rootFontSize;
+        break;
+    case 4:
+        if (unit == "vmin") return num * std::min(vwRef(), vhRef()) / 100.0f;
+        if (unit == "vmax") return num * std::max(vwRef(), vhRef()) / 100.0f;
+        break;
+    default:
+        break;
     }
-    if (unit == "pt") return num * 96.0f / 72.0f;
-    if (unit == "ch") return num * (g_chPx > 0.0f ? g_chPx : fontSize * 0.5f);
-    if (unit == "ex") return num * (g_exPx > 0.0f ? g_exPx : fontSize * 0.5f);
-    if (unit == "cm") return num * 96.0f / 2.54f;
-    if (unit == "mm") return num * 96.0f / 25.4f;
-    if (unit == "in") return num * 96.0f;
-    if (unit == "pc") return num * 96.0f / 6.0f;
 
     return num;
 }
@@ -262,11 +283,21 @@ static float evalCalc(const std::string& expr, float referenceSize, float fontSi
 // top level. These all flow through evalCalc, whose primary parser handles each
 // function (and their nesting) directly, so the whole string is passed through.
 static bool isMathFunction(const std::string& v) {
+    // Every length resolution asks this, and almost every one of them is a plain
+    // `16px` that has to walk all four names to say no. A math function is
+    // `name(...)`, so a value that doesn't end in ')' cannot be one — check that
+    // first and the common case leaves after a single byte compare.
+    if (v.size() < 5 || v.back() != ')') return false;
     auto starts = [&](const char* f) {
         size_t n = std::strlen(f);
         if (v.size() < n + 1) return false;
-        for (size_t i = 0; i < n; i++)
-            if (std::tolower(static_cast<unsigned char>(v[i])) != f[i]) return false;
+        for (size_t i = 0; i < n; i++) {
+            // ASCII-lower by hand: std::tolower is locale-aware, which means a
+            // function call and a table lookup per character, on a path this hot.
+            char c = v[i];
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+            if (c != f[i]) return false;
+        }
         return v[n] == '(';
     };
     return starts("calc") || starts("min") || starts("max") || starts("clamp");
@@ -696,17 +727,25 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
     return maxChildMax;
 }
 
+// A length starts with a digit, a sign or a dot; a keyword and a math function
+// both start with a letter. Deciding on the first byte keeps `16px` — which is
+// nearly every length in a document — out of the keyword comparisons and out of
+// isMathFunction entirely. Each of those is a strlen against a literal, and this
+// is the most-called function in layout.
+static bool startsNumeric(const std::string& v) {
+    char c = v[0];
+    return (c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.';
+}
+
 float resolveLength(const std::string& value, float referenceSize, float fontSize) {
-    if (value.empty() || value == "auto" || value == "none" || value == "normal") {
-        return 0.0f;
+    layoutStatsMut().lengthResolves++;
+    if (value.empty()) return 0.0f;
+    if (!startsNumeric(value)) {
+        if (value == "auto" || value == "none" || value == "normal") return 0.0f;
+        // calc()/min()/max()/clamp(): the whole string goes to evalCalc, whose
+        // primary parser recognizes each function name.
+        if (isMathFunction(value)) return evalCalc(value, referenceSize, fontSize);
     }
-
-    // Handle calc()/min()/max()/clamp() math functions. The whole string is
-    // passed to evalCalc, whose primary parser recognizes each function name.
-    if (isMathFunction(value)) {
-        return evalCalc(value, referenceSize, fontSize);
-    }
-
     return resolveSingleLength(value, referenceSize, fontSize);
 }
 
@@ -754,14 +793,13 @@ float resolveLineHeight(const std::string& value, float fontSize,
 
 float resolveLength(const std::string& value, float referenceSize, float fontSize,
                     float viewportWidth, float viewportHeight) {
-    if (value.empty() || value == "auto" || value == "none" || value == "normal") {
-        return 0.0f;
-    }
-
-    // Handle calc()/min()/max()/clamp(). vw/vh inside resolve against the
-    // file-scoped viewport (set by layoutTree), so referenceSize suffices here.
-    if (isMathFunction(value)) {
-        return evalCalc(value, referenceSize, fontSize);
+    layoutStatsMut().lengthResolves++;
+    if (value.empty()) return 0.0f;
+    if (!startsNumeric(value)) {
+        if (value == "auto" || value == "none" || value == "normal") return 0.0f;
+        // calc()/min()/max()/clamp(). vw/vh inside resolve against the file-scoped
+        // viewport (set by layoutTree), so referenceSize suffices here.
+        if (isMathFunction(value)) return evalCalc(value, referenceSize, fontSize);
     }
 
     // For vw/vh/vmin/vmax, use actual viewport dimensions
@@ -772,7 +810,7 @@ float resolveLength(const std::string& value, float referenceSize, float fontSiz
     if (ec != std::errc()) {
         return resolveSingleLength(value, referenceSize, fontSize);
     }
-    std::string unit(ptr, end);
+    std::string_view unit(ptr, static_cast<size_t>(end - ptr));
     if (unit == "vw") return num * viewportWidth / 100.0f;
     if (unit == "vh") return num * viewportHeight / 100.0f;
     if (unit == "vmin") return num * std::min(viewportWidth, viewportHeight) / 100.0f;

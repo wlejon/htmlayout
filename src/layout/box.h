@@ -448,6 +448,12 @@ struct LayoutStats {
     uint64_t textMeasures = 0;
     uint64_t textShaped   = 0;
 
+    // resolveLength() calls: every one re-parses a value out of its text, since
+    // the style map stores what the stylesheet said rather than what it meant.
+    // Sits next to styleLookups because the two together are the price of style
+    // being strings — one to find the value, one to turn it back into a number.
+    uint64_t lengthResolves = 0;
+
     // Why beginLayoutNode() declined to reuse, by first failing condition.
     // `reused` low with laidOut high is only half a diagnosis — these say
     // whether the invalidation was real dirt or a changed layout input
