@@ -429,6 +429,9 @@ int main(int argc, char** argv) {
         auto m = allocMark();
         metrics.measureCalls = 0;
         metrics.resetProfile();
+#ifdef HTMLAYOUT_STYLE_PROFILE
+        layout::resetStyleLookupHistogram();
+#endif
         auto t0 = Clock::now();
         layout::layoutTree(root, viewportW, metrics);
         double ms = msSince(t0);
@@ -447,6 +450,31 @@ int main(int argc, char** argv) {
         printf("  %-26s style-is-strings: %llu map lookups + %llu length re-parses\n",
                "", (unsigned long long)st.styleLookups,
                (unsigned long long)st.lengthResolves);
+#ifdef HTMLAYOUT_STYLE_PROFILE
+        auto hist = layout::styleLookupHistogram();
+        uint64_t total = 0;
+        for (auto& [p, n] : hist) total += n;
+        printf("  %-26s which properties (top 30 of %zu, %llu lookups):\n", "",
+               hist.size(), (unsigned long long)total);
+        uint64_t running = 0;
+        for (size_t i = 0; i < hist.size(); i++) {
+            running += hist[i].second;
+            if (i < 20)
+                printf("  %-26s   %-24s %8llu  %5.1f%%  (cum %5.1f%%)\n", "",
+                       hist[i].first.c_str(), (unsigned long long)hist[i].second,
+                       100.0 * hist[i].second / total, 100.0 * running / total);
+        }
+        auto sites = layout::styleLookupSiteHistogram();
+        printf("  %-26s which call sites (top 30 of %zu):\n", "", sites.size());
+        running = 0;
+        for (size_t i = 0; i < sites.size(); i++) {
+            running += sites[i].second;
+            if (i < 30)
+                printf("  %-26s   %-44s %8llu  %5.1f%%  (cum %5.1f%%)\n", "",
+                       sites[i].first.c_str(), (unsigned long long)sites[i].second,
+                       100.0 * sites[i].second / total, 100.0 * running / total);
+        }
+#endif
     }
 
     // ---- 5. Re-layout with nothing dirty (the pure reuse path) ----

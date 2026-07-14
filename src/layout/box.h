@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 #include <cstdint>
+#include <utility>
 
 namespace htmlayout::layout {
 
@@ -467,6 +468,23 @@ const LayoutStats& lastLayoutStats();
 
 // Internal: the counters the layout pass writes through.
 LayoutStats& layoutStatsMut();
+
+#ifdef HTMLAYOUT_STYLE_PROFILE
+// Which properties layout actually reads, and how often. `styleLookups` says the
+// pass spends 10ms finding values in a map; this says *which* values, so the set
+// that gets a typed field is chosen from the profile rather than from counting
+// call sites in the source (the two disagree badly — a property read once inside
+// a per-child loop outweighs one read at twenty different sites).
+//
+// Off by default: recording costs more than the lookup it measures.
+void recordStyleLookup(std::string_view prop, const char* file, unsigned line);
+// Both cuts of the same data: which property, and which line asked for it. They
+// disagree, and the disagreement is the finding — a property read once per child
+// inside a loop shows up nowhere in the source and everywhere in the profile.
+std::vector<std::pair<std::string, uint64_t>> styleLookupHistogram();     // by property
+std::vector<std::pair<std::string, uint64_t>> styleLookupSiteHistogram(); // by call site
+void resetStyleLookupHistogram();
+#endif
 
 // Deprecated: layoutTree() is itself incremental now. Kept as an alias.
 void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& metrics);

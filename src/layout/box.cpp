@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <unordered_map>
+#include <utility>
 
 namespace htmlayout::layout {
 
@@ -32,6 +34,36 @@ static LayoutStats g_layoutStats;
 
 const LayoutStats& lastLayoutStats() { return g_layoutStats; }
 LayoutStats& layoutStatsMut() { return g_layoutStats; }
+
+#ifdef HTMLAYOUT_STYLE_PROFILE
+static std::unordered_map<std::string, uint64_t, css::SvHash, css::SvEq> g_styleHist;
+static std::unordered_map<std::string, uint64_t, css::SvHash, css::SvEq> g_styleSiteHist;
+
+void recordStyleLookup(std::string_view prop, const char* file, unsigned line) {
+    auto it = g_styleHist.find(prop);
+    if (it == g_styleHist.end()) g_styleHist.emplace(std::string(prop), 1);
+    else it->second++;
+
+    std::string_view f(file);
+    if (auto slash = f.find_last_of("/\\"); slash != std::string_view::npos)
+        f.remove_prefix(slash + 1);
+    std::string key = std::string(f) + ":" + std::to_string(line) + " " + std::string(prop);
+    auto sit = g_styleSiteHist.find(key);
+    if (sit == g_styleSiteHist.end()) g_styleSiteHist.emplace(std::move(key), 1);
+    else sit->second++;
+}
+void resetStyleLookupHistogram() { g_styleHist.clear(); g_styleSiteHist.clear(); }
+
+static std::vector<std::pair<std::string, uint64_t>>
+sorted(const std::unordered_map<std::string, uint64_t, css::SvHash, css::SvEq>& m) {
+    std::vector<std::pair<std::string, uint64_t>> out(m.begin(), m.end());
+    std::sort(out.begin(), out.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    return out;
+}
+std::vector<std::pair<std::string, uint64_t>> styleLookupHistogram() { return sorted(g_styleHist); }
+std::vector<std::pair<std::string, uint64_t>> styleLookupSiteHistogram() { return sorted(g_styleSiteHist); }
+#endif
 
 void markSubtreeDirty(LayoutNode* node) {
     if (!node) return;
