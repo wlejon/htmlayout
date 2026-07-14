@@ -1007,6 +1007,9 @@ void Cascade::clear() {
     nextOrder_ = 0;
     usesHover_ = false;
     usesContainers_ = false;
+    usesForcedInherit_ = false;
+    usesHas_ = false;
+    ancestorClasses_.clear();
     layerNames_.clear();
     loadedImports_.clear();
 }

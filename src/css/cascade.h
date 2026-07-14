@@ -74,6 +74,27 @@ public:
     // is set.
     bool usesContainerQueries() const { return usesContainers_; }
 
+    // True if any rule forces `inherit` on a property that does not normally
+    // inherit. Such a declaration ties a child's computed value to a parent
+    // property that is not part of the inherited set, so a consumer scoping its
+    // restyle by an inherited-value diff must re-resolve the whole subtree
+    // instead. See classifyLastRule().
+    bool usesForcedInherit() const { return usesForcedInherit_; }
+
+    // Can adding or removing this class from an element change which rules match
+    // that element's DESCENDANTS? Only if the class appears in a non-subject
+    // compound of some selector (`.dark .btn`, `.open > li`) — a class that is
+    // only ever a subject qualifier (`.btn.active`) restyles just the element it
+    // is on. Lets a consumer keep `panel.classList.toggle('on')` off the whole
+    // subtree's restyle bill, which is what makes it affordable per frame.
+    //
+    // Conservative when the sheet uses :has(), whose matching runs the other way
+    // (a class on a descendant decides an ancestor's match), so no subject/
+    // ancestor split of the class names describes it.
+    bool classAffectsDescendants(const std::string& cls) const {
+        return usesHas_ || ancestorClasses_.count(cls) > 0;
+    }
+
     // True if any rule targets ::<name> (e.g. "before", "after"). A document
     // with no such rule can generate no content, so the consumer can skip the
     // whole generated-content pass instead of asking every element.
@@ -134,9 +155,68 @@ private:
         return false;
     }
 
+    // Collect every class name mentioned by this simple selector, including the
+    // ones nested inside :not()/:is()/:where()/:has()/:host()/::slotted() args.
+    static void collectClasses(const SimpleSelector& s,
+                               std::unordered_set<std::string>& out) {
+        if (s.type == SimpleSelectorType::Class) out.insert(s.value);
+        for (auto& n : s.notArg)     collectClasses(n, out);
+        for (auto& n : s.hostArg)    collectClasses(n, out);
+        for (auto& n : s.slottedArg) collectClasses(n, out);
+        for (auto& c : s.selectorListArg)
+            for (auto& sub : c.simples) collectClasses(sub, out);
+        for (auto& rel : s.relativeArgs)
+            for (auto& entry : rel.chain.entries)
+                for (auto& sub : entry.compound.simples) collectClasses(sub, out);
+    }
+
+    static bool simpleUsesHas(const SimpleSelector& s) {
+        if (!s.relativeArgs.empty()) return true;
+        for (auto& n : s.notArg)     if (simpleUsesHas(n)) return true;
+        for (auto& n : s.hostArg)    if (simpleUsesHas(n)) return true;
+        for (auto& n : s.slottedArg) if (simpleUsesHas(n)) return true;
+        for (auto& c : s.selectorListArg)
+            for (auto& sub : c.simples) if (simpleUsesHas(sub)) return true;
+        return false;
+    }
+
     // Classify :host/:slotted/::part flags after inserting a rule
     void classifyLastRule() {
         auto& rule = rules_.back();
+
+        // entries[0] is the subject; entries[1..] are the ancestor and sibling
+        // qualifiers. A class named there is one whose presence on some OTHER
+        // element decides this rule's match, so changing it has to re-match the
+        // subtree below. A class named only in entries[0] does not.
+        for (size_t i = 1; i < rule.selector.chain.entries.size(); i++)
+            for (auto& s : rule.selector.chain.entries[i].compound.simples)
+                collectClasses(s, ancestorClasses_);
+        if (!usesHas_) {
+            for (auto& entry : rule.selector.chain.entries) {
+                for (auto& s : entry.compound.simples) {
+                    if (simpleUsesHas(s)) { usesHas_ = true; break; }
+                }
+                if (usesHas_) break;
+            }
+        }
+        // `inherit` on a property that does NOT normally inherit (border,
+        // background, width…) makes that child's computed value depend on its
+        // parent's value for a property the parent never passes down. A consumer
+        // that decides whether to re-resolve a subtree by diffing the parent's
+        // *inherited* values would miss it, so flag the sheet and let them fall
+        // back. `color: inherit` and friends need no flag — the inherited diff
+        // already sees those.
+        // Expand first: `font: inherit` is five longhands that all inherit
+        // anyway, and the shorthand name itself is not in the property table.
+        if (!usesForcedInherit_) {
+            for (auto& d : rule.declarations) {
+                if (d.value != "inherit") continue;
+                for (auto& e : expandShorthand(d.property, d.value)) {
+                    if (!isInherited(e.property)) { usesForcedInherit_ = true; break; }
+                }
+                if (usesForcedInherit_) break;
+            }
+        }
         // Track whether any rule anywhere uses :hover (across every compound in
         // the chain, not just the subject) so the consumer can skip hover
         // restyle work on pages with no :hover rules.
@@ -176,6 +256,11 @@ private:
     size_t nextOrder_ = 0;
     bool usesHover_ = false;  // any rule uses :hover (set in classifyLastRule)
     bool usesContainers_ = false; // any @container rule added
+    bool usesForcedInherit_ = false; // any `inherit` on a non-inherited property
+    bool usesHas_ = false;           // any rule uses :has()
+    // Class names appearing in a non-subject compound of some selector � the
+    // only classes whose presence on an element decides a DESCENDANT's match.
+    std::unordered_set<std::string> ancestorClasses_;
 
     // @import resolution
     ImportResolver importResolver_;
