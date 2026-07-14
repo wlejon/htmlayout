@@ -2,6 +2,7 @@
 #include "layout/formatting_context.h"
 #include "layout/text.h"
 #include "layout/style_util.h"
+#include "layout/style_cache.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -49,21 +50,13 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (!node) return;
 
     auto& style = node->computedStyle();
-    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
     if (fontSize <= 0) fontSize = 16.0f;
 
     // Resolve container edges
-    node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
-    node->box.padding = resolveEdges(style, "padding", availableWidth, fontSize);
-
-    Edges borderWidth{};
-    const char* sideNames[] = {"top", "right", "bottom", "left"};
-    float* bw[] = {&borderWidth.top, &borderWidth.right, &borderWidth.bottom, &borderWidth.left};
-    for (int i = 0; i < 4; i++) {
-        if (styleVal(style, std::string("border-") + sideNames[i] + "-style") != "none")
-            *bw[i] = resolveLength(styleVal(style, std::string("border-") + sideNames[i] + "-width"), availableWidth, fontSize);
-    }
-    node->box.border = borderWidth;
+    node->box.margin = resolveEdges(node, kMarginProps, availableWidth, fontSize);
+    node->box.padding = resolveEdges(node, kPaddingProps, availableWidth, fontSize);
+    node->box.border = resolveBorders(node, availableWidth, fontSize);
 
     float paddingH = node->box.padding.left + node->box.padding.right;
     float borderH = node->box.border.left + node->box.border.right;
@@ -71,10 +64,10 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float borderV = node->box.border.top + node->box.border.bottom;
 
     // Container dimensions
-    float specW = resolveDim(styleVal(style, "width"), availableWidth, fontSize);
+    float specW = resolveDim(styleVal(node, Prop::Width), availableWidth, fontSize);
     float containerMain;
     if (specW >= 0) {
-        if (styleVal(style, "box-sizing") == "border-box")
+        if (styleVal(node, Prop::BoxSizing) == "border-box")
             containerMain = specW - paddingH - borderH;
         else
             containerMain = specW;
@@ -85,17 +78,17 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // Apply min/max-width constraints
-    float minW = resolveDim(styleVal(style, "min-width"), availableWidth, fontSize);
-    float maxW = resolveDim(styleVal(style, "max-width"), availableWidth, fontSize);
+    float minW = resolveDim(styleVal(node, Prop::MinWidth), availableWidth, fontSize);
+    float maxW = resolveDim(styleVal(node, Prop::MaxWidth), availableWidth, fontSize);
     if (minW >= 0 && containerMain < minW) containerMain = minW;
     if (maxW >= 0 && containerMain > maxW) containerMain = maxW;
 
     // Flex properties
-    const std::string& flexDir = styleVal(style, "flex-direction");
-    const std::string& flexWrap = styleVal(style, "flex-wrap");
-    const std::string& justifyContent = styleVal(style, "justify-content");
-    const std::string& alignItems = styleVal(style, "align-items");
-    const std::string& alignContent = styleVal(style, "align-content");
+    const std::string& flexDir = styleVal(node, Prop::FlexDirection);
+    const std::string& flexWrap = styleVal(node, Prop::FlexWrap);
+    const std::string& justifyContent = styleVal(node, Prop::JustifyContent);
+    const std::string& alignItems = styleVal(node, Prop::AlignItems);
+    const std::string& alignContent = styleVal(node, Prop::AlignContent);
 
     bool isRow = (flexDir == "row" || flexDir == "row-reverse" || flexDir.empty());
     bool isReverse = (flexDir == "row-reverse" || flexDir == "column-reverse");
@@ -106,10 +99,10 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // positionally identical to row-reverse. XOR the two so `row`+rtl reverses
     // and `row-reverse`+rtl cancels back to left-to-right. (rtl affects only the
     // cross axis for column containers, which is left as-is.)
-    if (isRow && styleVal(style, "direction") == "rtl")
+    if (isRow && styleVal(node, Prop::Direction) == "rtl")
         isReverse = !isReverse;
 
-    float mainAvailable = isRow ? containerMain : resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+    float mainAvailable = isRow ? containerMain : resolveDim(styleVal(node, Prop::Height), node->availableHeight, fontSize);
     // Column flex: clamp the definite main size by min/max-height, mirroring the
     // min/max-width clamp applied to containerMain (the row main size) above.
     // Without this a `height:88vh; max-height:660px` column container distributes
@@ -122,8 +115,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         auto pctIndefiniteH = [&](const std::string& v) {
             return node->availableHeight <= 0.0f && !v.empty() && v.back() == '%';
         };
-        const std::string& maxHVal = styleVal(style, "max-height");
-        const std::string& minHVal = styleVal(style, "min-height");
+        const std::string& maxHVal = styleVal(node, Prop::MaxHeight);
+        const std::string& minHVal = styleVal(node, Prop::MinHeight);
         float maxH = pctIndefiniteH(maxHVal) ? -1.0f : resolveDim(maxHVal, node->availableHeight, fontSize);
         float minH = pctIndefiniteH(minHVal) ? -1.0f : resolveDim(minHVal, node->availableHeight, fontSize);
         if (maxH >= 0 && mainAvailable > maxH) mainAvailable = maxH;
@@ -145,14 +138,16 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     bool columnAutoHeight = (!isRow && mainAvailable < 0);
     if (mainAvailable < 0) mainAvailable = containerMain; // initial fallback for column with auto height
 
-    float gapMain = resolveLength(styleVal(style, isRow ? "column-gap" : "row-gap"), mainAvailable, fontSize);
-    float gapCross = resolveLength(styleVal(style, isRow ? "row-gap" : "column-gap"), mainAvailable, fontSize);
+    float gapMain = resolveLength(
+        styleVal(node, isRow ? Prop::ColumnGap : Prop::RowGap), mainAvailable, fontSize);
+    float gapCross = resolveLength(
+        styleVal(node, isRow ? Prop::RowGap : Prop::ColumnGap), mainAvailable, fontSize);
 
     // Resolve definite cross size for percentage height propagation to children
-    float crossSpecH = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+    float crossSpecH = resolveDim(styleVal(node, Prop::Height), node->availableHeight, fontSize);
     float childAvailableHeight = 0.0f;
     if (isRow && crossSpecH >= 0) {
-        if (styleVal(style, "box-sizing") == "border-box")
+        if (styleVal(node, Prop::BoxSizing) == "border-box")
             childAvailableHeight = crossSpecH - paddingV - borderV;
         else
             childAvailableHeight = crossSpecH;
@@ -175,10 +170,10 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
             if (allWhitespace) continue;
 
-            const std::string& fontFamily = styleVal(style, "font-family");
-            const std::string& fontWeight = styleVal(style, "font-weight");
+            const std::string& fontFamily = styleVal(node, Prop::FontFamily);
+            const std::string& fontWeight = styleVal(node, Prop::FontWeight);
             // Measure the text-transformed glyphs (matches paint + breakTextIntoRuns).
-            std::string shaped = applyTextTransform(std::string(text), styleVal(style, "text-transform"));
+            std::string shaped = applyTextTransform(std::string(text), styleVal(node, Prop::TextTransform));
             float textW = metrics.measureWidth(shaped, fontFamily, fontSize, fontWeight);
             float textH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
 
@@ -219,22 +214,22 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         child->viewportHeight = node->viewportHeight;
         child->availableHeight = childAvailableHeight;
         auto& cs = child->computedStyle();
-        if (styleVal(cs, "display") == "none") {
+        if (styleVal(child, Prop::Display) == "none") {
             child->box = LayoutBox{};
             continue;
         }
-        const std::string& childPos = styleVal(cs, "position");
+        const std::string& childPos = styleVal(child, Prop::Position);
         if (childPos == "absolute" || childPos == "fixed") continue;
 
         FlexItem item;
         item.node = child;
-        float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        float childFontSize = resolveLength(styleVal(child, Prop::FontSize), fontSize, fontSize);
         if (childFontSize <= 0) childFontSize = fontSize;
 
-        item.flexGrow = resolveLength(styleVal(cs, "flex-grow"), 0, childFontSize);
-        item.flexShrink = resolveLength(styleVal(cs, "flex-shrink"), 0, childFontSize);
+        item.flexGrow = resolveLength(styleVal(child, Prop::FlexGrow), 0, childFontSize);
+        item.flexShrink = resolveLength(styleVal(child, Prop::FlexShrink), 0, childFontSize);
         if (item.flexShrink < 0) item.flexShrink = 1.0f;
-        item.order = static_cast<int>(resolveLength(styleVal(cs, "order"), 0, childFontSize));
+        item.order = static_cast<int>(resolveLength(styleVal(child, Prop::Order), 0, childFontSize));
 
         // Re-resolve the item's margins from style every pass (auto → 0, per
         // §9.7 auto margins are treated as 0 while sizing). A previous layout
@@ -242,7 +237,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // box.margin (they absorb free space at positioning time); counting
         // those stale values as real margins here would eat into this pass's
         // free space and shrink items that fit.
-        child->box.margin = resolveEdges(cs, "margin", containerMain, childFontSize);
+        child->box.margin = resolveEdges(child, kMarginProps, containerMain, childFontSize);
 
         // Resolve flex-basis. flex-basis represents the outer (border-box) main
         // size of the item — the rest of flex layout subtracts padding/border to
@@ -250,34 +245,34 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // explicit length on flex-basis) and box-sizing is content-box, the
         // specified value is content size, so we must add padding+border to
         // convert to the outer main size.
-        const std::string& basis = styleVal(cs, "flex-basis");
+        const std::string& basis = styleVal(child, Prop::FlexBasis);
         bool basisFromMainDim = false;
         if (basis == "auto" || basis.empty()) {
             // Use width/height as basis
-            const std::string& dimProp = isRow ? "width" : "height";
-            float dim = resolveDim(styleVal(cs, dimProp), mainAvailable, childFontSize);
+            float dim = resolveDim(styleVal(child, isRow ? Prop::Width : Prop::Height),
+                                   mainAvailable, childFontSize);
             item.flexBasis = dim >= 0 ? dim : -1.0f;
             basisFromMainDim = (dim >= 0);
         } else {
             item.flexBasis = resolveLength(basis, mainAvailable, childFontSize);
             basisFromMainDim = (item.flexBasis >= 0);
         }
-        if (basisFromMainDim && styleVal(cs, "box-sizing") != "border-box") {
+        if (basisFromMainDim && styleVal(child, Prop::BoxSizing) != "border-box") {
             float edges = 0;
             if (isRow) {
-                edges += resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
-                         resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
-                if (styleVal(cs, "border-left-style") != "none")
-                    edges += resolveLength(styleVal(cs, "border-left-width"), mainAvailable, childFontSize);
-                if (styleVal(cs, "border-right-style") != "none")
-                    edges += resolveLength(styleVal(cs, "border-right-width"), mainAvailable, childFontSize);
+                edges += resolveLength(styleVal(child, Prop::PaddingLeft), mainAvailable, childFontSize) +
+                         resolveLength(styleVal(child, Prop::PaddingRight), mainAvailable, childFontSize);
+                if (styleVal(child, Prop::BorderLeftStyle) != "none")
+                    edges += resolveLength(styleVal(child, Prop::BorderLeftWidth), mainAvailable, childFontSize);
+                if (styleVal(child, Prop::BorderRightStyle) != "none")
+                    edges += resolveLength(styleVal(child, Prop::BorderRightWidth), mainAvailable, childFontSize);
             } else {
-                edges += resolveLength(styleVal(cs, "padding-top"), mainAvailable, childFontSize) +
-                         resolveLength(styleVal(cs, "padding-bottom"), mainAvailable, childFontSize);
-                if (styleVal(cs, "border-top-style") != "none")
-                    edges += resolveLength(styleVal(cs, "border-top-width"), mainAvailable, childFontSize);
-                if (styleVal(cs, "border-bottom-style") != "none")
-                    edges += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, childFontSize);
+                edges += resolveLength(styleVal(child, Prop::PaddingTop), mainAvailable, childFontSize) +
+                         resolveLength(styleVal(child, Prop::PaddingBottom), mainAvailable, childFontSize);
+                if (styleVal(child, Prop::BorderTopStyle) != "none")
+                    edges += resolveLength(styleVal(child, Prop::BorderTopWidth), mainAvailable, childFontSize);
+                if (styleVal(child, Prop::BorderBottomStyle) != "none")
+                    edges += resolveLength(styleVal(child, Prop::BorderBottomWidth), mainAvailable, childFontSize);
             }
             item.flexBasis += edges;
         }
@@ -286,33 +281,29 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // CSS Flexbox §4.5: min-width/min-height: auto on a flex item resolves to
         // the item's min-content size on the main axis (when overflow is visible),
         // so unbreakable content (long words) is not shrunk below its min-content.
-        const std::string& minMainProp = isRow ? "min-width" : "min-height";
-        const std::string& minMainVal = styleVal(cs, minMainProp);
+        const std::string& minMainVal =
+            styleVal(child, isRow ? Prop::MinWidth : Prop::MinHeight);
         bool minMainAuto = (minMainVal == "auto" || minMainVal.empty());
         if (isRow) {
             item.minMain = minMainAuto ? -1.0f : resolveDim(minMainVal, mainAvailable, childFontSize);
-            item.maxMain = resolveDim(styleVal(cs, "max-width"), mainAvailable, childFontSize);
+            item.maxMain = resolveDim(styleVal(child, Prop::MaxWidth), mainAvailable, childFontSize);
         } else {
             item.minMain = minMainAuto ? -1.0f : resolveDim(minMainVal, mainAvailable, childFontSize);
-            item.maxMain = resolveDim(styleVal(cs, "max-height"), mainAvailable, childFontSize);
+            item.maxMain = resolveDim(styleVal(child, Prop::MaxHeight), mainAvailable, childFontSize);
         }
         if (minMainAuto && isRow) {
             // §4.5: the automatic minimum resolves to 0 when the item is a scroll
             // container on the MAIN axis. For row flex that is the inline axis, so
             // check overflow-x (the `overflow` shorthand expands into it too);
             // reading the shorthand alone misses `overflow-x`/`overflow-y` longhands.
-            const std::string& overflow = styleVal(cs, "overflow-x");
+            const std::string& overflow = styleVal(child, Prop::OverflowX);
             if (overflow == "visible" || overflow.empty()) {
                 // Auto-min = min-content on the main axis (plus border/padding edges).
                 float minContent = computeMinContentWidth(item.node, metrics);
-                float ph = resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
-                           resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
-                float bh = 0;
-                const char* sides[] = {"left", "right"};
-                for (auto* s : sides) {
-                    if (styleVal(cs, std::string("border-") + s + "-style") != "none")
-                        bh += resolveLength(styleVal(cs, std::string("border-") + s + "-width"), mainAvailable, childFontSize);
-                }
+                float ph = resolveLength(styleVal(child, Prop::PaddingLeft), mainAvailable, childFontSize) +
+                           resolveLength(styleVal(child, Prop::PaddingRight), mainAvailable, childFontSize);
+                Edges bEdges = resolveBorders(item.node, mainAvailable, childFontSize);
+                float bh = bEdges.left + bEdges.right;
                 item.minMain = minContent + ph + bh;
                 // CSS Flexbox §4.5: the automatic minimum size is the smaller of
                 // the content size suggestion and the "specified size suggestion"
@@ -320,11 +311,11 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // flex-basis does NOT provide a specified size suggestion: an
                 // item with `flex: 0 0 240px` and wider content is still floored
                 // at its min-content size (Chromium behavior).
-                const std::string& wProp = styleVal(cs, "width");
+                const std::string& wProp = styleVal(child, Prop::Width);
                 if (!isIntrinsicSizingKeyword(wProp)) {
                     float specMain = resolveDim(wProp, mainAvailable, childFontSize);
                     if (specMain >= 0) {
-                        if (styleVal(cs, "box-sizing") != "border-box")
+                        if (styleVal(child, Prop::BoxSizing) != "border-box")
                             specMain += ph + bh;
                         if (item.minMain > specMain) item.minMain = specMain;
                     }
@@ -343,7 +334,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // scroll container are still allowed to shrink.) The main axis here is
             // the block axis, so check overflow-y (the `overflow` shorthand expands
             // into it too); reading the shorthand alone misses the longhand form.
-            const std::string& overflow = styleVal(cs, "overflow-y");
+            const std::string& overflow = styleVal(child, Prop::OverflowY);
             if (overflow == "visible" || overflow.empty())
                 item.colAutoMinPending = true;
         }
@@ -364,24 +355,24 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // padding+border so flex-grow distributes the content area proportionally.
             if (item.hypotheticalMain == 0 && !item.node->isTextNode()) {
                 auto& cs = item.node->computedStyle();
-                if (styleVal(cs, "box-sizing") == "border-box") {
-                    float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                if (styleVal(item.node, Prop::BoxSizing) == "border-box") {
+                    float childFontSize = resolveLength(styleVal(item.node, Prop::FontSize), fontSize, fontSize);
                     if (childFontSize <= 0) childFontSize = fontSize;
                     float edges = 0;
                     if (isRow) {
-                        edges += resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
-                                 resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
-                        if (styleVal(cs, "border-left-style") != "none")
-                            edges += resolveLength(styleVal(cs, "border-left-width"), mainAvailable, childFontSize);
-                        if (styleVal(cs, "border-right-style") != "none")
-                            edges += resolveLength(styleVal(cs, "border-right-width"), mainAvailable, childFontSize);
+                        edges += resolveLength(styleVal(item.node, Prop::PaddingLeft), mainAvailable, childFontSize) +
+                                 resolveLength(styleVal(item.node, Prop::PaddingRight), mainAvailable, childFontSize);
+                        if (styleVal(item.node, Prop::BorderLeftStyle) != "none")
+                            edges += resolveLength(styleVal(item.node, Prop::BorderLeftWidth), mainAvailable, childFontSize);
+                        if (styleVal(item.node, Prop::BorderRightStyle) != "none")
+                            edges += resolveLength(styleVal(item.node, Prop::BorderRightWidth), mainAvailable, childFontSize);
                     } else {
-                        edges += resolveLength(styleVal(cs, "padding-top"), mainAvailable, childFontSize) +
-                                 resolveLength(styleVal(cs, "padding-bottom"), mainAvailable, childFontSize);
-                        if (styleVal(cs, "border-top-style") != "none")
-                            edges += resolveLength(styleVal(cs, "border-top-width"), mainAvailable, childFontSize);
-                        if (styleVal(cs, "border-bottom-style") != "none")
-                            edges += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, childFontSize);
+                        edges += resolveLength(styleVal(item.node, Prop::PaddingTop), mainAvailable, childFontSize) +
+                                 resolveLength(styleVal(item.node, Prop::PaddingBottom), mainAvailable, childFontSize);
+                        if (styleVal(item.node, Prop::BorderTopStyle) != "none")
+                            edges += resolveLength(styleVal(item.node, Prop::BorderTopWidth), mainAvailable, childFontSize);
+                        if (styleVal(item.node, Prop::BorderBottomStyle) != "none")
+                            edges += resolveLength(styleVal(item.node, Prop::BorderBottomWidth), mainAvailable, childFontSize);
                     }
                     item.hypotheticalMain = edges;
                 }
@@ -394,16 +385,12 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 float intrinsic = computeMaxContentWidth(item.node, metrics);
                 // Add padding/border/margin edges
                 auto& cs = item.node->computedStyle();
-                float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                float childFontSize = resolveLength(styleVal(item.node, Prop::FontSize), fontSize, fontSize);
                 if (childFontSize <= 0) childFontSize = fontSize;
-                float ph = resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
-                           resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
-                float bh = 0;
-                const char* sides[] = {"left", "right"};
-                for (auto* s : sides) {
-                    if (styleVal(cs, std::string("border-") + s + "-style") != "none")
-                        bh += resolveLength(styleVal(cs, std::string("border-") + s + "-width"), mainAvailable, childFontSize);
-                }
+                float ph = resolveLength(styleVal(item.node, Prop::PaddingLeft), mainAvailable, childFontSize) +
+                           resolveLength(styleVal(item.node, Prop::PaddingRight), mainAvailable, childFontSize);
+                Edges bEdges = resolveBorders(item.node, mainAvailable, childFontSize);
+                float bh = bEdges.left + bEdges.right;
                 item.hypotheticalMain = intrinsic + ph + bh;
                 if (item.hypotheticalMain > mainAvailable)
                     item.hypotheticalMain = mainAvailable;
@@ -613,7 +600,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
 
             auto& cs = item->node->computedStyle();
-            float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+            float childFontSize = resolveLength(styleVal(item->node, Prop::FontSize), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;
 
             // Set the item's content size
@@ -632,18 +619,18 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // see beginLayoutNode.
                 float preStretchH = -1.0f;
                 {
-                    const std::string& itemHVal = styleVal(cs, "height");
+                    const std::string& itemHVal = styleVal(item->node, Prop::Height);
                     bool itemAutoH = (itemHVal == "auto" || itemHVal.empty());
-                    const std::string& selfAlign = styleVal(cs, "align-self");
+                    const std::string& selfAlign = styleVal(item->node, Prop::AlignSelf);
                     const std::string& effAlign =
                         (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign;
                     bool willStretch = itemAutoH &&
                         (effAlign == "stretch" || effAlign == "normal" || effAlign.empty());
                     // Container's resolved content height (cross axis).
-                    float specHc = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+                    float specHc = resolveDim(styleVal(node, Prop::Height), node->availableHeight, fontSize);
                     float containerCrossH = -1.0f;
                     if (specHc >= 0) {
-                        containerCrossH = (styleVal(style, "box-sizing") == "border-box")
+                        containerCrossH = (styleVal(node, Prop::BoxSizing) == "border-box")
                             ? specHc - paddingV - borderV : specHc;
                     } else if (node->box.contentRect.height > 0) {
                         containerCrossH = node->box.contentRect.height;
@@ -662,13 +649,13 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                             // (e.g. a CSS Grid with 1fr rows or a nested flex
                             // column) sees a definite height up front rather than
                             // collapsing to content size.
-                            float pad = resolveLength(styleVal(cs, "padding-top"), mainAvailable, childFontSize) +
-                                        resolveLength(styleVal(cs, "padding-bottom"), mainAvailable, childFontSize);
+                            float pad = resolveLength(styleVal(item->node, Prop::PaddingTop), mainAvailable, childFontSize) +
+                                        resolveLength(styleVal(item->node, Prop::PaddingBottom), mainAvailable, childFontSize);
                             float bor = 0;
-                            if (styleVal(cs, "border-top-style") != "none")
-                                bor += resolveLength(styleVal(cs, "border-top-width"), mainAvailable, childFontSize);
-                            if (styleVal(cs, "border-bottom-style") != "none")
-                                bor += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, childFontSize);
+                            if (styleVal(item->node, Prop::BorderTopStyle) != "none")
+                                bor += resolveLength(styleVal(item->node, Prop::BorderTopWidth), mainAvailable, childFontSize);
+                            if (styleVal(item->node, Prop::BorderBottomStyle) != "none")
+                                bor += resolveLength(styleVal(item->node, Prop::BorderBottomWidth), mainAvailable, childFontSize);
                             preStretchH = containerCrossH - pad - bor;
                         }
                     }
@@ -680,13 +667,13 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // rather than the item's specified style width (which flexing
                 // may have grown or shrunk away from).
                 {
-                    float ipadH = resolveLength(styleVal(cs, "padding-left"), mainAvailable, childFontSize) +
-                                  resolveLength(styleVal(cs, "padding-right"), mainAvailable, childFontSize);
+                    float ipadH = resolveLength(styleVal(item->node, Prop::PaddingLeft), mainAvailable, childFontSize) +
+                                  resolveLength(styleVal(item->node, Prop::PaddingRight), mainAvailable, childFontSize);
                     float iborH = 0;
-                    if (styleVal(cs, "border-left-style") != "none")
-                        iborH += resolveLength(styleVal(cs, "border-left-width"), mainAvailable, childFontSize);
-                    if (styleVal(cs, "border-right-style") != "none")
-                        iborH += resolveLength(styleVal(cs, "border-right-width"), mainAvailable, childFontSize);
+                    if (styleVal(item->node, Prop::BorderLeftStyle) != "none")
+                        iborH += resolveLength(styleVal(item->node, Prop::BorderLeftWidth), mainAvailable, childFontSize);
+                    if (styleVal(item->node, Prop::BorderRightStyle) != "none")
+                        iborH += resolveLength(styleVal(item->node, Prop::BorderRightWidth), mainAvailable, childFontSize);
                     float flexedContentW = contentWidth - ipadH - iborH;
                     if (flexedContentW < 0) flexedContentW = 0;
                     item->node->overrideContentWidth = flexedContentW;
@@ -731,15 +718,15 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // cross-axis alignment (align-items, vertical centering, etc.)
                 // when it's larger than the item's specified height.
                 auto& cs = item->node->computedStyle();
-                float ifs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                float ifs = resolveLength(styleVal(item->node, Prop::FontSize), fontSize, fontSize);
                 if (ifs <= 0) ifs = fontSize;
-                float padV = resolveLength(styleVal(cs, "padding-top"), mainAvailable, ifs) +
-                             resolveLength(styleVal(cs, "padding-bottom"), mainAvailable, ifs);
+                float padV = resolveLength(styleVal(item->node, Prop::PaddingTop), mainAvailable, ifs) +
+                             resolveLength(styleVal(item->node, Prop::PaddingBottom), mainAvailable, ifs);
                 float borV = 0;
-                if (styleVal(cs, "border-top-style") != "none")
-                    borV += resolveLength(styleVal(cs, "border-top-width"), mainAvailable, ifs);
-                if (styleVal(cs, "border-bottom-style") != "none")
-                    borV += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, ifs);
+                if (styleVal(item->node, Prop::BorderTopStyle) != "none")
+                    borV += resolveLength(styleVal(item->node, Prop::BorderTopWidth), mainAvailable, ifs);
+                if (styleVal(item->node, Prop::BorderBottomStyle) != "none")
+                    borV += resolveLength(styleVal(item->node, Prop::BorderBottomWidth), mainAvailable, ifs);
                 float grownContentH = item->finalMain - padV - borV;
                 if (grownContentH < 0) grownContentH = 0;
                 // Non-stretch cross alignment sizes an auto-width item to its
@@ -749,23 +736,23 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // the fitted box (center / flex-start / flex-end).
                 float itemAvailW = containerMain;
                 {
-                    const std::string& selfAlign = styleVal(cs, "align-self");
+                    const std::string& selfAlign = styleVal(item->node, Prop::AlignSelf);
                     const std::string& effAlign =
                         (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign;
                     bool stretches = (effAlign == "stretch" || effAlign == "normal" ||
                                       effAlign.empty());
-                    const std::string& wVal = styleVal(cs, "width");
+                    const std::string& wVal = styleVal(item->node, Prop::Width);
                     if (!stretches && (wVal.empty() || wVal == "auto")) {
                         float maxC = computeMaxContentWidth(item->node, metrics);
-                        float padH = resolveLength(styleVal(cs, "padding-left"), mainAvailable, ifs) +
-                                     resolveLength(styleVal(cs, "padding-right"), mainAvailable, ifs);
+                        float padH = resolveLength(styleVal(item->node, Prop::PaddingLeft), mainAvailable, ifs) +
+                                     resolveLength(styleVal(item->node, Prop::PaddingRight), mainAvailable, ifs);
                         float borH = 0;
-                        if (styleVal(cs, "border-left-style") != "none")
-                            borH += resolveLength(styleVal(cs, "border-left-width"), mainAvailable, ifs);
-                        if (styleVal(cs, "border-right-style") != "none")
-                            borH += resolveLength(styleVal(cs, "border-right-width"), mainAvailable, ifs);
-                        float marH = resolveLength(styleVal(cs, "margin-left"), mainAvailable, ifs) +
-                                     resolveLength(styleVal(cs, "margin-right"), mainAvailable, ifs);
+                        if (styleVal(item->node, Prop::BorderLeftStyle) != "none")
+                            borH += resolveLength(styleVal(item->node, Prop::BorderLeftWidth), mainAvailable, ifs);
+                        if (styleVal(item->node, Prop::BorderRightStyle) != "none")
+                            borH += resolveLength(styleVal(item->node, Prop::BorderRightWidth), mainAvailable, ifs);
+                        float marH = resolveLength(styleVal(item->node, Prop::MarginLeft), mainAvailable, ifs) +
+                                     resolveLength(styleVal(item->node, Prop::MarginRight), mainAvailable, ifs);
                         float fit = maxC + padH + borH + marH;
                         if (fit < itemAvailW) itemAvailW = fit;
                     }
@@ -816,9 +803,9 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Determine definite cross size
     float crossAvailable = -1;
     if (isRow) {
-        float specH = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+        float specH = resolveDim(styleVal(node, Prop::Height), node->availableHeight, fontSize);
         if (specH >= 0) {
-            if (styleVal(style, "box-sizing") == "border-box")
+            if (styleVal(node, Prop::BoxSizing) == "border-box")
                 crossAvailable = specH - paddingV - borderV;
             else
                 crossAvailable = specH;
@@ -907,11 +894,11 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (item->node->isTextNode()) continue;
             auto& cs = item->node->computedStyle();
             if (isRow) {
-                if (styleVal(cs, "margin-left") == "auto") autoMainMargins++;
-                if (styleVal(cs, "margin-right") == "auto") autoMainMargins++;
+                if (styleVal(item->node, Prop::MarginLeft) == "auto") autoMainMargins++;
+                if (styleVal(item->node, Prop::MarginRight) == "auto") autoMainMargins++;
             } else {
-                if (styleVal(cs, "margin-top") == "auto") autoMainMargins++;
-                if (styleVal(cs, "margin-bottom") == "auto") autoMainMargins++;
+                if (styleVal(item->node, Prop::MarginTop) == "auto") autoMainMargins++;
+                if (styleVal(item->node, Prop::MarginBottom) == "auto") autoMainMargins++;
             }
         }
 
@@ -922,14 +909,14 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 if (item->node->isTextNode()) continue;
                 auto& cs = item->node->computedStyle();
                 if (isRow) {
-                    if (styleVal(cs, "margin-left") == "auto")
+                    if (styleVal(item->node, Prop::MarginLeft) == "auto")
                         item->node->box.margin.left = perAutoMargin;
-                    if (styleVal(cs, "margin-right") == "auto")
+                    if (styleVal(item->node, Prop::MarginRight) == "auto")
                         item->node->box.margin.right = perAutoMargin;
                 } else {
-                    if (styleVal(cs, "margin-top") == "auto")
+                    if (styleVal(item->node, Prop::MarginTop) == "auto")
                         item->node->box.margin.top = perAutoMargin;
-                    if (styleVal(cs, "margin-bottom") == "auto")
+                    if (styleVal(item->node, Prop::MarginBottom) == "auto")
                         item->node->box.margin.bottom = perAutoMargin;
                 }
             }
@@ -975,16 +962,16 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             bool hasCrossAutoMargin = false;
             if (!item->node->isTextNode()) {
                 if (isRow) {
-                    hasCrossAutoMargin = (styleVal(cs, "margin-top") == "auto" ||
-                                          styleVal(cs, "margin-bottom") == "auto");
+                    hasCrossAutoMargin = (styleVal(item->node, Prop::MarginTop) == "auto" ||
+                                          styleVal(item->node, Prop::MarginBottom) == "auto");
                 } else {
-                    hasCrossAutoMargin = (styleVal(cs, "margin-left") == "auto" ||
-                                          styleVal(cs, "margin-right") == "auto");
+                    hasCrossAutoMargin = (styleVal(item->node, Prop::MarginLeft) == "auto" ||
+                                          styleVal(item->node, Prop::MarginRight) == "auto");
                 }
             }
 
             // Cross-axis alignment
-            const std::string& selfAlign = styleVal(cs, "align-self");
+            const std::string& selfAlign = styleVal(item->node, Prop::AlignSelf);
             // wrap-reverse flips per-item cross alignment too (flex-start ↔ flex-end).
             const std::string align = flipCrossAlign(
                 (selfAlign == "auto" || selfAlign.empty()) ? alignItems : selfAlign);
@@ -995,8 +982,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 float freeCross = line.crossSize - item->crossSize;
                 if (freeCross < 0) freeCross = 0;
                 if (isRow) {
-                    bool topAuto = (styleVal(cs, "margin-top") == "auto");
-                    bool bottomAuto = (styleVal(cs, "margin-bottom") == "auto");
+                    bool topAuto = (styleVal(item->node, Prop::MarginTop) == "auto");
+                    bool bottomAuto = (styleVal(item->node, Prop::MarginBottom) == "auto");
                     if (topAuto && bottomAuto) {
                         item->node->box.margin.top = freeCross / 2.0f;
                         item->node->box.margin.bottom = freeCross / 2.0f;
@@ -1006,8 +993,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         item->node->box.margin.bottom = freeCross;
                     }
                 } else {
-                    bool leftAuto = (styleVal(cs, "margin-left") == "auto");
-                    bool rightAuto = (styleVal(cs, "margin-right") == "auto");
+                    bool leftAuto = (styleVal(item->node, Prop::MarginLeft) == "auto");
+                    bool rightAuto = (styleVal(item->node, Prop::MarginRight) == "auto");
                     if (leftAuto && rightAuto) {
                         item->node->box.margin.left = freeCross / 2.0f;
                         item->node->box.margin.right = freeCross / 2.0f;
@@ -1033,7 +1020,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             } else if (align == "baseline" && isRow) {
                 // Baseline alignment: compute item baseline as distance from
                 // outer top edge to the first text baseline (font-size from content top)
-                float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                float childFontSize = resolveLength(styleVal(item->node, Prop::FontSize), fontSize, fontSize);
                 if (childFontSize <= 0) childFontSize = fontSize;
                 float itemBaseline = item->node->box.margin.top +
                     item->node->box.border.top + item->node->box.padding.top + childFontSize;
@@ -1042,10 +1029,10 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 float maxBaseline = 0;
                 for (auto* li : line.items) {
                     auto& lis = li->node->computedStyle();
-                    const std::string& liSelf = styleVal(lis, "align-self");
+                    const std::string& liSelf = styleVal(li->node, Prop::AlignSelf);
                     const std::string& liAlign = (liSelf == "auto" || liSelf.empty()) ? alignItems : liSelf;
                     if (liAlign == "baseline") {
-                        float lfs = resolveLength(styleVal(lis, "font-size"), fontSize, fontSize);
+                        float lfs = resolveLength(styleVal(li->node, Prop::FontSize), fontSize, fontSize);
                         if (lfs <= 0) lfs = fontSize;
                         float lb = li->node->box.margin.top +
                             li->node->box.border.top + li->node->box.padding.top + lfs;
@@ -1060,7 +1047,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             } else if (align == "stretch" || align == "normal") {
                 // Stretch to fill line cross size (only if no explicit cross dimension)
                 if (isRow) {
-                    const std::string& h = styleVal(cs, "height");
+                    const std::string& h = styleVal(item->node, Prop::Height);
                     if (h == "auto" || h.empty()) {
                         float stretchCross = line.crossSize -
                             item->node->box.margin.top - item->node->box.margin.bottom -
@@ -1069,7 +1056,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         if (stretchCross > 0) item->node->box.contentRect.height = stretchCross;
                     }
                 } else {
-                    const std::string& w = styleVal(cs, "width");
+                    const std::string& w = styleVal(item->node, Prop::Width);
                     if (w == "auto" || w.empty()) {
                         float stretchCross = line.crossSize -
                             item->node->box.margin.left - item->node->box.margin.right -
@@ -1110,14 +1097,14 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
 
             // Apply position: relative offset
-            const std::string& childPos = styleVal(cs, "position");
+            const std::string& childPos = styleVal(item->node, Prop::Position);
             if (childPos == "relative" || childPos == "sticky") {
-                float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                float childFontSize = resolveLength(styleVal(item->node, Prop::FontSize), fontSize, fontSize);
                 if (childFontSize <= 0) childFontSize = fontSize;
-                const std::string& topVal = styleVal(cs, "top");
-                const std::string& leftVal = styleVal(cs, "left");
-                const std::string& bottomVal = styleVal(cs, "bottom");
-                const std::string& rightVal = styleVal(cs, "right");
+                const std::string& topVal = styleVal(item->node, Prop::Top);
+                const std::string& leftVal = styleVal(item->node, Prop::Left);
+                const std::string& bottomVal = styleVal(item->node, Prop::Bottom);
+                const std::string& rightVal = styleVal(item->node, Prop::Right);
 
                 if (topVal != "auto" && !topVal.empty()) {
                     item->node->box.contentRect.y += resolveLength(topVal, 0, childFontSize);
@@ -1139,9 +1126,9 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Set container dimensions
     node->box.contentRect.width = containerMain;
 
-    float specH = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+    float specH = resolveDim(styleVal(node, Prop::Height), node->availableHeight, fontSize);
     if (specH >= 0) {
-        if (styleVal(style, "box-sizing") == "border-box")
+        if (styleVal(node, Prop::BoxSizing) == "border-box")
             node->box.contentRect.height = specH - paddingV - borderV;
         else
             node->box.contentRect.height = specH;
@@ -1172,8 +1159,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     auto pctAgainstIndefiniteH = [&](const std::string& v) {
         return node->availableHeight <= 0.0f && !v.empty() && v.back() == '%';
     };
-    const std::string& minHVal = styleVal(style, "min-height");
-    const std::string& maxHVal = styleVal(style, "max-height");
+    const std::string& minHVal = styleVal(node, Prop::MinHeight);
+    const std::string& maxHVal = styleVal(node, Prop::MaxHeight);
     float minH = pctAgainstIndefiniteH(minHVal) ? -1.0f
                  : resolveDim(minHVal, node->availableHeight, fontSize);
     float maxH = pctAgainstIndefiniteH(maxHVal) ? -1.0f

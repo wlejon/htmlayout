@@ -7,6 +7,7 @@
 #include "layout/table.h"
 #include "layout/grid.h"
 #include "layout/style_util.h"
+#include "layout/style_cache.h"
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -348,10 +349,10 @@ static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
     {
         float iw = 0, ih = 0;
         if (node->intrinsicSize(iw, ih, 0.0f)) {
-            const std::string& wVal = styleVal(node->computedStyle(), "width");
+            const std::string& wVal = styleVal(node, Prop::Width);
             if (wVal.empty() || wVal == "auto") return iw;
             if (wVal.find('%') != std::string::npos) return 0.0f;
-            float fs = resolveLength(styleVal(node->computedStyle(), "font-size"), 16.0f, 16.0f);
+            float fs = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
             if (fs <= 0.0f) fs = 16.0f;
             return resolveLength(wVal, 0.0f, fs);
         }
@@ -364,7 +365,7 @@ static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
     // report the widest single cell instead of the column sum. Run the real
     // column algorithm (CSS2 §17.5.2.2) instead.
     {
-        const std::string& d = styleVal(style, "display");
+        const std::string& d = styleVal(node, Prop::Display);
         if (d == "table" || d == "inline-table") {
             float minW = 0, maxW = 0;
             computeTableIntrinsicWidths(node, metrics, minW, maxW);
@@ -372,18 +373,18 @@ static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
         }
     }
 
-    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
     if (fontSize <= 0.0f) fontSize = 16.0f;
-    const std::string& fontFamily = styleVal(style, "font-family");
-    const std::string& fontWeight = styleVal(style, "font-weight");
+    const std::string& fontFamily = styleVal(node, Prop::FontFamily);
+    const std::string& fontWeight = styleVal(node, Prop::FontWeight);
     // letter-spacing inflates per-char width; the inline layout in text.cpp
     // adds it once per character, so intrinsic measurement must match or
     // parents grant too little width and force unwanted wraps.
-    float letterSpacing = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
+    float letterSpacing = resolveLength(styleVal(node, Prop::LetterSpacing), 0, fontSize);
 
     float maxChildMin = 0.0f;
 
-    const std::string& displayMin = styleVal(style, "display");
+    const std::string& displayMin = styleVal(node, Prop::Display);
     bool isFlexContainerMin = (displayMin == "flex" || displayMin == "inline-flex");
 
     for (auto* child : getLayoutChildren(node)) {
@@ -421,65 +422,65 @@ static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
             maxChildMin = std::max(maxChildMin, widestWord);
         } else {
             auto& cs = child->computedStyle();
-            if (styleVal(cs, "display") == "none") continue;
+            if (styleVal(child, Prop::Display) == "none") continue;
             // Out-of-flow children contribute nothing to intrinsic sizes.
-            const std::string& cpos = styleVal(cs, "position");
+            const std::string& cpos = styleVal(child, Prop::Position);
             if (cpos == "absolute" || cpos == "fixed") continue;
-            float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+            float childFontSize = resolveLength(styleVal(child, Prop::FontSize), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;
-            float ph = resolveLength(styleVal(cs, "padding-left"), 0, childFontSize) +
-                       resolveLength(styleVal(cs, "padding-right"), 0, childFontSize);
+            float ph = resolveLength(styleVal(child, Prop::PaddingLeft), 0, childFontSize) +
+                       resolveLength(styleVal(child, Prop::PaddingRight), 0, childFontSize);
             // Border widths only count when the side has a style (a styleless
             // border's used width is 0 even though the computed width is
             // "medium" = 3px).
             float bh = 0;
-            if (styleVal(cs, "border-left-style") != "none")
-                bh += resolveLength(styleVal(cs, "border-left-width"), 0, childFontSize);
-            if (styleVal(cs, "border-right-style") != "none")
-                bh += resolveLength(styleVal(cs, "border-right-width"), 0, childFontSize);
+            if (styleVal(child, Prop::BorderLeftStyle) != "none")
+                bh += resolveLength(styleVal(child, Prop::BorderLeftWidth), 0, childFontSize);
+            if (styleVal(child, Prop::BorderRightStyle) != "none")
+                bh += resolveLength(styleVal(child, Prop::BorderRightWidth), 0, childFontSize);
             // A border-collapse table's used border is zero: the collapsed
             // edge half-borders live inside its content width (they're part
             // of computeTableIntrinsicWidths' result), so adding the computed
             // border widths on top would double-count them.
             {
-                const std::string& cd = styleVal(cs, "display");
+                const std::string& cd = styleVal(child, Prop::Display);
                 if ((cd == "table" || cd == "inline-table") &&
-                    styleVal(cs, "border-collapse") == "collapse") {
+                    styleVal(child, Prop::BorderCollapse) == "collapse") {
                     bh = 0;
                 }
             }
-            float mh = resolveLength(styleVal(cs, "margin-left"), 0, childFontSize) +
-                       resolveLength(styleVal(cs, "margin-right"), 0, childFontSize);
+            float mh = resolveLength(styleVal(child, Prop::MarginLeft), 0, childFontSize) +
+                       resolveLength(styleVal(child, Prop::MarginRight), 0, childFontSize);
             // A child with a definite (non-percentage) width contributes that
             // width, not its content's min-content — same rule as the
             // max-content path below. Percentages can't be resolved against an
             // intrinsic size, so they fall back to the content measurement.
-            const std::string& wVal = styleVal(cs, "width");
+            const std::string& wVal = styleVal(child, Prop::Width);
             bool definiteW = !wVal.empty() && wVal != "auto" &&
                              wVal.find('%') == std::string::npos &&
                              !isIntrinsicSizingKeyword(wVal);
             float childMin;
             if (definiteW) {
                 float w = resolveLength(wVal, 0, childFontSize);
-                childMin = (styleVal(cs, "box-sizing") == "border-box")
+                childMin = (styleVal(child, Prop::BoxSizing) == "border-box")
                     ? w + mh : w + ph + bh + mh;
             } else {
                 childMin = computeMinContentWidth(child, metrics) + ph + bh + mh;
             }
             // Definite min-width floors the contribution; max-width caps it.
-            const std::string& minWVal = styleVal(cs, "min-width");
+            const std::string& minWVal = styleVal(child, Prop::MinWidth);
             if (!minWVal.empty() && minWVal != "auto" &&
                 minWVal.find('%') == std::string::npos) {
                 float v = resolveLength(minWVal, 0, childFontSize);
-                float t = (styleVal(cs, "box-sizing") == "border-box")
+                float t = (styleVal(child, Prop::BoxSizing) == "border-box")
                     ? v + mh : v + ph + bh + mh;
                 if (childMin < t) childMin = t;
             }
-            const std::string& maxWVal = styleVal(cs, "max-width");
+            const std::string& maxWVal = styleVal(child, Prop::MaxWidth);
             if (!maxWVal.empty() && maxWVal != "none" &&
                 maxWVal.find('%') == std::string::npos) {
                 float v = resolveLength(maxWVal, 0, childFontSize);
-                float t = (styleVal(cs, "box-sizing") == "border-box")
+                float t = (styleVal(child, Prop::BoxSizing) == "border-box")
                     ? v + mh : v + ph + bh + mh;
                 if (childMin > t) childMin = t;
             }
@@ -497,10 +498,10 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
     {
         float iw = 0, ih = 0;
         if (node->intrinsicSize(iw, ih, 0.0f)) {
-            const std::string& wVal = styleVal(node->computedStyle(), "width");
+            const std::string& wVal = styleVal(node, Prop::Width);
             if (wVal.empty() || wVal == "auto") return iw;
             if (wVal.find('%') != std::string::npos) return 0.0f;
-            float fs = resolveLength(styleVal(node->computedStyle(), "font-size"), 16.0f, 16.0f);
+            float fs = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
             if (fs <= 0.0f) fs = 16.0f;
             return resolveLength(wVal, 0.0f, fs);
         }
@@ -510,7 +511,7 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
 
     // Tables size by columns — see the matching note in computeMinContentWidth.
     {
-        const std::string& d = styleVal(style, "display");
+        const std::string& d = styleVal(node, Prop::Display);
         if (d == "table" || d == "inline-table") {
             float minW = 0, maxW = 0;
             computeTableIntrinsicWidths(node, metrics, minW, maxW);
@@ -524,18 +525,18 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
         }
     }
 
-    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
     if (fontSize <= 0.0f) fontSize = 16.0f;
-    const std::string& fontFamily = styleVal(style, "font-family");
-    const std::string& fontWeight = styleVal(style, "font-weight");
+    const std::string& fontFamily = styleVal(node, Prop::FontFamily);
+    const std::string& fontWeight = styleVal(node, Prop::FontWeight);
     // letter-spacing / word-spacing inflate the laid-out width; intrinsic
     // measurement must match what text.cpp will produce or callers wrap.
-    float letterSpacing = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
-    float wordSpacing   = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
+    float letterSpacing = resolveLength(styleVal(node, Prop::LetterSpacing), 0, fontSize);
+    float wordSpacing   = resolveLength(styleVal(node, Prop::WordSpacing), 0, fontSize);
 
     // Determine if this container lays out children horizontally (sum) vs vertically (max)
-    const std::string& display = styleVal(style, "display");
-    const std::string& flexDir = styleVal(style, "flex-direction");
+    const std::string& display = styleVal(node, Prop::Display);
+    const std::string& flexDir = styleVal(node, Prop::FlexDirection);
     bool isHorizontal = (display == "flex" || display == "inline-flex") &&
                         (flexDir.empty() || flexDir == "row" || flexDir == "row-reverse");
     bool isFlexContainer = (display == "flex" || display == "inline-flex");
@@ -570,7 +571,7 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
         + letterSpacing + wordSpacing;
     float pendingSpace = 0.0f;
     bool prevInlineContent = false;
-    const std::string& wsModeOuter = styleVal(style, "white-space");
+    const std::string& wsModeOuter = styleVal(node, Prop::WhiteSpace);
     bool collapsingWs = wsModeOuter.empty() || wsModeOuter == "normal" ||
                         wsModeOuter == "nowrap" || wsModeOuter == "pre-line";
 
@@ -591,9 +592,9 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
             // string measurement, so max-content must be reconstructed the same
             // way or a cell sized to it wraps its own text (see block.cpp's
             // word-mode item construction / measureWordModeIntrinsics).
-            const std::string& wsMode = styleVal(style, "white-space");
-            const std::string& oWrap  = styleVal(style, "overflow-wrap");
-            const std::string& wBreak = styleVal(style, "word-break");
+            const std::string& wsMode = styleVal(node, Prop::WhiteSpace);
+            const std::string& oWrap  = styleVal(node, Prop::OverflowWrap);
+            const std::string& wBreak = styleVal(node, Prop::WordBreak);
             bool wordMode = (wsMode.empty() || wsMode == "normal") &&
                             !(oWrap == "break-word" || oWrap == "anywhere" ||
                               wBreak == "break-all");
@@ -602,7 +603,7 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
                 float mn, mx;
                 measureWordModeIntrinsics(std::string(text), fontFamily,
                     fontSize, fontWeight, letterSpacing, wordSpacing,
-                    styleVal(style, "text-transform"), metrics, mn, mx);
+                    styleVal(node, Prop::TextTransform), metrics, mn, mx);
                 w = mx;
             } else {
                 // nowrap / pre*: the line is a single whole-string measurement,
@@ -625,7 +626,7 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
                 }
                 // Match the painted glyphs: intrinsic width must use the
                 // text-transformed string, same as breakTextIntoRuns does.
-                collapsed = applyTextTransform(collapsed, styleVal(style, "text-transform"));
+                collapsed = applyTextTransform(collapsed, styleVal(node, Prop::TextTransform));
                 w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
                 if (letterSpacing != 0 && collapsed.size() > 1)
                     w += letterSpacing * static_cast<float>(collapsed.size() - 1);
@@ -640,46 +641,46 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
             ++inflowCount;   // text runs are inline-level
         } else {
             auto& cs = child->computedStyle();
-            if (styleVal(cs, "display") == "none") continue;
+            if (styleVal(child, Prop::Display) == "none") continue;
             // Out-of-flow children contribute nothing to intrinsic sizes.
-            const std::string& cpos = styleVal(cs, "position");
+            const std::string& cpos = styleVal(child, Prop::Position);
             if (cpos == "absolute" || cpos == "fixed") continue;
             {
-                const std::string& cdisp = styleVal(cs, "display");
+                const std::string& cdisp = styleVal(child, Prop::Display);
                 bool inlineLevel = cdisp == "inline" || cdisp == "inline-block" ||
                                    cdisp == "inline-flex" || cdisp == "inline-grid" ||
                                    cdisp == "inline-table";
                 if (!inlineLevel) allInline = false;
                 ++inflowCount;
             }
-            float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+            float childFontSize = resolveLength(styleVal(child, Prop::FontSize), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;
-            float ph = resolveLength(styleVal(cs, "padding-left"), 0, childFontSize) +
-                       resolveLength(styleVal(cs, "padding-right"), 0, childFontSize);
+            float ph = resolveLength(styleVal(child, Prop::PaddingLeft), 0, childFontSize) +
+                       resolveLength(styleVal(child, Prop::PaddingRight), 0, childFontSize);
             // Styleless borders have used width 0 (computed "medium" = 3px
             // must not inflate the contribution).
             float bh = 0;
-            if (styleVal(cs, "border-left-style") != "none")
-                bh += resolveLength(styleVal(cs, "border-left-width"), 0, childFontSize);
-            if (styleVal(cs, "border-right-style") != "none")
-                bh += resolveLength(styleVal(cs, "border-right-width"), 0, childFontSize);
+            if (styleVal(child, Prop::BorderLeftStyle) != "none")
+                bh += resolveLength(styleVal(child, Prop::BorderLeftWidth), 0, childFontSize);
+            if (styleVal(child, Prop::BorderRightStyle) != "none")
+                bh += resolveLength(styleVal(child, Prop::BorderRightWidth), 0, childFontSize);
             // A border-collapse table's used border is zero — see the
             // matching note in computeMinContentWidth.
             {
-                const std::string& cd = styleVal(cs, "display");
+                const std::string& cd = styleVal(child, Prop::Display);
                 if ((cd == "table" || cd == "inline-table") &&
-                    styleVal(cs, "border-collapse") == "collapse") {
+                    styleVal(child, Prop::BorderCollapse) == "collapse") {
                     bh = 0;
                 }
             }
-            float mh = resolveLength(styleVal(cs, "margin-left"), 0, childFontSize) +
-                       resolveLength(styleVal(cs, "margin-right"), 0, childFontSize);
+            float mh = resolveLength(styleVal(child, Prop::MarginLeft), 0, childFontSize) +
+                       resolveLength(styleVal(child, Prop::MarginRight), 0, childFontSize);
             // Use explicit width if set, otherwise recurse for intrinsic size
-            const std::string& wVal = styleVal(cs, "width");
+            const std::string& wVal = styleVal(child, Prop::Width);
             float childMax;
             if (!wVal.empty() && wVal != "auto") {
                 float w = resolveLength(wVal, 0, childFontSize);
-                if (styleVal(cs, "box-sizing") == "border-box")
+                if (styleVal(child, Prop::BoxSizing) == "border-box")
                     childMax = w + mh;
                 else
                     childMax = w + ph + bh + mh;
@@ -687,10 +688,10 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
                 childMax = computeMaxContentWidth(child, metrics) + ph + bh + mh;
             }
             // Apply min-width (specifies minimum content width)
-            const std::string& minWVal = styleVal(cs, "min-width");
+            const std::string& minWVal = styleVal(child, Prop::MinWidth);
             if (!minWVal.empty() && minWVal != "auto") {
                 float minW = resolveLength(minWVal, 0, childFontSize);
-                float minTotal = (styleVal(cs, "box-sizing") == "border-box")
+                float minTotal = (styleVal(child, Prop::BoxSizing) == "border-box")
                     ? minW + mh : minW + ph + bh + mh;
                 if (childMax < minTotal) childMax = minTotal;
             }
@@ -705,13 +706,13 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
     // Block/flex-column: children stack, so use the widest.
     if (isHorizontal) {
         // Add gaps between children
-        float gap = resolveLength(styleVal(style, "column-gap"), 0, fontSize);
+        float gap = resolveLength(styleVal(node, Prop::ColumnGap), 0, fontSize);
         int childCount = 0;
         for (auto* child : getLayoutChildren(node)) {
             if (!child->isTextNode()) {
                 auto& cs = child->computedStyle();
-                if (styleVal(cs, "display") == "none") continue;
-                const std::string& cpos = styleVal(cs, "position");
+                if (styleVal(child, Prop::Display) == "none") continue;
+                const std::string& cpos = styleVal(child, Prop::Position);
                 if (cpos == "absolute" || cpos == "fixed") continue;
                 childCount++;
             } else if (!isFlexContainer || !isWhitespaceOnly(child->textContent())) {
@@ -819,23 +820,38 @@ float resolveLength(const std::string& value, float referenceSize, float fontSiz
     return resolveSingleLength(value, referenceSize, fontSize);
 }
 
-Edges resolveEdges(const css::ComputedStyle& style,
-                   const std::string& prefix,
-                   float referenceWidth,
-                   float fontSize) {
+Edges resolveEdges(const LayoutNode* node, const EdgeProps& props,
+                   float referenceWidth, float fontSize) {
     Edges e;
-    e.top = resolveLength(styleVal(style, prefix + "-top"), referenceWidth, fontSize);
-    e.right = resolveLength(styleVal(style, prefix + "-right"), referenceWidth, fontSize);
-    e.bottom = resolveLength(styleVal(style, prefix + "-bottom"), referenceWidth, fontSize);
-    e.left = resolveLength(styleVal(style, prefix + "-left"), referenceWidth, fontSize);
+    e.top = resolveLength(styleVal(node, props.top), referenceWidth, fontSize);
+    e.right = resolveLength(styleVal(node, props.right), referenceWidth, fontSize);
+    e.bottom = resolveLength(styleVal(node, props.bottom), referenceWidth, fontSize);
+    e.left = resolveLength(styleVal(node, props.left), referenceWidth, fontSize);
+    return e;
+}
+
+Edges resolveBorders(const LayoutNode* node, float referenceWidth, float fontSize) {
+    // CSS2 §8.5.3: border-width is ignored unless border-style is set, and the
+    // initial style is `none`. So a box with `border-width: 4px` and no style has
+    // no border at all.
+    static constexpr EdgeProps kStyle{Prop::BorderTopStyle, Prop::BorderRightStyle,
+                                      Prop::BorderBottomStyle, Prop::BorderLeftStyle};
+    static constexpr EdgeProps kWidth{Prop::BorderTopWidth, Prop::BorderRightWidth,
+                                      Prop::BorderBottomWidth, Prop::BorderLeftWidth};
+    Edges e;
+    const Prop styleProps[4] = {kStyle.top, kStyle.right, kStyle.bottom, kStyle.left};
+    const Prop widthProps[4] = {kWidth.top, kWidth.right, kWidth.bottom, kWidth.left};
+    float* out[4] = {&e.top, &e.right, &e.bottom, &e.left};
+    for (int i = 0; i < 4; i++)
+        if (styleVal(node, styleProps[i]) != "none")
+            *out[i] = resolveLength(styleVal(node, widthProps[i]), referenceWidth, fontSize);
     return e;
 }
 
 // Parse contain property to check for specific containment types.
-static bool hasContainment(const css::ComputedStyle& style, const std::string& type) {
-    auto it = style.find("contain");
-    if (it == style.end() || it->second == "none") return false;
-    const std::string& val = it->second;
+static bool hasContainment(const LayoutNode* node, const std::string& type) {
+    const std::string& val = styleVal(node, Prop::Contain);
+    if (val.empty() || val == "none") return false;
     if (val == "strict") return true; // strict = size layout paint style
     if (val == "content") return type != "size"; // content = layout paint style
     return val.find(type) != std::string::npos;
@@ -884,6 +900,15 @@ bool beginLayoutNode(LayoutNode* node, float availableWidth) {
     else                                                           layoutStatsMut().reuseFailOverride++;
     layoutStatsMut().laidOut++;
     claimLayoutNode(node, availableWidth);
+    // This node is about to be laid out, which means its style is about to be read
+    // a couple of hundred times. That is the only condition under which projecting
+    // it into a flat array pays for itself: the projection costs one hash per
+    // property the node holds, so a node that is merely *glanced* at — the
+    // hit-bounds walk asks every node in the tree for `overflow` and `position`,
+    // laid out or not — would pay to build a cache it then reads five times.
+    // Building on first read instead of here made a single-leaf reflow 46% slower
+    // for exactly that reason. Everyone else reads the live map; see styleVal.
+    buildStyleCache(node);
     return true;
 }
 
@@ -936,7 +961,7 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 // layoutNode() above owns the incremental bookkeeping and calls this.
 static void layoutNodeInner(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     auto& style = node->computedStyle();
-    const std::string& display = styleVal(style, "display");
+    const std::string& display = styleVal(node, Prop::Display);
 
     if (display == "none") {
         // Hidden — zero-size box, skip children. Stays clean: it will be reused
@@ -948,16 +973,16 @@ static void layoutNodeInner(LayoutNode* node, float availableWidth, TextMetrics&
 
     // CSS Containment L2: content-visibility: hidden acts like display:none
     // but preserves the element's box (it still occupies space per explicit size).
-    const std::string& contentVis = styleVal(style, "content-visibility");
+    const std::string& contentVis = styleVal(node, Prop::ContentVisibility);
     if (contentVis == "hidden") {
         // Skip layout of children but keep the element's own box.
         // Use explicit size if set, otherwise 0.
-        float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+        float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
         if (fontSize <= 0.0f) fontSize = 16.0f;
-        node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
-        node->box.padding = resolveEdges(style, "padding", availableWidth, fontSize);
-        float specW = resolveLength(styleVal(style, "width"), availableWidth, fontSize);
-        float specH = resolveLength(styleVal(style, "height"), 0, fontSize);
+        node->box.margin = resolveEdges(node, kMarginProps, availableWidth, fontSize);
+        node->box.padding = resolveEdges(node, kPaddingProps, availableWidth, fontSize);
+        float specW = resolveLength(styleVal(node, Prop::Width), availableWidth, fontSize);
+        float specH = resolveLength(styleVal(node, Prop::Height), 0, fontSize);
         node->box.contentRect.width = (specW > 0) ? specW : 0;
         node->box.contentRect.height = (specH > 0) ? specH : 0;
         return;
@@ -978,11 +1003,11 @@ static void layoutNodeInner(LayoutNode* node, float availableWidth, TextMetrics&
 
     // CSS Containment L2: contain: size — override content-based sizing
     // with explicit dimensions only. If no explicit size, use 0.
-    if (hasContainment(style, "size")) {
-        float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    if (hasContainment(node, "size")) {
+        float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
         if (fontSize <= 0.0f) fontSize = 16.0f;
-        const std::string& wVal = styleVal(style, "width");
-        const std::string& hVal = styleVal(style, "height");
+        const std::string& wVal = styleVal(node, Prop::Width);
+        const std::string& hVal = styleVal(node, Prop::Height);
         if (wVal == "auto" || wVal.empty()) {
             // size containment with auto width: content width is already set by layout,
             // but for true size containment it should be 0 unless explicit
@@ -1014,16 +1039,16 @@ std::optional<float> resolveDimAbs(const std::string& value, float available, fl
 // or has contain: layout/paint.
 bool isContainingBlock(LayoutNode* node) {
     auto& style = node->computedStyle();
-    const std::string& pos = styleVal(style, "position");
+    const std::string& pos = styleVal(node, Prop::Position);
     if (pos == "relative" || pos == "absolute" || pos == "fixed" || pos == "sticky")
         return true;
     // transform, filter, and perspective also create containing blocks
-    const std::string& transform = styleVal(style, "transform");
+    const std::string& transform = styleVal(node, Prop::Transform);
     if (!transform.empty() && transform != "none") return true;
-    const std::string& filter = styleVal(style, "filter");
+    const std::string& filter = styleVal(node, Prop::Filter);
     if (!filter.empty() && filter != "none") return true;
     // CSS Containment L2: contain: layout or contain: paint creates a containing block
-    if (hasContainment(style, "layout") || hasContainment(style, "paint"))
+    if (hasContainment(node, "layout") || hasContainment(node, "paint"))
         return true;
     return false;
 }
@@ -1057,19 +1082,19 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
                          float domParentOffsetX, float domParentOffsetY,
                          float viewportHeight, TextMetrics& metrics) {
     auto& childStyle = child->computedStyle();
-    float fontSize = resolveLength(styleVal(childStyle, "font-size"), 16.0f, 16.0f);
+    float fontSize = resolveLength(styleVal(child, Prop::FontSize), 16.0f, 16.0f);
     if (fontSize <= 0.0f) fontSize = 16.0f;
 
     // Set available height for the child's own percentage resolution
     child->availableHeight = cbHeight;
 
     // Resolve offsets and explicit dimensions
-    std::optional<float> left = resolveDimAbs(styleVal(childStyle, "left"), cbWidth, fontSize);
-    std::optional<float> right = resolveDimAbs(styleVal(childStyle, "right"), cbWidth, fontSize);
-    std::optional<float> specW = resolveDimAbs(styleVal(childStyle, "width"), cbWidth, fontSize);
-    std::optional<float> top = resolveDimAbs(styleVal(childStyle, "top"), cbHeight, fontSize);
-    std::optional<float> bottom = resolveDimAbs(styleVal(childStyle, "bottom"), cbHeight, fontSize);
-    std::optional<float> specH = resolveDimAbs(styleVal(childStyle, "height"), cbHeight, fontSize);
+    std::optional<float> left = resolveDimAbs(styleVal(child, Prop::Left), cbWidth, fontSize);
+    std::optional<float> right = resolveDimAbs(styleVal(child, Prop::Right), cbWidth, fontSize);
+    std::optional<float> specW = resolveDimAbs(styleVal(child, Prop::Width), cbWidth, fontSize);
+    std::optional<float> top = resolveDimAbs(styleVal(child, Prop::Top), cbHeight, fontSize);
+    std::optional<float> bottom = resolveDimAbs(styleVal(child, Prop::Bottom), cbHeight, fontSize);
+    std::optional<float> specH = resolveDimAbs(styleVal(child, Prop::Height), cbHeight, fontSize);
 
     // Determine available width for layout
     // Shrink-wrap if width:auto and not both left+right set
@@ -1090,8 +1115,8 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     // containing-block width, not the raw cbWidth.
     float layoutW = cbWidth;
     if (stretchW) {
-        float mh = resolveLength(styleVal(childStyle, "margin-left"), cbWidth, fontSize) +
-                   resolveLength(styleVal(childStyle, "margin-right"), cbWidth, fontSize);
+        float mh = resolveLength(styleVal(child, Prop::MarginLeft), cbWidth, fontSize) +
+                   resolveLength(styleVal(child, Prop::MarginRight), cbWidth, fontSize);
         // layoutNode treats layoutW as the parent content width including
         // padding+border for this child; subtract only the margins here.
         float w = cbWidth - *left - *right - mh;
@@ -1099,17 +1124,12 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     } else if (shrinkWrap) {
         float maxCW = computeMaxContentWidth(child, metrics);
         if (maxCW > cbWidth) maxCW = cbWidth;
-        float ph = resolveLength(styleVal(childStyle, "padding-left"), cbWidth, fontSize) +
-                   resolveLength(styleVal(childStyle, "padding-right"), cbWidth, fontSize);
-        float bh = 0.0f;
-        for (const char* side : {"left", "right"}) {
-            std::string ss = std::string("border-") + side + "-style";
-            std::string sw = std::string("border-") + side + "-width";
-            if (styleVal(childStyle, ss) != "none")
-                bh += resolveLength(styleVal(childStyle, sw), cbWidth, fontSize);
-        }
-        float mh = resolveLength(styleVal(childStyle, "margin-left"), cbWidth, fontSize) +
-                   resolveLength(styleVal(childStyle, "margin-right"), cbWidth, fontSize);
+        float ph = resolveLength(styleVal(child, Prop::PaddingLeft), cbWidth, fontSize) +
+                   resolveLength(styleVal(child, Prop::PaddingRight), cbWidth, fontSize);
+        Edges bEdges = resolveBorders(child, cbWidth, fontSize);
+        float bh = bEdges.left + bEdges.right;
+        float mh = resolveLength(styleVal(child, Prop::MarginLeft), cbWidth, fontSize) +
+                   resolveLength(styleVal(child, Prop::MarginRight), cbWidth, fontSize);
         layoutW = maxCW + ph + bh + mh;
     }
 
@@ -1126,14 +1146,14 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     if (beginLayoutNode(child, layoutW)) {
         // Pre-computed stretched height: see above.
         if (stretchH) {
-            float marginTop = resolveLength(styleVal(childStyle, "margin-top"), cbHeight, fontSize);
-            float marginBottom = resolveLength(styleVal(childStyle, "margin-bottom"), cbHeight, fontSize);
-            float padTop = resolveLength(styleVal(childStyle, "padding-top"), cbHeight, fontSize);
-            float padBottom = resolveLength(styleVal(childStyle, "padding-bottom"), cbHeight, fontSize);
-            float borTop = (styleVal(childStyle, "border-top-style") != "none")
-                ? resolveLength(styleVal(childStyle, "border-top-width"), cbHeight, fontSize) : 0.0f;
-            float borBottom = (styleVal(childStyle, "border-bottom-style") != "none")
-                ? resolveLength(styleVal(childStyle, "border-bottom-width"), cbHeight, fontSize) : 0.0f;
+            float marginTop = resolveLength(styleVal(child, Prop::MarginTop), cbHeight, fontSize);
+            float marginBottom = resolveLength(styleVal(child, Prop::MarginBottom), cbHeight, fontSize);
+            float padTop = resolveLength(styleVal(child, Prop::PaddingTop), cbHeight, fontSize);
+            float padBottom = resolveLength(styleVal(child, Prop::PaddingBottom), cbHeight, fontSize);
+            float borTop = (styleVal(child, Prop::BorderTopStyle) != "none")
+                ? resolveLength(styleVal(child, Prop::BorderTopWidth), cbHeight, fontSize) : 0.0f;
+            float borBottom = (styleVal(child, Prop::BorderBottomStyle) != "none")
+                ? resolveLength(styleVal(child, Prop::BorderBottomWidth), cbHeight, fontSize) : 0.0f;
             float h = cbHeight - *top - *bottom - marginTop - marginBottom -
                       padTop - padBottom - borTop - borBottom;
             if (h > 0) child->box.contentRect.height = h;
@@ -1223,10 +1243,10 @@ bool layoutAbsoluteElementsRecursive(LayoutNode* node, const Viewport& viewport,
         if (!child || child->isTextNode()) continue;
 
         auto& style = child->computedStyle();
-        const std::string& display = styleVal(style, "display");
+        const std::string& display = styleVal(child, Prop::Display);
         if (display == "none") continue;
 
-        const std::string& pos = styleVal(style, "position");
+        const std::string& pos = styleVal(child, Prop::Position);
 
         if (pos == "fixed") {
             // Fixed: containing block is the viewport

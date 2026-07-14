@@ -8,6 +8,6 @@ namespace htmlayout::layout {
 // redistributed into columns after initial layout.
 
 // Check if a node has multi-column properties set
-bool isMulticolContainer(const css::ComputedStyle& style);
+bool isMulticolContainer(const LayoutNode* node);
 
 } // namespace htmlayout::layout

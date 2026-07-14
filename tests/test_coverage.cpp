@@ -853,12 +853,14 @@ static void testCalcComplexExpr() {
 
 static void testEdgeResolution() {
     printf("--- Edges: resolveEdges ---\n");
-    ComputedStyle style;
-    style["margin-top"] = "10px";
-    style["margin-right"] = "20px";
-    style["margin-bottom"] = "15px";
-    style["margin-left"] = "5px";
-    auto edges = resolveEdges(style, "margin", 400, 16);
+    CovNode n;
+    n.style_["margin-top"] = "10px";
+    n.style_["margin-right"] = "20px";
+    n.style_["margin-bottom"] = "15px";
+    n.style_["margin-left"] = "5px";
+    // Called outside a layout pass, so this also exercises the style cache's
+    // uncached path: with no pass running the values must come from the live map.
+    auto edges = resolveEdges(&n, kMarginProps, 400, 16);
     check(approx(edges.top, 10.0f), "margin-top = 10");
     check(approx(edges.right, 20.0f), "margin-right = 20");
     check(approx(edges.bottom, 15.0f), "margin-bottom = 15");
@@ -1955,20 +1957,23 @@ static void testViewportLayout() {
 
 static void testMulticolIsContainer() {
     printf("--- Multicol: isMulticolContainer ---\n");
-    ComputedStyle style;
-    style["column-count"] = "3";
-    check(isMulticolContainer(style), "isMulticolContainer: column-count=3 is true");
+    // These all run outside a layout pass, which is half the point of the test:
+    // with no pass in flight the style cache must not be consulted at all and
+    // every read has to come from the node's live ComputedStyle.
+    CovNode n1;
+    n1.style_["column-count"] = "3";
+    check(isMulticolContainer(&n1), "isMulticolContainer: column-count=3 is true");
 
-    ComputedStyle style2;
-    style2["column-width"] = "200px";
-    check(isMulticolContainer(style2), "isMulticolContainer: column-width=200px is true");
+    CovNode n2;
+    n2.style_["column-width"] = "200px";
+    check(isMulticolContainer(&n2), "isMulticolContainer: column-width=200px is true");
 
-    ComputedStyle style3;
-    style3["column-count"] = "auto";
-    check(!isMulticolContainer(style3), "isMulticolContainer: column-count=auto is false");
+    CovNode n3;
+    n3.style_["column-count"] = "auto";
+    check(!isMulticolContainer(&n3), "isMulticolContainer: column-count=auto is false");
 
-    ComputedStyle style4;
-    check(!isMulticolContainer(style4), "isMulticolContainer: empty style is false");
+    CovNode n4;
+    check(!isMulticolContainer(&n4), "isMulticolContainer: empty style is false");
 }
 
 // ======================================================================

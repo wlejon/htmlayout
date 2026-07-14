@@ -1,6 +1,7 @@
 #include "layout/table.h"
 #include "layout/formatting_context.h"
 #include "layout/style_util.h"
+#include "layout/style_cache.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -98,23 +99,28 @@ struct TableStructure {
 
 float cellFontSize(LayoutNode* cell, float fallback) {
     auto& cs = cell->computedStyle();
-    float cfs = resolveLength(styleVal(cs, "font-size"), fallback, fallback);
+    float cfs = resolveLength(styleVal(cell, Prop::FontSize), fallback, fallback);
     return cfs > 0 ? cfs : fallback;
 }
 
-float cellBorderSide(LayoutNode* cell, const char* side, float fallbackFs) {
-    auto& cs = cell->computedStyle();
+float cellBorderSide(LayoutNode* cell, Prop styleProp, Prop widthProp, float fallbackFs) {
     float cfs = cellFontSize(cell, fallbackFs);
-    std::string styleProp = std::string("border-") + side + "-style";
-    if (styleVal(cs, styleProp) == "none") return 0;
-    std::string widthProp = std::string("border-") + side + "-width";
-    return resolveLength(styleVal(cs, widthProp), 0, cfs);
+    if (styleVal(cell, styleProp) == "none") return 0;
+    return resolveLength(styleVal(cell, widthProp), 0, cfs);
 }
 
-float getCellBorderL(LayoutNode* cell, float fs) { return cellBorderSide(cell, "left", fs); }
-float getCellBorderR(LayoutNode* cell, float fs) { return cellBorderSide(cell, "right", fs); }
-float getCellBorderT(LayoutNode* cell, float fs) { return cellBorderSide(cell, "top", fs); }
-float getCellBorderB(LayoutNode* cell, float fs) { return cellBorderSide(cell, "bottom", fs); }
+float getCellBorderL(LayoutNode* c, float fs) {
+    return cellBorderSide(c, Prop::BorderLeftStyle, Prop::BorderLeftWidth, fs);
+}
+float getCellBorderR(LayoutNode* c, float fs) {
+    return cellBorderSide(c, Prop::BorderRightStyle, Prop::BorderRightWidth, fs);
+}
+float getCellBorderT(LayoutNode* c, float fs) {
+    return cellBorderSide(c, Prop::BorderTopStyle, Prop::BorderTopWidth, fs);
+}
+float getCellBorderB(LayoutNode* c, float fs) {
+    return cellBorderSide(c, Prop::BorderBottomStyle, Prop::BorderBottomWidth, fs);
+}
 
 // Compute the four shared half-borders for a cell at its grid position.
 // Looks at actual neighbors in the grid (not column-wise max) so e.g.
@@ -187,8 +193,8 @@ void cellSharedHalfBorders(const TableStructure& ts, LayoutNode* cell,
 float cellPadBorderH(const TableStructure& ts, const CellInfo& ci) {
     auto& cs = ci.node->computedStyle();
     float cfs = cellFontSize(ci.node, ts.fontSize);
-    float pl = resolveLength(styleVal(cs, "padding-left"), 0, cfs);
-    float pr = resolveLength(styleVal(cs, "padding-right"), 0, cfs);
+    float pl = resolveLength(styleVal(ci.node, Prop::PaddingLeft), 0, cfs);
+    float pr = resolveLength(styleVal(ci.node, Prop::PaddingRight), 0, cfs);
     float bl, br;
     if (ts.collapse) {
         float hL, hR, hT, hB;
@@ -212,21 +218,12 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                                    TextMetrics& metrics) {
     TableStructure ts;
     auto& style = node->computedStyle();
-    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
     if (fontSize <= 0.0f) fontSize = 16.0f;
     ts.fontSize = fontSize;
 
-    const char* sides[] = {"top", "right", "bottom", "left"};
-    float* bw[] = {&ts.borderWidth.top, &ts.borderWidth.right,
-                   &ts.borderWidth.bottom, &ts.borderWidth.left};
-    for (int i = 0; i < 4; i++) {
-        std::string styleProp = std::string("border-") + sides[i] + "-style";
-        std::string widthProp = std::string("border-") + sides[i] + "-width";
-        if (styleVal(style, styleProp) != "none") {
-            *bw[i] = resolveLength(styleVal(style, widthProp), availableWidth, fontSize);
-        }
-    }
-    ts.collapse = (styleVal(style, "border-collapse") == "collapse");
+    ts.borderWidth = resolveBorders(node, availableWidth, fontSize);
+    ts.collapse = (styleVal(node, Prop::BorderCollapse) == "collapse");
     if (ts.collapse) {
         ts.collapseInset.top    = ts.borderWidth.top    * 0.5f;
         ts.collapseInset.right  = ts.borderWidth.right  * 0.5f;
@@ -236,7 +233,7 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
 
     // Border spacing — accepts one or two lengths: "H" or "H V". Default V = H.
     {
-        const std::string& bsVal = styleVal(style, "border-spacing");
+        const std::string& bsVal = styleVal(node, Prop::BorderSpacing);
         if (!bsVal.empty()) {
             // Split on whitespace.
             size_t i = 0;
@@ -260,11 +257,11 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
         for (auto* child : getLayoutChildren(parent)) {
             if (child->isTextNode()) continue;
             auto& cs = child->computedStyle();
-            const std::string& d = styleVal(cs, "display");
+            const std::string& d = styleVal(child, Prop::Display);
             if (d == "none") { child->box = LayoutBox{}; continue; }
 
             // Absolutely/fixed positioned children are out of flow
-            const std::string& childPos = styleVal(cs, "position");
+            const std::string& childPos = styleVal(child, Prop::Position);
             if (childPos == "absolute" || childPos == "fixed") continue;
 
             if (isTableRow(d)) {
@@ -273,7 +270,7 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                 for (auto* cell : child->children()) {
                     if (cell->isTextNode()) continue;
                     auto& cellStyle = cell->computedStyle();
-                    const std::string& cd = styleVal(cellStyle, "display");
+                    const std::string& cd = styleVal(cell, Prop::Display);
                     if (cd == "none") { cell->box = LayoutBox{}; continue; }
                     row.cells.push_back(cell);
                 }
@@ -288,7 +285,7 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                 for (auto* groupChild : child->children()) {
                     if (groupChild->isTextNode()) continue;
                     auto& gcs = groupChild->computedStyle();
-                    const std::string& gd = styleVal(gcs, "display");
+                    const std::string& gd = styleVal(groupChild, Prop::Display);
                     if (gd == "none") { groupChild->box = LayoutBox{}; continue; }
                     if (isTableRow(gd)) {
                         TableRow row;
@@ -297,7 +294,7 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                         for (auto* cell : getLayoutChildren(groupChild)) {
                             if (cell->isTextNode()) continue;
                             auto& cellStyle = cell->computedStyle();
-                            if (styleVal(cellStyle, "display") == "none") {
+                            if (styleVal(cell, Prop::Display) == "none") {
                                 cell->box = LayoutBox{};
                                 continue;
                             }
@@ -315,19 +312,19 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                 // colgroup width applies to each contained col without an
                 // explicit width, OR if no <col> children exist, expands span
                 auto& gcs = child->computedStyle();
-                std::string gWidthVal = styleVal(gcs, "width");
+                std::string gWidthVal = styleVal(child, Prop::Width);
                 std::string gSpan(child->attribute("span"));
-                if (gSpan.empty()) gSpan = styleVal(gcs, "span");
+                if (gSpan.empty()) gSpan = styleVal(child, Prop::Span);
                 bool hasColChildren = false;
                 for (auto* gc : child->children()) {
                     if (gc->isTextNode()) continue;
                     auto& gccs = gc->computedStyle();
-                    if (styleVal(gccs, "display") == "table-column") {
+                    if (styleVal(gc, Prop::Display) == "table-column") {
                         hasColChildren = true;
                         ColInfo ci;
                         ci.colNode = gc;
                         ci.colGroupNode = child;
-                        std::string wVal = styleVal(gccs, "width");
+                        std::string wVal = styleVal(gc, Prop::Width);
                         float w = -1.0f;
                         if (!wVal.empty() && wVal != "auto") {
                             w = resolveLength(wVal, availableWidth, fontSize);
@@ -337,7 +334,7 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                         ci.specWidth = w;
                         int span = 1;
                         std::string colSpanAttr(gc->attribute("span"));
-                        if (colSpanAttr.empty()) colSpanAttr = styleVal(gccs, "span");
+                        if (colSpanAttr.empty()) colSpanAttr = styleVal(gc, Prop::Span);
                         if (!colSpanAttr.empty()) span = std::max(1, std::atoi(colSpanAttr.c_str()));
                         for (int s = 0; s < span; s++) colInfos.push_back(ci);
                     }
@@ -359,13 +356,13 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                 // Stray <col> without a <colgroup>
                 ColInfo ci;
                 ci.colNode = child;
-                std::string wVal = styleVal(cs, "width");
+                std::string wVal = styleVal(child, Prop::Width);
                 if (!wVal.empty() && wVal != "auto") {
                     ci.specWidth = resolveLength(wVal, availableWidth, fontSize);
                 }
                 int span = 1;
                 std::string colSpanAttr(child->attribute("span"));
-                if (colSpanAttr.empty()) colSpanAttr = styleVal(cs, "span");
+                if (colSpanAttr.empty()) colSpanAttr = styleVal(child, Prop::Span);
                 if (!colSpanAttr.empty()) span = std::max(1, std::atoi(colSpanAttr.c_str()));
                 for (int s = 0; s < span; s++) colInfos.push_back(ci);
             } else if (isTableCaption(d)) {
@@ -513,13 +510,13 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
         float pbh = cellPadBorderH(ts, ci);
         // Honor explicit cell width if specified
         auto& cs = ci.node->computedStyle();
-        const std::string& cwVal = styleVal(cs, "width");
+        const std::string& cwVal = styleVal(ci.node, Prop::Width);
         float cellMin = computeMinContentWidth(ci.node, metrics) + pbh;
         float cellMax = computeMaxContentWidth(ci.node, metrics) + pbh;
         bool isPercentWidth = (!cwVal.empty() && cwVal.back() == '%');
         if (!cwVal.empty() && cwVal != "auto" && !isPercentWidth) {
             float specCellW = resolveLength(cwVal, 0, fontSize);
-            if (styleVal(cs, "box-sizing") != "border-box") specCellW += pbh;
+            if (styleVal(ci.node, Prop::BoxSizing) != "border-box") specCellW += pbh;
             // Treat explicit (length) width as a strong preferred for max-content,
             // and as a floor for min-content.
             cellMax = std::max(cellMax, specCellW);
@@ -606,12 +603,12 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (!node) return;
 
     auto& style = node->computedStyle();
-    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
     if (fontSize <= 0.0f) fontSize = 16.0f;
 
     // Resolve container edges
-    node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
-    node->box.padding = resolveEdges(style, "padding", availableWidth, fontSize);
+    node->box.margin = resolveEdges(node, kMarginProps, availableWidth, fontSize);
+    node->box.padding = resolveEdges(node, kPaddingProps, availableWidth, fontSize);
 
     // Collect rows/columns and compute intrinsic column widths.
     TableStructure ts = buildTableStructure(node, availableWidth, metrics);
@@ -635,14 +632,14 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // shrink-to-fit, NOT fill-the-container. We compute a preferred (max-content)
     // width from intrinsic column sizes; for now, set a tentative full-width
     // sentinel that's clamped later.
-    float specW = resolveLength(styleVal(style, "width"), availableWidth, fontSize);
-    const std::string& widthVal = styleVal(style, "width");
+    float specW = resolveLength(styleVal(node, Prop::Width), availableWidth, fontSize);
+    const std::string& widthVal = styleVal(node, Prop::Width);
     float availContent = availableWidth - marginH - paddingH - borderH;
     if (availContent < 0) availContent = 0;
     bool widthAuto = (widthVal == "auto" || widthVal.empty());
     float tableContentWidth;
     if (!widthAuto) {
-        if (styleVal(style, "box-sizing") == "border-box") {
+        if (styleVal(node, Prop::BoxSizing) == "border-box") {
             tableContentWidth = specW - paddingH - borderH;
         } else {
             tableContentWidth = specW;
@@ -672,10 +669,10 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (numCols == 0) {
         node->box.contentRect.width = tableContentWidth;
         // Respect explicit height even for empty tables
-        float specH = resolveLength(styleVal(style, "height"), 0, fontSize);
-        const std::string& heightVal = styleVal(style, "height");
+        float specH = resolveLength(styleVal(node, Prop::Height), 0, fontSize);
+        const std::string& heightVal = styleVal(node, Prop::Height);
         if (heightVal != "auto" && !heightVal.empty()) {
-            if (styleVal(style, "box-sizing") == "border-box") {
+            if (styleVal(node, Prop::BoxSizing) == "border-box") {
                 float paddingV = node->box.padding.top + node->box.padding.bottom;
                 float borderV = node->box.border.top + node->box.border.bottom;
                 node->box.contentRect.height = std::max(0.0f, specH - paddingV - borderV);
@@ -867,10 +864,10 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // cell's content if any edge changed.
         {
             auto& cs = ci.node->computedStyle();
-            float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+            float cfs = resolveLength(styleVal(ci.node, Prop::FontSize), fontSize, fontSize);
             if (cfs <= 0) cfs = fontSize;
-            Edges newPad = resolveEdges(cs, "padding", tableContentWidth, cfs);
-            Edges newMar = resolveEdges(cs, "margin",  tableContentWidth, cfs);
+            Edges newPad = resolveEdges(ci.node, kPaddingProps, tableContentWidth, cfs);
+            Edges newMar = resolveEdges(ci.node, kMarginProps, tableContentWidth, cfs);
             bool padChanged =
                 newPad.left  != ci.node->box.padding.left  ||
                 newPad.right != ci.node->box.padding.right ||
@@ -933,7 +930,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     std::vector<LayoutNode*> topCaptions, bottomCaptions;
     for (auto* cap : captions) {
         auto& cs = cap->computedStyle();
-        if (styleVal(cs, "caption-side") == "bottom") {
+        if (styleVal(cap, Prop::CaptionSide) == "bottom") {
             bottomCaptions.push_back(cap);
         } else {
             topCaptions.push_back(cap);
@@ -1014,7 +1011,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // at the right edge and the last column at the left. Walk the physical
         // slots left-to-right (same widths and spacing) but assign them to grid
         // columns from last to first.
-        const bool rtl = (styleVal(node->computedStyle(), "direction") == "rtl");
+        const bool rtl = (styleVal(node, Prop::Direction) == "rtl");
         float cx = borderSpacing + collapseInset.left;
         for (size_t s = 0; s < numCols; s++) {
             size_t c = rtl ? (numCols - 1 - s) : s;
@@ -1146,7 +1143,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float availableH = cellContentH - intrinsicH;
         if (availableH > 0) {
             auto& cs = cell->computedStyle();
-            const std::string& valign = styleVal(cs, "vertical-align");
+            const std::string& valign = styleVal(cell, Prop::VerticalAlign);
             float shiftY = 0.0f;
             if (valign == "middle") shiftY = availableH / 2.0f;
             else if (valign == "bottom") shiftY = availableH;
@@ -1197,8 +1194,8 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Handle margin: auto for horizontal centering (like block boxes do).
     // The table behaves as a block container in this respect.
     {
-        const std::string& marginLeftVal  = styleVal(style, "margin-left");
-        const std::string& marginRightVal = styleVal(style, "margin-right");
+        const std::string& marginLeftVal  = styleVal(node, Prop::MarginLeft);
+        const std::string& marginRightVal = styleVal(node, Prop::MarginRight);
         if (marginLeftVal == "auto" || marginRightVal == "auto") {
             float fullW = tableContentWidth + paddingH + borderH;
             float remaining = availableWidth - fullW;
@@ -1216,10 +1213,10 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
-    float specH = resolveLength(styleVal(style, "height"), 0, fontSize);
-    const std::string& heightVal = styleVal(style, "height");
+    float specH = resolveLength(styleVal(node, Prop::Height), 0, fontSize);
+    const std::string& heightVal = styleVal(node, Prop::Height);
     if (heightVal != "auto" && !heightVal.empty()) {
-        if (styleVal(style, "box-sizing") == "border-box") {
+        if (styleVal(node, Prop::BoxSizing) == "border-box") {
             float paddingV = node->box.padding.top + node->box.padding.bottom;
             float borderV = node->box.border.top + node->box.border.bottom;
             node->box.contentRect.height = specH - paddingV - borderV;

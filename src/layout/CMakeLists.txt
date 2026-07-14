@@ -9,6 +9,7 @@ add_library(htmlayout_layout STATIC
     text_geometry.cpp
     multicol.cpp
     formatting_context.cpp
+    style_cache.cpp
 )
 target_include_directories(htmlayout_layout PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(htmlayout_layout PUBLIC htmlayout_css)

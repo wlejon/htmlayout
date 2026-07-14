@@ -2,6 +2,7 @@
 #include "layout/formatting_context.h"
 #include "../from_chars_compat.h"
 #include "layout/style_util.h"
+#include "layout/style_cache.h"
 #include "layout/text.h"
 #include <algorithm>
 #include <cctype>
@@ -60,44 +61,44 @@ float parseAspectRatio(const std::string& value) {
 bool nodeEstablishesBFC(LayoutNode* node) {
     if (!node->parent()) return true; // root element: the initial BFC
     auto& style = node->computedStyle();
-    const std::string& ov = styleVal(style, "overflow");
-    const std::string& ovx = styleVal(style, "overflow-x");
-    const std::string& ovy = styleVal(style, "overflow-y");
+    const std::string& ov = styleVal(node, Prop::Overflow);
+    const std::string& ovx = styleVal(node, Prop::OverflowX);
+    const std::string& ovy = styleVal(node, Prop::OverflowY);
     if ((ov != "visible" && !ov.empty()) ||
         (ovx != "visible" && !ovx.empty()) ||
         (ovy != "visible" && !ovy.empty()))
         return true;
-    const std::string& disp = styleVal(style, "display");
+    const std::string& disp = styleVal(node, Prop::Display);
     if (disp == "inline-block" || disp == "flex" || disp == "inline-flex" ||
         disp == "grid" || disp == "inline-grid" || disp == "flow-root" ||
         disp == "table-cell" || disp == "table-caption")
         return true;
-    const std::string& position = styleVal(style, "position");
+    const std::string& position = styleVal(node, Prop::Position);
     if (position == "absolute" || position == "fixed")
         return true;
-    const std::string& flt = styleVal(style, "float");
+    const std::string& flt = styleVal(node, Prop::Float);
     if (flt == "left" || flt == "right")
         return true;
     // A flex or grid item establishes an independent formatting context
     // (Flexbox §4, Grid §6.1).
     if (LayoutNode* p = node->parent()) {
-        const std::string& pd = styleVal(p->computedStyle(), "display");
+        const std::string& pd = styleVal(p, Prop::Display);
         if (pd == "flex" || pd == "inline-flex" ||
             pd == "grid" || pd == "inline-grid")
             return true;
     }
     // Multi-column containers are formatting-context roots too.
-    const std::string& mcCount = styleVal(style, "column-count");
-    const std::string& mcWidth = styleVal(style, "column-width");
+    const std::string& mcCount = styleVal(node, Prop::ColumnCount);
+    const std::string& mcWidth = styleVal(node, Prop::ColumnWidth);
     if ((!mcCount.empty() && mcCount != "auto") ||
         (!mcWidth.empty() && mcWidth != "auto"))
         return true;
     // Layout containment makes the box an independent formatting context
     // (css-contain §2). container-type: size / inline-size implies it.
-    const std::string& ctype = styleVal(style, "container-type");
+    const std::string& ctype = styleVal(node, Prop::ContainerType);
     if (ctype.find("size") != std::string::npos)
         return true;
-    const std::string& contain = styleVal(style, "contain");
+    const std::string& contain = styleVal(node, Prop::Contain);
     if (contain.find("layout") != std::string::npos ||
         contain.find("paint") != std::string::npos ||
         contain == "strict" || contain == "content")
@@ -121,12 +122,12 @@ struct StrutMetrics {
     float lineHeight = 0; // used line-height
 };
 
-StrutMetrics computeStrut(const css::ComputedStyle& style, float fontSize,
+StrutMetrics computeStrut(const LayoutNode* node, float fontSize,
                           TextMetrics& metrics) {
-    const std::string& fam = styleVal(style, "font-family");
-    const std::string& wt = styleVal(style, "font-weight");
+    const std::string& fam = styleVal(node, Prop::FontFamily);
+    const std::string& wt = styleVal(node, Prop::FontWeight);
     StrutMetrics s;
-    s.lineHeight = resolveLineHeight(styleVal(style, "line-height"), fontSize,
+    s.lineHeight = resolveLineHeight(styleVal(node, Prop::LineHeight), fontSize,
                                      fam, wt, metrics);
     float natural = fontSize > 0 ? metrics.lineHeight(fam, fontSize, wt) : 0.0f;
     if (natural <= 0) natural = fontSize * 1.2f;
@@ -148,15 +149,14 @@ StrutMetrics computeStrut(const css::ComputedStyle& style, float fontSize,
 // round(ascent)-wide box plus the 7px marker padding; an ordinal marker is
 // the marker text ("12.") plus one space advance. The painter (bro's
 // DrawTraversal) fills this reserved box.
-float insideMarkerInlineSize(LayoutNode* node, const css::ComputedStyle& style,
-                             float fontSize, TextMetrics& metrics) {
-    if (styleVal(style, "display") != "list-item") return 0.0f;
-    if (styleVal(style, "list-style-position") != "inside") return 0.0f;
-    std::string type = styleVal(style, "list-style-type");
+float insideMarkerInlineSize(LayoutNode* node, float fontSize, TextMetrics& metrics) {
+    if (styleVal(node, Prop::Display) != "list-item") return 0.0f;
+    if (styleVal(node, Prop::ListStylePosition) != "inside") return 0.0f;
+    std::string type = styleVal(node, Prop::ListStyleType);
     if (type.empty()) type = "disc";
     if (type == "none") return 0.0f;
-    const std::string& fam = styleVal(style, "font-family");
-    const std::string& wt = styleVal(style, "font-weight");
+    const std::string& fam = styleVal(node, Prop::FontFamily);
+    const std::string& wt = styleVal(node, Prop::FontWeight);
     if (fontSize <= 0) return 0.0f;
 
     // Disclosure triangle (<summary>): Blink's DisclosureSymbolSize is
@@ -181,7 +181,7 @@ float insideMarkerInlineSize(LayoutNode* node, const css::ComputedStyle& style,
         std::string startAttr(parent->attribute("start"));
         if (!startAttr.empty()) idx = std::atoi(startAttr.c_str());
         for (LayoutNode* sib : parent->children()) {
-            if (styleVal(sib->computedStyle(), "display") != "list-item")
+            if (styleVal(sib, Prop::Display) != "list-item")
                 continue;
             std::string valAttr(sib->attribute("value"));
             if (!valAttr.empty()) idx = std::atoi(valAttr.c_str());
@@ -253,7 +253,7 @@ AtomicInlineGeom atomicInlineGeometry(LayoutNode* child, float height,
                                       TextMetrics& metrics) {
     AtomicInlineGeom g;
     auto& styleRef = child->computedStyle();
-    const std::string& va = styleVal(styleRef, "vertical-align");
+    const std::string& va = styleVal(child, Prop::VerticalAlign);
     if (va == "top" || va == "text-top") g.valign = 1;
     else if (va == "middle") g.valign = 2;
     else if (va == "bottom" || va == "text-bottom") g.valign = 3;
@@ -278,10 +278,10 @@ AtomicInlineGeom atomicInlineGeometry(LayoutNode* child, float height,
                 // Single-line form controls (input, select, button-type
                 // inputs): align by the control's internal text baseline —
                 // top border + padding + the control font's ascent.
-                float fs = resolveLength(styleVal(styleRef, "font-size"), 16.0f, 16.0f);
+                float fs = resolveLength(styleVal(child, Prop::FontSize), 16.0f, 16.0f);
                 if (fs <= 0.0f) fs = 16.0f;
-                const std::string& fam = styleVal(styleRef, "font-family");
-                const std::string& wt  = styleVal(styleRef, "font-weight");
+                const std::string& fam = styleVal(child, Prop::FontFamily);
+                const std::string& wt  = styleVal(child, Prop::FontWeight);
                 float asc = fs > 0.0f ? metrics.ascent(fam, fs, wt) : 0.0f;
                 if (asc <= 0.0f) asc = fs * 0.8f;
                 g.baseline = child->box.margin.top + child->box.border.top +
@@ -294,7 +294,7 @@ AtomicInlineGeom atomicInlineGeometry(LayoutNode* child, float height,
     } else {
         // Atomic inline: baseline of the last line box when it has in-flow
         // content and visible overflow; otherwise the bottom margin edge.
-        const std::string& ov = styleVal(styleRef, "overflow");
+        const std::string& ov = styleVal(child, Prop::Overflow);
         bool visibleOv = ov.empty() || ov == "visible";
         if (visibleOv && child->box.baselineOffset >= 0) {
             g.baseline = child->box.margin.top + child->box.border.top +
@@ -313,7 +313,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (!node) return;
 
     auto& style = node->computedStyle();
-    const std::string& fontSizeStr = styleVal(style, "font-size");
+    const std::string& fontSizeStr = styleVal(node, Prop::FontSize);
     float fontSize = resolveLength(fontSizeStr, 16.0f, 16.0f);
     if (fontSize <= 0.0f) {
         // An explicit zero (font-size: 0) is honored — em units and the
@@ -328,14 +328,14 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // its lengths are resolved. ch = advance of "0", ex = x-height, both in the
     // element's own (inherited) font. Nested elements reset this on entry.
     {
-        const std::string& fam = styleVal(style, "font-family");
-        const std::string& wt  = styleVal(style, "font-weight");
+        const std::string& fam = styleVal(node, Prop::FontFamily);
+        const std::string& wt  = styleVal(node, Prop::FontWeight);
         float chPx = fontSize > 0.0f ? metrics.measureWidth("0", fam, fontSize, wt) : 0.0f;
         float exPx = fontSize > 0.0f ? metrics.xHeight(fam, fontSize, wt) : 0.0f;
         setLengthFontContext(chPx, exPx);
     }
 
-    const std::string& position = styleVal(style, "position");
+    const std::string& position = styleVal(node, Prop::Position);
 
     // Fresh layout pass: forget any baseline recorded by a previous layout
     // and any floats handed up to the parent last time.
@@ -343,34 +343,22 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     node->box.escapedFloats.clear();
 
     // Resolve margin, padding, border
-    node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
-    node->box.padding = resolveEdges(style, "padding", availableWidth, fontSize);
-
-    // Border widths: only apply if border-style is not "none"
-    Edges borderWidth;
-    const char* sides[] = {"top", "right", "bottom", "left"};
-    float* bw[] = {&borderWidth.top, &borderWidth.right, &borderWidth.bottom, &borderWidth.left};
-    for (int i = 0; i < 4; i++) {
-        std::string styleProp = std::string("border-") + sides[i] + "-style";
-        std::string widthProp = std::string("border-") + sides[i] + "-width";
-        if (styleVal(style, styleProp) != "none") {
-            *bw[i] = resolveLength(styleVal(style, widthProp), availableWidth, fontSize);
-        }
-    }
-    node->box.border = borderWidth;
+    node->box.margin = resolveEdges(node, kMarginProps, availableWidth, fontSize);
+    node->box.padding = resolveEdges(node, kPaddingProps, availableWidth, fontSize);
+    node->box.border = resolveBorders(node, availableWidth, fontSize);
 
     // Resolve width
     float marginH = node->box.margin.left + node->box.margin.right;
     float paddingH = node->box.padding.left + node->box.padding.right;
     float borderH = node->box.border.left + node->box.border.right;
 
-    float specifiedWidth = resolveDimension(styleVal(style, "width"), availableWidth, fontSize);
+    float specifiedWidth = resolveDimension(styleVal(node, Prop::Width), availableWidth, fontSize);
     // A table cell's 'width' is an input to the table's column algorithm,
     // not the used width — the cell always fills its assigned track span,
     // handed in as availableWidth by table.cpp's final layout pass. Flow as
     // width:auto so inline content (text-align, centering) positions against
     // the real span: a colspan cell is much wider than its specified width.
-    if (specifiedWidth >= 0.0f && styleVal(style, "display") == "table-cell")
+    if (specifiedWidth >= 0.0f && styleVal(node, Prop::Display) == "table-cell")
         specifiedWidth = -1.0f;
     float contentWidth;
     if (specifiedWidth == SIZING_MIN_CONTENT) {
@@ -385,7 +373,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         contentWidth = std::min(maxC, std::max(minC, avail));
     } else if (specifiedWidth >= 0.0f) {
         // Box-sizing
-        const std::string& boxSizing = styleVal(style, "box-sizing");
+        const std::string& boxSizing = styleVal(node, Prop::BoxSizing);
         if (boxSizing == "border-box") {
             contentWidth = specifiedWidth - paddingH - borderH;
             if (contentWidth < 0.0f) contentWidth = 0.0f;
@@ -397,8 +385,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // size, use that. Inline-blocks and floats shrink-to-fit (CSS2
         // §10.3.5). Otherwise fill available space.
         float intrW = 0, intrH = 0;
-        const std::string& selfDisp = styleVal(style, "display");
-        const std::string& selfFloat = styleVal(style, "float");
+        const std::string& selfDisp = styleVal(node, Prop::Display);
+        const std::string& selfFloat = styleVal(node, Prop::Float);
         if (node->intrinsicSize(intrW, intrH, availableWidth - paddingH - borderH)) {
             contentWidth = intrW;
         } else if (selfDisp == "inline-block" ||
@@ -415,8 +403,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // Apply min/max-width constraints
-    float minW = resolveDimension(styleVal(style, "min-width"), availableWidth, fontSize);
-    float maxW = resolveDimension(styleVal(style, "max-width"), availableWidth, fontSize);
+    float minW = resolveDimension(styleVal(node, Prop::MinWidth), availableWidth, fontSize);
+    float maxW = resolveDimension(styleVal(node, Prop::MaxWidth), availableWidth, fontSize);
     if (minW >= 0.0f && contentWidth < minW) contentWidth = minW;
     if (maxW >= 0.0f && contentWidth > maxW) contentWidth = maxW;
 
@@ -429,8 +417,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     node->box.contentRect.width = contentWidth;
 
     // Handle margin: auto for horizontal centering
-    const std::string& marginLeftVal = styleVal(style, "margin-left");
-    const std::string& marginRightVal = styleVal(style, "margin-right");
+    const std::string& marginLeftVal = styleVal(node, Prop::MarginLeft);
+    const std::string& marginRightVal = styleVal(node, Prop::MarginRight);
     if (marginLeftVal == "auto" || marginRightVal == "auto") {
         float totalUsed = contentWidth + paddingH + borderH;
         float remaining = availableWidth - totalUsed;
@@ -447,14 +435,14 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     } else if (node->overrideContentWidth < 0.0f &&
                node->parent() &&
-               styleVal(node->parent()->computedStyle(), "direction") == "rtl" &&
-               styleVal(style, "width") != "auto" &&
-               styleVal(style, "float") == "none" &&
-               styleVal(style, "position") != "absolute" &&
-               styleVal(style, "position") != "fixed" &&
-               (styleVal(style, "display") == "block" ||
-                styleVal(style, "display") == "flow-root" ||
-                styleVal(style, "display") == "list-item")) {
+               styleVal(node->parent(), Prop::Direction) == "rtl" &&
+               styleVal(node, Prop::Width) != "auto" &&
+               styleVal(node, Prop::Float) == "none" &&
+               styleVal(node, Prop::Position) != "absolute" &&
+               styleVal(node, Prop::Position) != "fixed" &&
+               (styleVal(node, Prop::Display) == "block" ||
+                styleVal(node, Prop::Display) == "flow-root" ||
+                styleVal(node, Prop::Display) == "list-item")) {
         // Over-constrained (CSS 2.1 §10.3.3): an in-flow block whose width and
         // both margins are specified but do not fill its containing block. The
         // end-side margin is over-specified and recomputed to absorb the slack —
@@ -479,16 +467,16 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // percentage heights only resolve against definite containing-block heights).
     float paddingV = node->box.padding.top + node->box.padding.bottom;
     float borderV = node->box.border.top + node->box.border.bottom;
-    float earlyHeight = resolveDimension(styleVal(style, "height"), node->availableHeight, fontSize);
+    float earlyHeight = resolveDimension(styleVal(node, Prop::Height), node->availableHeight, fontSize);
     // aspect-ratio: when height is auto and width is definite, derive a
     // content-box height from the ratio. The ratio applies to the box that
     // box-sizing selects: content-box (default) → ratio of content widths and
     // heights; border-box → ratio of border boxes.
     // aspectRatioCBH < 0 means "no aspect-ratio override".
-    float aspectRatio = parseAspectRatio(styleVal(style, "aspect-ratio"));
+    float aspectRatio = parseAspectRatio(styleVal(node, Prop::AspectRatio));
     float aspectRatioCBH = -1.0f;
     if (earlyHeight < 0.0f && aspectRatio > 0.0f && contentWidth >= 0.0f) {
-        const std::string& bs = styleVal(style, "box-sizing");
+        const std::string& bs = styleVal(node, Prop::BoxSizing);
         if (bs == "border-box") {
             float borderBoxW = contentWidth + paddingH + borderH;
             float borderBoxH = borderBoxW / aspectRatio;
@@ -500,7 +488,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
     float earlyChildAvailableHeight = 0.0f;
     if (earlyHeight >= 0.0f) {
-        const std::string& boxSizing = styleVal(style, "box-sizing");
+        const std::string& boxSizing = styleVal(node, Prop::BoxSizing);
         if (boxSizing == "border-box")
             earlyChildAvailableHeight = earlyHeight - paddingV - borderV;
         else
@@ -548,9 +536,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         } else {
             auto& cs = child->computedStyle();
-            const std::string& d = styleVal(cs, "display");
+            const std::string& d = styleVal(child, Prop::Display);
             if (d == "none") continue;
-            const std::string& cp = styleVal(cs, "position");
+            const std::string& cp = styleVal(child, Prop::Position);
             if (cp == "absolute" || cp == "fixed") continue;
             hasVisibleContent = true;
             if (d != "inline" && d != "inline-block" && d != "inline-flex" && d != "inline-grid") {
@@ -561,12 +549,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     if (hasVisibleContent && allInlineChildren) {
         // Inline formatting context: lay out text and inline elements in line boxes
-        const std::string& fontFamily = styleVal(style, "font-family");
-        const std::string& fontWeight = styleVal(style, "font-weight");
-        const std::string& whiteSpace = styleVal(style, "white-space");
+        const std::string& fontFamily = styleVal(node, Prop::FontFamily);
+        const std::string& fontWeight = styleVal(node, Prop::FontWeight);
+        const std::string& whiteSpace = styleVal(node, Prop::WhiteSpace);
         // CSS2 §10.8: every line box starts with the block's strut (see
         // computeStrut for the Blink-compatible half-leading model).
-        StrutMetrics strut = computeStrut(style, fontSize, metrics);
+        StrutMetrics strut = computeStrut(node, fontSize, metrics);
         float lineHeight = strut.lineHeight;
         float strutAscent = strut.ascent;
         float strutAbove = strut.above;
@@ -618,16 +606,16 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         // Letter/word-spacing for the block's own text (a collapsed space
         // between words carries letter-spacing after it plus word-spacing).
-        float ls = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
-        float ws = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
+        float ls = resolveLength(styleVal(node, Prop::LetterSpacing), 0, fontSize);
+        float ws = resolveLength(styleVal(node, Prop::WordSpacing), 0, fontSize);
         // Cached space width for synthetic whitespace runs between
         // inline-level siblings (e.g. <ib> <ib> separated by " \n ") and for
         // the word-separator items emitted below.
         float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight)
             + ls + ws;
 
-        const std::string& oWrap = styleVal(style, "overflow-wrap");
-        const std::string& wBreak = styleVal(style, "word-break");
+        const std::string& oWrap = styleVal(node, Prop::OverflowWrap);
+        const std::string& wBreak = styleVal(node, Prop::WordBreak);
         bool canBreakWord = oWrap == "break-word" || oWrap == "anywhere" ||
                             wBreak == "break-all";
 
@@ -645,7 +633,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 auto runs = breakTextIntoRuns(std::string(child->textContent()),
                     wordMode ? 0.5f : childAvailable,
                     fontFamily, fontSize, fontWeight, whiteSpace, metrics,
-                    oWrap, wBreak, ls, ws, styleVal(style, "text-transform"));
+                    oWrap, wBreak, ls, ws, styleVal(node, Prop::TextTransform));
                 // Fresh layout pass — clear any previously placed runs.
                 child->box.textRuns.clear();
                 // Pure-whitespace text node (scanWords returned no words):
@@ -736,9 +724,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 }
             } else {
                 auto& cs = child->computedStyle();
-                const std::string& d = styleVal(cs, "display");
+                const std::string& d = styleVal(child, Prop::Display);
                 if (d == "none") { child->box = LayoutBox{}; continue; }
-                const std::string& cp = styleVal(cs, "position");
+                const std::string& cp = styleVal(child, Prop::Position);
                 if (cp == "absolute" || cp == "fixed") continue;
                 if ((child->tagName() == "br" || child->tagName() == "BR")) {
                     child->box = LayoutBox{};
@@ -766,7 +754,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 it.node = child;
                 it.isElement = true;
 
-                const std::string& va = styleVal(cs, "vertical-align");
+                const std::string& va = styleVal(child, Prop::VerticalAlign);
                 if (va == "top") it.valign = 1;
                 else if (va == "middle") it.valign = 2;
                 else if (va == "bottom") it.valign = 3;
@@ -806,10 +794,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                             // type inputs): browsers align them by the control's
                             // internal text baseline — top border + padding +
                             // the control font's ascent.
-                            float cfs = resolveLength(styleVal(cs, "font-size"), 16.0f, 16.0f);
+                            float cfs = resolveLength(styleVal(child, Prop::FontSize), 16.0f, 16.0f);
                             if (cfs <= 0.0f) cfs = 16.0f;
-                            const std::string& cfam = styleVal(cs, "font-family");
-                            const std::string& cwt  = styleVal(cs, "font-weight");
+                            const std::string& cfam = styleVal(child, Prop::FontFamily);
+                            const std::string& cwt  = styleVal(child, Prop::FontWeight);
                             float casc = cfs > 0.0f ? metrics.ascent(cfam, cfs, cwt) : 0.0f;
                             if (casc <= 0.0f) casc = cfs * 0.8f;
                             it.baseline = child->box.margin.top + child->box.border.top +
@@ -826,7 +814,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     // overflow; otherwise the bottom margin edge (CSS2
                     // §10.8.1). The whole margin box participates in line
                     // sizing — no half-leading.
-                    const std::string& ov = styleVal(cs, "overflow");
+                    const std::string& ov = styleVal(child, Prop::Overflow);
                     bool visibleOv = ov.empty() || ov == "visible";
                     if (visibleOv && child->box.baselineOffset >= 0) {
                         it.baseline = child->box.margin.top + child->box.border.top +
@@ -845,16 +833,16 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     // an inline never grow the line box. Its content is
                     // positioned by aligning its first-line baseline with the
                     // line's baseline.
-                    float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+                    float cfs = resolveLength(styleVal(child, Prop::FontSize), fontSize, fontSize);
                     if (cfs <= 0) cfs = fontSize;
-                    const std::string& cff = styleVal(cs, "font-family");
-                    const std::string& cfw = styleVal(cs, "font-weight");
+                    const std::string& cff = styleVal(child, Prop::FontFamily);
+                    const std::string& cfw = styleVal(child, Prop::FontWeight);
                     float cNatural = cfs > 0 ? metrics.lineHeight(cff, cfs, cfw) : 0.0f;
                     if (cNatural <= 0) cNatural = cfs * 1.2f;
                     float cAscent = cfs > 0 ? metrics.ascent(cff, cfs, cfw) : 0.0f;
                     if (cfs > 0 && (cAscent <= 0 || cAscent >= cNatural))
                         cAscent = cNatural * 0.8f;
-                    float cLH = resolveLineHeight(styleVal(cs, "line-height"),
+                    float cLH = resolveLineHeight(styleVal(child, Prop::LineHeight),
                         cfs, cff, cfw, metrics);
                     // Blink-compatible half-leading split: floor the ascent
                     // side, remainder below (see the strut above).
@@ -911,13 +899,13 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     // <length> / <percentage>: raise the baseline by the
                     // value (negative lowers). Percentages resolve against
                     // the element's own line-height.
-                    float vfs = resolveLength(styleVal(cs, "font-size"),
+                    float vfs = resolveLength(styleVal(child, Prop::FontSize),
                                               fontSize, fontSize);
                     if (vfs <= 0) vfs = fontSize;
                     float vlh = resolveLineHeight(
-                        styleVal(cs, "line-height"), vfs,
-                        styleVal(cs, "font-family"),
-                        styleVal(cs, "font-weight"), metrics);
+                        styleVal(child, Prop::LineHeight), vfs,
+                        styleVal(child, Prop::FontFamily),
+                        styleVal(child, Prop::FontWeight), metrics);
                     it.valign = 0;
                     it.shift = resolveLength(va, vlh, vfs);
                 }
@@ -956,8 +944,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
 
         // Resolve text-align for line positioning
-        const std::string& textAlign = styleVal(style, "text-align");
-        const std::string& direction = styleVal(style, "direction");
+        const std::string& textAlign = styleVal(node, Prop::TextAlign);
+        const std::string& direction = styleVal(node, Prop::Direction);
         std::string resolvedAlign = textAlign;
         if (resolvedAlign == "start" || resolvedAlign.empty()) {
             resolvedAlign = (direction == "rtl") ? "right" : "left";
@@ -1000,9 +988,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // positioning pass below offsets the first line's start by it.
         // An inside list marker occupies the start of the first line the
         // same way — reserve its inline size along with the indent.
-        float textIndent = resolveLength(styleVal(style, "text-indent"),
+        float textIndent = resolveLength(styleVal(node, Prop::TextIndent),
                                          childAvailable, fontSize) +
-                           insideMarkerInlineSize(node, style, fontSize,
+                           insideMarkerInlineSize(node, fontSize,
                                                   metrics);
         {
             size_t lineStart = 0;
@@ -1172,7 +1160,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     const IFCItem& it = items[idx];
                     if (!it.forceBreak && it.node) {
                         const std::string& idir =
-                            styleVal(it.node->computedStyle(), "direction");
+                            styleVal(it.node, Prop::Direction);
                         bool itemRtl = (idir == "rtl");
                         if (itemRtl != (direction == "rtl")) level = baseLevel + 1;
                     }
@@ -1342,8 +1330,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     };
 
     // Resolve text-align for anonymous inline boxes in BFC
-    const std::string& bfcTextAlign = styleVal(style, "text-align");
-    const std::string& bfcDirection = styleVal(style, "direction");
+    const std::string& bfcTextAlign = styleVal(node, Prop::TextAlign);
+    const std::string& bfcDirection = styleVal(node, Prop::Direction);
     std::string bfcResolvedAlign = bfcTextAlign;
     if (bfcResolvedAlign == "start" || bfcResolvedAlign.empty()) {
         bfcResolvedAlign = (bfcDirection == "rtl") ? "right" : "left";
@@ -1353,13 +1341,13 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // The strut for anonymous line boxes in this BFC (same model as the
     // dedicated IFC path — CSS2 §10.8 with Blink's half-leading split).
-    StrutMetrics anonStrut = computeStrut(style, fontSize, metrics);
+    StrutMetrics anonStrut = computeStrut(node, fontSize, metrics);
 
     // Place a floated child with its margin-box top at `atY`, register its
     // exclusion (including any shape-outside: circle geometry), and return.
     auto placeFloat = [&](LayoutNode* child, float atY) {
         auto& childStyle = child->computedStyle();
-        const std::string& childFloat = styleVal(childStyle, "float");
+        const std::string& childFloat = styleVal(child, Prop::Float);
         layoutNode(child, childAvailable, metrics);
 
         float floatWidth = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
@@ -1406,7 +1394,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // instead of the margin box. The reference box defaults to the
         // margin box; a percentage radius resolves against
         // sqrt(w² + h²)/√2 (CSS Shapes §basic-shape).
-        const std::string& shapeOutside = styleVal(childStyle, "shape-outside");
+        const std::string& shapeOutside = styleVal(child, Prop::ShapeOutside);
         if (shapeOutside.rfind("circle(", 0) == 0) {
             std::string arg = shapeOutside.substr(7);
             size_t stop = arg.find_first_of(")");
@@ -1471,31 +1459,31 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             float sizeDescent = -1.0f;
         };
         std::vector<AnonItem> anonItems;
-        float anonSpaceWidth = metrics.measureWidth(" ", styleVal(style, "font-family"),
-            fontSize, styleVal(style, "font-weight"));
+        float anonSpaceWidth = metrics.measureWidth(" ", styleVal(node, Prop::FontFamily),
+            fontSize, styleVal(node, Prop::FontWeight));
 
         for (auto* inl : pendingInline) {
             if (inl->isTextNode()) {
-                float ls2 = resolveLength(styleVal(style, "letter-spacing"), 0, fontSize);
-                float ws2 = resolveLength(styleVal(style, "word-spacing"), 0, fontSize);
+                float ls2 = resolveLength(styleVal(node, Prop::LetterSpacing), 0, fontSize);
+                float ws2 = resolveLength(styleVal(node, Prop::WordSpacing), 0, fontSize);
                 // Collapsing white-space wraps here, in the float-aware line
                 // builder — request word-granularity runs (the splitter
                 // greedily packs to the given width, so a tiny width yields
                 // one word per run) and re-insert the collapsed inter-word
                 // spaces as separate items below. Non-wrapping modes keep
                 // the splitter's own line packing.
-                const std::string& wsMode = styleVal(style, "white-space");
-                const std::string& oWrap2 = styleVal(style, "overflow-wrap");
-                const std::string& wBreak2 = styleVal(style, "word-break");
+                const std::string& wsMode = styleVal(node, Prop::WhiteSpace);
+                const std::string& oWrap2 = styleVal(node, Prop::OverflowWrap);
+                const std::string& wBreak2 = styleVal(node, Prop::WordBreak);
                 bool canBreakWord2 = oWrap2 == "break-word" ||
                     oWrap2 == "anywhere" || wBreak2 == "break-all";
                 bool wordMode = (wsMode.empty() || wsMode == "normal") &&
                                 !canBreakWord2;
                 auto runs = breakTextIntoRuns(std::string(inl->textContent()),
                     wordMode ? 0.5f : childAvailable,
-                    styleVal(style, "font-family"), fontSize, styleVal(style, "font-weight"),
+                    styleVal(node, Prop::FontFamily), fontSize, styleVal(node, Prop::FontWeight),
                     wsMode, metrics,
-                    oWrap2, wBreak2, ls2, ws2, styleVal(style, "text-transform"));
+                    oWrap2, wBreak2, ls2, ws2, styleVal(node, Prop::TextTransform));
                 inl->box = LayoutBox{};
                 // Pure-whitespace text node: collapses to a single space
                 // between inline-level siblings (skipped at the run's start,
@@ -1559,14 +1547,14 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // as the BR's bounding rect height — matches Chromium's
                 // getBoundingClientRect for forced-break inlines.
                 inl->box.contentRect.height = fontSize > 0 ? metrics.lineHeight(
-                    styleVal(style, "font-family"), fontSize,
-                    styleVal(style, "font-weight")) : 0.0f;
+                    styleVal(node, Prop::FontFamily), fontSize,
+                    styleVal(node, Prop::FontWeight)) : 0.0f;
                 AnonItem it{};
                 it.node = inl; it.height = anonStrut.lineHeight;
                 it.forceBreak = true;
                 anonItems.push_back(std::move(it));
             } else {
-                const std::string& fd = styleVal(inl->computedStyle(), "float");
+                const std::string& fd = styleVal(inl, Prop::Float);
                 if (fd == "left" || fd == "right") {
                     // A collapsed space immediately before a float renders no
                     // gap in Chromium — drop it.
@@ -1591,16 +1579,16 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     // Strip-boxed inline: size the line to its leaded box
                     // unioned with its content extents, not the strip.
                     auto& ics = inl->computedStyle();
-                    float cfs = resolveLength(styleVal(ics, "font-size"),
+                    float cfs = resolveLength(styleVal(inl, Prop::FontSize),
                                               fontSize, fontSize);
                     if (cfs <= 0) cfs = fontSize;
-                    const std::string& cff = styleVal(ics, "font-family");
-                    const std::string& cfw = styleVal(ics, "font-weight");
+                    const std::string& cff = styleVal(inl, Prop::FontFamily);
+                    const std::string& cfw = styleVal(inl, Prop::FontWeight);
                     float cNat = metrics.lineHeight(cff, cfs, cfw);
                     if (cNat <= 0) cNat = cfs * 1.2f;
                     float cAsc = metrics.ascent(cff, cfs, cfw);
                     if (cAsc <= 0 || cAsc >= cNat) cAsc = cNat * 0.8f;
-                    float cLH = resolveLineHeight(styleVal(ics, "line-height"),
+                    float cLH = resolveLineHeight(styleVal(inl, Prop::LineHeight),
                                                   cfs, cff, cfw, metrics);
                     float cLead = cLH - cNat;
                     float cHalf = std::floor(cLead * 0.5f);
@@ -1670,9 +1658,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // Height estimate for the per-line float band query (the line's own
             // height isn't known until it's filled). The natural font
             // line-height matches the common all-text/inline-word case.
-            float estLineH = resolveLineHeight(styleVal(style, "line-height"), fontSize,
-                styleVal(style, "font-family"), styleVal(style, "font-weight"), metrics);
-            bool anonNoWrap = styleVal(style, "white-space") == "nowrap";
+            float estLineH = resolveLineHeight(styleVal(node, Prop::LineHeight), fontSize,
+                styleVal(node, Prop::FontFamily), styleVal(node, Prop::FontWeight), metrics);
+            bool anonNoWrap = styleVal(node, Prop::WhiteSpace) == "nowrap";
 
             float lineY = cursorY;
             auto band = [&](float y) {
@@ -1762,7 +1750,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // first text run on a line drops its leading spaces and the last
         // drops its trailing spaces (mirrors the dedicated IFC path).
         {
-            const std::string& wsProp = styleVal(style, "white-space");
+            const std::string& wsProp = styleVal(node, Prop::WhiteSpace);
             if (wsProp != "pre" && wsProp != "pre-wrap") {
                 for (auto& line : anonLines) {
                     for (size_t k = line.start; k < line.end; ++k) {
@@ -1909,7 +1897,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (ntag == "fieldset" || ntag == "FIELDSET") {
             for (auto* c : getLayoutChildren(node)) {
                 if (c->isTextNode()) continue;
-                if (styleVal(c->computedStyle(), "display") == "none") continue;
+                if (styleVal(c, Prop::Display) == "none") continue;
                 std::string_view ctag = c->tagName();
                 if (ctag == "legend" || ctag == "LEGEND") fieldsetLegend = c;
                 break; // only the first in-flow child can be the legend
@@ -1961,20 +1949,20 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             continue;
         }
 
-        const std::string& childDisplay = styleVal(childStyle, "display");
+        const std::string& childDisplay = styleVal(child, Prop::Display);
         if (childDisplay == "none") {
             child->box = LayoutBox{};
             continue;
         }
 
-        const std::string& childPos = styleVal(childStyle, "position");
+        const std::string& childPos = styleVal(child, Prop::Position);
 
         // Absolutely and fixed positioned children are out of flow
         // (positioned by the post-layout absolute positioning pass)
         if (childPos == "absolute" || childPos == "fixed") continue;
 
         bool childCollapsed =
-            styleVal(childStyle, "-x-flow-collapse") == "collapse";
+            styleVal(child, Prop::XFlowCollapse) == "collapse";
         if (childCollapsed != inCollapsedRun) {
             flushInlineRun();
             if (childCollapsed) {
@@ -2001,7 +1989,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             continue;
         }
 
-        const std::string& childFloat = styleVal(childStyle, "float");
+        const std::string& childFloat = styleVal(child, Prop::Float);
 
         // A float that interrupts an inline run does NOT break the line
         // (CSS2 §9.5): defer it into the run — flushInlineRun places it
@@ -2015,7 +2003,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // Block child encountered — flush any pending inline items first
         flushInlineRun();
 
-        const std::string& childClear = styleVal(childStyle, "clear");
+        const std::string& childClear = styleVal(child, Prop::Clear);
 
         // clear: the bottom edge of the floats the child must move past
         // (CSS2 §9.5.2). Clearance is applied against the child's
@@ -2157,12 +2145,12 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // Apply position: relative/sticky offset after normal positioning
         // (sticky behaves like relative during layout; scroll clamping is a paint-time concern)
         if (childPos == "relative" || childPos == "sticky") {
-            float childFontSize = resolveLength(styleVal(childStyle, "font-size"), fontSize, fontSize);
+            float childFontSize = resolveLength(styleVal(child, Prop::FontSize), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;
-            const std::string& topVal = styleVal(childStyle, "top");
-            const std::string& leftVal = styleVal(childStyle, "left");
-            const std::string& bottomVal = styleVal(childStyle, "bottom");
-            const std::string& rightVal = styleVal(childStyle, "right");
+            const std::string& topVal = styleVal(child, Prop::Top);
+            const std::string& leftVal = styleVal(child, Prop::Left);
+            const std::string& bottomVal = styleVal(child, Prop::Bottom);
+            const std::string& rightVal = styleVal(child, Prop::Right);
 
             if (topVal != "auto" && !topVal.empty()) {
                 child->box.contentRect.y += resolveLength(topVal, 0, childFontSize);
@@ -2251,7 +2239,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // Bottom margin collapsing: last child's bottom margin escapes through the parent
         // (only for auto height)
         float heightRef0 = node->availableHeight;
-        float specH0 = resolveDimension(styleVal(style, "height"), heightRef0, fontSize);
+        float specH0 = resolveDimension(styleVal(node, Prop::Height), heightRef0, fontSize);
         if (node->box.padding.bottom == 0 && node->box.border.bottom == 0 &&
             specH0 < 0 && prevMarginBottom > 0) {
             float collapsed = std::max(node->box.margin.bottom, prevMarginBottom);
@@ -2264,9 +2252,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Resolve height using available height from containing block
     float heightRef = node->availableHeight;
-    float specifiedHeight = resolveDimension(styleVal(style, "height"), heightRef, fontSize);
+    float specifiedHeight = resolveDimension(styleVal(node, Prop::Height), heightRef, fontSize);
     if (specifiedHeight >= 0.0f) {
-        const std::string& boxSizing = styleVal(style, "box-sizing");
+        const std::string& boxSizing = styleVal(node, Prop::BoxSizing);
         if (boxSizing == "border-box") {
             float paddingV = node->box.padding.top + node->box.padding.bottom;
             float borderV = node->box.border.top + node->box.border.bottom;
@@ -2317,8 +2305,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     auto pctAgainstIndefiniteH = [&](const std::string& v) {
         return heightRef <= 0.0f && !v.empty() && v.back() == '%';
     };
-    const std::string& minHVal = styleVal(style, "min-height");
-    const std::string& maxHVal = styleVal(style, "max-height");
+    const std::string& minHVal = styleVal(node, Prop::MinHeight);
+    const std::string& maxHVal = styleVal(node, Prop::MaxHeight);
     float minH = pctAgainstIndefiniteH(minHVal) ? -1.0f
                  : resolveDimension(minHVal, heightRef, fontSize);
     float maxH = pctAgainstIndefiniteH(maxHVal) ? -1.0f
@@ -2337,7 +2325,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto* child : getLayoutChildren(node)) {
         if (!child->isTextNode()) {
             auto& cs = child->computedStyle();
-            const std::string& cp = styleVal(cs, "position");
+            const std::string& cp = styleVal(child, Prop::Position);
             if (cp != "absolute" && cp != "fixed") {
                 child->availableHeight = childAvailableHeight;
             }
@@ -2345,8 +2333,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // Multi-column layout: redistribute children into columns if column-count or column-width is set
-    const std::string& colCountStr = styleVal(style, "column-count");
-    const std::string& colWidthStr = styleVal(style, "column-width");
+    const std::string& colCountStr = styleVal(node, Prop::ColumnCount);
+    const std::string& colWidthStr = styleVal(node, Prop::ColumnWidth);
 
     bool hasMulticol = (!colCountStr.empty() && colCountStr != "auto") ||
                        (!colWidthStr.empty() && colWidthStr != "auto");
@@ -2365,7 +2353,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
 
         // Resolve column gap
-        const std::string& colGapStr = styleVal(style, "column-gap");
+        const std::string& colGapStr = styleVal(node, Prop::ColumnGap);
         float columnGap = 0.0f;
         if (!colGapStr.empty() && colGapStr != "normal") {
             columnGap = resolveLength(colGapStr, contentWidth, fontSize);
@@ -2393,8 +2381,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         for (auto* child : getLayoutChildren(node)) {
             if (child->isTextNode()) continue;
             auto& cs = child->computedStyle();
-            if (styleVal(cs, "display") == "none") continue;
-            const std::string& cp = styleVal(cs, "position");
+            if (styleVal(child, Prop::Display) == "none") continue;
+            const std::string& cp = styleVal(child, Prop::Position);
             if (cp == "absolute" || cp == "fixed") continue;
             inFlowChildren.push_back(child);
         }
@@ -2410,7 +2398,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         for (auto* child : inFlowChildren) {
             auto& cs = child->computedStyle();
-            if (styleVal(cs, "column-span") == "all") {
+            if (styleVal(child, Prop::ColumnSpan) == "all") {
                 if (!current.children.empty()) {
                     segments.push_back(std::move(current));
                     current = Segment{};
@@ -2458,10 +2446,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     bool breakBefore = false, breakAfter = false;
                 };
                 std::vector<FragItem> frag;
-                StrutMetrics colStrut = computeStrut(style, fontSize, metrics);
+                StrutMetrics colStrut = computeStrut(node, fontSize, metrics);
 
                 auto isInlineLevel = [](LayoutNode* c) {
-                    const std::string& d = styleVal(c->computedStyle(), "display");
+                    const std::string& d = styleVal(c, Prop::Display);
                     return d == "inline" || d == "inline-block" ||
                            d == "inline-flex" || d == "inline-grid";
                 };
@@ -2540,8 +2528,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         fi.height = child->box.fullHeight();
                         fi.marginTop = child->box.margin.top;
                         fi.marginBottom = child->box.margin.bottom;
-                        const std::string& bb = styleVal(cs, "break-before");
-                        const std::string& ba = styleVal(cs, "break-after");
+                        const std::string& bb = styleVal(child, Prop::BreakBefore);
+                        const std::string& ba = styleVal(child, Prop::BreakAfter);
                         fi.breakBefore = (bb == "column" || bb == "always");
                         fi.breakAfter = (ba == "column" || ba == "always");
                         frag.push_back(std::move(fi));
@@ -2593,7 +2581,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 };
 
                 const float unbounded = std::numeric_limits<float>::max() * 0.25f;
-                const bool fillAuto = (styleVal(style, "column-fill") == "auto");
+                const bool fillAuto = (styleVal(node, Prop::ColumnFill) == "auto");
                 float H;
                 if (specifiedHeight >= 0.0f && fillAuto) {
                     // column-fill: auto with a definite height: columns fill to

@@ -371,8 +371,17 @@ void printRow(const Row& r) {
 int main(int argc, char** argv) {
     using namespace htmlayout;
 
-    int cards = argc > 1 ? std::atoi(argv[1]) : 400;
-    int utilityRules = argc > 2 ? std::atoi(argv[2]) : 2000;
+    // --profile appends a sampling profile of the layout pass. It is opt-in: it
+    // runs three seconds of flat-out layout and leaves the machine hot enough that
+    // the next run's timings are meaningfully worse.
+    bool wantProfile = false;
+    std::vector<char*> pos;
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--profile") wantProfile = true;
+        else pos.push_back(argv[i]);
+    }
+    int cards = pos.size() > 0 ? std::atoi(pos[0]) : 400;
+    int utilityRules = pos.size() > 1 ? std::atoi(pos[1]) : 2000;
     const float viewportW = 1280.0f;
 
     auto doc = buildDocument(cards);
@@ -523,16 +532,35 @@ int main(int argc, char** argv) {
     }
 
     // ---- 7. Re-layout after a viewport change (the resize path) ----
+    //
+    // The A/B number. Reported as the best of several runs, not the first or the
+    // mean: a single timing on a laptop is a coin flip against the scheduler and
+    // the thermal governor, and comparing one run of a change against one run of
+    // its baseline has already cost me a day chasing a 20% "regression" that was
+    // the CPU being warm. The minimum is the honest estimate of what the code can
+    // do; interference can only ever add.
     {
-        auto m = allocMark();
-        metrics.measureCalls = 0;
-        auto t0 = Clock::now();
-        layout::layoutTree(root, viewportW - 200.0f, metrics);
-        double ms = msSince(t0);
-        auto a = allocSince(m);
+        const int kRuns = 7;
+        double best = 1e9;
+        AllocSnapshot a{};
+        uint64_t lookups = 0, measures = 0;
+        for (int i = 0; i < kRuns; i++) {
+            float w = viewportW - 200.0f - (i % 2);  // alternate so each pass is real work
+            layout::markSubtreeDirty(root);
+            auto m = allocMark();
+            metrics.measureCalls = 0;
+            auto t0 = Clock::now();
+            layout::layoutTree(root, w, metrics);
+            double ms = msSince(t0);
+            if (ms < best) {
+                best = ms;
+                a = allocSince(m);
+                lookups = layout::lastLayoutStats().styleLookups;
+                measures = metrics.measureCalls;
+            }
+        }
         const auto& st = layout::lastLayoutStats();
-        printRow({"layout (resize)", ms, a.allocs, a.bytes, st.styleLookups,
-                  metrics.measureCalls});
+        printRow({"layout (resize, best of 7)", best, a.allocs, a.bytes, lookups, measures});
         printf("  %-26s laidOut=%u reused=%u visits=%u\n", "", st.laidOut,
                st.reused, st.visits);
     }
@@ -709,7 +737,7 @@ int main(int argc, char** argv) {
                "53ms");
     }
 
-    // ---- 12. Where the pass actually spends its time ----
+    // ---- 12. Where the pass actually spends its time ----  (--profile only)
     //
     // Everything above prices a suspect that was already suspected. Summed, they
     // came to about 16ms of a 53ms pass; the rest had no candidate at all, and no
@@ -717,7 +745,12 @@ int main(int argc, char** argv) {
     // let it say. Relayout the whole tree in a loop (markSubtreeDirty makes every
     // pass a cold one) so the profile has thousands of samples to work with rather
     // than the few hundred one 53ms pass would yield.
-    {
+    //
+    // Off by default, because it is three seconds of flat-out layout next to a
+    // spinning sampler thread, and it leaves the CPU hot. Run it by default and
+    // the *next* run of the bench reports a 20 percent regression that is entirely
+    // thermal — which is exactly the false alarm this scenario cost me once.
+    if (wantProfile) {
         g_counting = false; // don't attribute samples to the alloc counter
         bench::Sampler prof(50);
         prof.start();

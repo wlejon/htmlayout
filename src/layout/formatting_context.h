@@ -1,5 +1,6 @@
 #pragma once
 #include "layout/box.h"
+#include "layout/style_cache.h"
 
 namespace htmlayout::layout {
 
@@ -78,11 +79,27 @@ float resolveLineHeight(const std::string& value, float fontSize,
                         const std::string& fontWeight,
                         TextMetrics& metrics);
 
-// Parse edges (margin, padding, border-width) from computed style
-Edges resolveEdges(const css::ComputedStyle& style,
-                   const std::string& prefix,
-                   float referenceWidth,
-                   float fontSize);
+// The four sides of one edge property, named up front instead of spelled out per
+// call. The old signature took a `prefix` and pasted "-top"/"-right"/... onto it,
+// which built four std::strings every call — and "border-bottom-width" is 19
+// characters, past the small-string limit, so resolving one box's borders meant
+// four mallocs. resolveEdges alone runs ~18,000 times in a cold pass.
+struct EdgeProps {
+    Prop top, right, bottom, left;
+};
+inline constexpr EdgeProps kMarginProps{Prop::MarginTop, Prop::MarginRight,
+                                        Prop::MarginBottom, Prop::MarginLeft};
+inline constexpr EdgeProps kPaddingProps{Prop::PaddingTop, Prop::PaddingRight,
+                                         Prop::PaddingBottom, Prop::PaddingLeft};
+
+// Parse edges (margin, padding) from computed style.
+Edges resolveEdges(const LayoutNode* node, const EdgeProps& props,
+                   float referenceWidth, float fontSize);
+
+// Border widths, which are only applied where border-*-style is not `none`. The
+// same loop was written out five times — once each in block, flex, grid, inline
+// and table layout — and each copy pasted together the same eight property names.
+Edges resolveBorders(const LayoutNode* node, float referenceWidth, float fontSize);
 
 // Post-layout pass: position all absolute/fixed elements against their
 // correct containing blocks. Called automatically by layoutTree().

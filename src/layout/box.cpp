@@ -3,6 +3,7 @@
 #include "css/transform.h"
 #include "layout/formatting_context.h"
 #include "layout/style_util.h"
+#include "layout/style_cache.h"
 #include "layout/measure_cache.h"
 #include <algorithm>
 #include <charconv>
@@ -13,6 +14,10 @@
 namespace htmlayout::layout {
 
 using layout::styleVal;
+
+// Out of line because LayoutNode::styleCache is a unique_ptr to NodeStyleCache,
+// which box.h only forward-declares. Here the type is complete.
+
 
 namespace { Rect computeSubtreeHitBounds(LayoutNode* node); }
 
@@ -91,11 +96,23 @@ void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& consume
     // asks the consumer to do. See MeasureCache.
     MeasureCache cache(consumerMetrics);
     TextMetrics& metrics = cache;
+
+    // Style is memoized per node for the length of this pass, on the same
+    // reasoning: layout visits a node ~2.75 times and asks it for the same
+    // properties each time, and nothing can rewrite a style while a synchronous
+    // pass is running. Outside the pass the memo is not trusted at all — see
+    // style_cache.h — so the window has to close even if a formatting context
+    // throws its way out of here.
+    struct StylePassScope {
+        StylePassScope() { beginStyleCachePass(); }
+        ~StylePassScope() { endStyleCachePass(); }
+    } stylePass;
+
     setLayoutViewport(viewport.width, viewport.height);
     // rem resolves against the root element's font-size. The root's computed
     // font-size is already absolute (px/unitless) by the time it reaches layout,
     // so resolve it against the initial 16px base (em/% would compound off 16).
-    float rootFontSize = resolveLength(styleVal(root->computedStyle(), "font-size"),
+    float rootFontSize = resolveLength(styleVal(root, Prop::FontSize),
                                        16.0f, 16.0f);
     setRootFontSize(rootFontSize);
 
@@ -149,16 +166,16 @@ bool pointInBox(const LayoutBox& box, float x, float y) {
 }
 
 // Get z-index as integer (auto treated as 0 for ordering purposes)
-int getZIndex(const css::ComputedStyle& style) {
-    const std::string& z = styleVal(style, "z-index");
+int getZIndex(const LayoutNode* node) {
+    const std::string& z = styleVal(node, Prop::ZIndex);
     if (z.empty() || z == "auto") return 0;
     try { return std::stoi(z); } catch (...) { return 0; }
 }
 
 // Check if an element creates a stacking context
-bool createsStackingContext(const css::ComputedStyle& style) {
-    const std::string& pos = styleVal(style, "position");
-    const std::string& z = styleVal(style, "z-index");
+bool createsStackingContext(const LayoutNode* node) {
+    const std::string& pos = styleVal(node, Prop::Position);
+    const std::string& z = styleVal(node, Prop::ZIndex);
     // position:fixed and position:sticky always create a stacking context
     if (pos == "fixed" || pos == "sticky") return true;
     // Other positioned elements with z-index other than auto
@@ -167,7 +184,7 @@ bool createsStackingContext(const css::ComputedStyle& style) {
         return true;
     }
     // opacity < 1 creates a stacking context
-    const std::string& op = styleVal(style, "opacity");
+    const std::string& op = styleVal(node, Prop::Opacity);
     if (!op.empty() && op != "1") {
         try {
             float opVal = std::stof(op);
@@ -175,25 +192,25 @@ bool createsStackingContext(const css::ComputedStyle& style) {
         } catch (...) {}
     }
     // transform other than none
-    const std::string& tr = styleVal(style, "transform");
+    const std::string& tr = styleVal(node, Prop::Transform);
     if (!tr.empty() && tr != "none") return true;
     // filter other than none
-    const std::string& ft = styleVal(style, "filter");
+    const std::string& ft = styleVal(node, Prop::Filter);
     if (!ft.empty() && ft != "none") return true;
     // isolation: isolate
-    if (styleVal(style, "isolation") == "isolate") return true;
+    if (styleVal(node, Prop::Isolation) == "isolate") return true;
     return false;
 }
 
 // Does this element clip descendants' hit testing to its border box?
 // Matches the overflow-clipping rules used at paint time.
-bool clipsHitTesting(const css::ComputedStyle& style) {
+bool clipsHitTesting(const LayoutNode* node) {
     auto check = [](const std::string& v) {
         return !v.empty() && v != "visible";
     };
-    if (check(styleVal(style, "overflow"))) return true;
-    if (check(styleVal(style, "overflow-x"))) return true;
-    if (check(styleVal(style, "overflow-y"))) return true;
+    if (check(styleVal(node, Prop::Overflow))) return true;
+    if (check(styleVal(node, Prop::OverflowX))) return true;
+    if (check(styleVal(node, Prop::OverflowY))) return true;
     return false;
 }
 
@@ -230,7 +247,7 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     }
 
     const auto& style = node->computedStyle();
-    if (styleVal(style, "display") == "none") {
+    if (styleVal(node, Prop::Display) == "none") {
         node->box.hitBounds = {0, 0, 0, 0};
         node->hitBoundsOriginX = node->box.contentRect.x;
         node->hitBoundsOriginY = node->box.contentRect.y;
@@ -248,7 +265,7 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     // the exact mapping hitTestRecursive uses (childOffset = absX - scroll).
     float childOffX = node->box.contentRect.x - node->scrollLeftPx();
     float childOffY = node->box.contentRect.y - node->scrollTopPx();
-    bool clips = clipsHitTesting(style);
+    bool clips = clipsHitTesting(node);
     for (auto* child : node->children()) {
         Rect cb = computeSubtreeHitBounds(child);   // in our content space
         // A clipping node bounds descendants to its own border box, so their
@@ -265,12 +282,12 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
 
     // Fold in this node's own transform — its whole box + subtree move together,
     // mirroring hitTestRecursive's forward transform about transform-origin.
-    const std::string& transform = styleVal(style, "transform");
+    const std::string& transform = styleVal(node, Prop::Transform);
     if (!transform.empty() && transform != "none") {
         css::Matrix2D mat = css::parseTransform(transform, bw, bh);
         if (!mat.isIdentity()) {
             float ox, oy;
-            css::parseTransformOrigin(styleVal(style, "transform-origin"), bw, bh, ox, oy);
+            css::parseTransformOrigin(styleVal(node, Prop::TransformOrigin), bw, bh, ox, oy);
             css::Matrix2D toOrigin{1, 0, 0, 1, bx + ox, by + oy};
             css::Matrix2D fromOrigin{1, 0, 0, 1, -(bx + ox), -(by + oy)};
             css::Matrix2D full = toOrigin * mat * fromOrigin;
@@ -304,16 +321,16 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     auto& style = node->computedStyle();
 
     // Skip display:none entirely (no layout, no descendants to test).
-    if (styleVal(style, "display") == "none") return nullptr;
+    if (styleVal(node, Prop::Display) == "none") return nullptr;
     // visibility:hidden still occupies space but is not hit-testable
-    if (styleVal(style, "visibility") == "hidden") return nullptr;
+    if (styleVal(node, Prop::Visibility) == "hidden") return nullptr;
     // Flow-collapsed content (closed <details> body) has real geometry but
     // is never rendered or interactive — see -x-flow-collapse in block.cpp.
-    if (styleVal(style, "-x-flow-collapse") == "collapse") return nullptr;
+    if (styleVal(node, Prop::XFlowCollapse) == "collapse") return nullptr;
     // pointer-events:none makes *this node* non-hittable, but descendants
     // with pointer-events:auto must still be reachable. Track it and skip
     // returning `node` below — children are still traversed normally.
-    bool pointerEventsNone = (styleVal(style, "pointer-events") == "none");
+    bool pointerEventsNone = (styleVal(node, Prop::PointerEvents) == "none");
 
     // Subtree prune: box.hitBounds (cached at layout time) is the union of this
     // node and every descendant, in the same space as the incoming point + the
@@ -341,12 +358,12 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     // around transform-origin. Must be computed after bw/bh are known so
     // percentage translates/origins resolve against the element's border box.
     float testX = x, testY = y;
-    const std::string& transform = styleVal(style, "transform");
+    const std::string& transform = styleVal(node, Prop::Transform);
     if (!transform.empty() && transform != "none") {
         css::Matrix2D mat = css::parseTransform(transform, bw, bh);
         if (!mat.isIdentity()) {
             float ox, oy;
-            css::parseTransformOrigin(styleVal(style, "transform-origin"),
+            css::parseTransformOrigin(styleVal(node, Prop::TransformOrigin),
                                        bw, bh, ox, oy);
             // Build full transform about the origin: T(origin) * M * T(-origin)
             css::Matrix2D toOrigin{1,0,0,1, bx+ox, by+oy};
@@ -367,7 +384,7 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     // box, reject entirely — neither it nor its children can be hit. With
     // overflow:visible, we still descend in case positioned children extend
     // past our bounds.
-    if (!insideBounds && clipsHitTesting(style))
+    if (!insideBounds && clipsHitTesting(node))
         return nullptr;
 
     // Sort children by CSS stacking order for hit testing (topmost first).
@@ -392,11 +409,11 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     for (auto* child : children) {
         if (!child) continue;
         const auto& cs = child->computedStyle();
-        const std::string& p = styleVal(cs, "position");
+        const std::string& p = styleVal(child, Prop::Position);
         if (p == "absolute" || p == "relative" || p == "fixed" || p == "sticky") {
             needsSort = true; break;
         }
-        if (getZIndex(cs) != 0) { needsSort = true; break; }
+        if (getZIndex(child) != 0) { needsSort = true; break; }
     }
 
     if (!needsSort) {
@@ -421,8 +438,8 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
         int z = 0;
         bool pos = false;
         if (child) {
-            z = getZIndex(child->computedStyle());
-            const std::string& p = styleVal(child->computedStyle(), "position");
+            z = getZIndex(child);
+            const std::string& p = styleVal(child, Prop::Position);
             pos = (p == "absolute" || p == "relative" || p == "fixed" || p == "sticky");
         }
         zChildren.push_back({z, pos, i, child});
@@ -500,7 +517,7 @@ void applyOverflowClippingRecursive(LayoutNode* node, bool parentClips, const La
     if (!node) return;
 
     auto& style = node->computedStyle();
-    if (styleVal(style, "display") == "none") return;
+    if (styleVal(node, Prop::Display) == "none") return;
 
     // If parent clips and this node extends outside, clip it
     if (parentClips && clipBox) {
@@ -508,11 +525,11 @@ void applyOverflowClippingRecursive(LayoutNode* node, bool parentClips, const La
     }
 
     // Check if this node clips its children
-    const std::string& overflow = styleVal(style, "overflow");
+    const std::string& overflow = styleVal(node, Prop::Overflow);
     bool thisClips = (overflow == "hidden" || overflow == "scroll" || overflow == "auto" || overflow == "clip");
     // CSS Containment L2: contain: paint clips children to padding box
     if (!thisClips) {
-        const std::string& contain = styleVal(style, "contain");
+        const std::string& contain = styleVal(node, Prop::Contain);
         if (!contain.empty() && contain != "none") {
             thisClips = (contain == "strict" || contain == "content" ||
                          contain.find("paint") != std::string::npos);
@@ -600,7 +617,7 @@ std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node) {
     for (auto* child : node->children()) {
         if (!child->isTextNode()) {
             auto& cs = child->computedStyle();
-            if (styleVal(cs, "display") == "contents") {
+            if (styleVal(child, Prop::Display) == "contents") {
                 // Flatten: promote this node's children into the parent's sequence
                 auto grandchildren = getLayoutChildren(child);
                 result.insert(result.end(), grandchildren.begin(), grandchildren.end());

@@ -1,6 +1,7 @@
 #include "layout/grid.h"
 #include "layout/formatting_context.h"
 #include "layout/style_util.h"
+#include "layout/style_cache.h"
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -372,50 +373,50 @@ std::vector<float> resolveTrackSizes(const std::vector<TrackSize>& tracks,
 // only their edges contribute.
 float itemMinContentContribution(LayoutNode* item, float parentFontSize, TextMetrics& metrics) {
     auto& cs = item->computedStyle();
-    float cfs = resolveLength(styleVal(cs, "font-size"), parentFontSize, parentFontSize);
+    float cfs = resolveLength(styleVal(item, Prop::FontSize), parentFontSize, parentFontSize);
     if (cfs <= 0) cfs = parentFontSize;
-    float ph = resolveLength(styleVal(cs, "padding-left"), 0, cfs) +
-               resolveLength(styleVal(cs, "padding-right"), 0, cfs);
+    float ph = resolveLength(styleVal(item, Prop::PaddingLeft), 0, cfs) +
+               resolveLength(styleVal(item, Prop::PaddingRight), 0, cfs);
     float bh = 0;
-    if (styleVal(cs, "border-left-style") != "none")
-        bh += resolveLength(styleVal(cs, "border-left-width"), 0, cfs);
-    if (styleVal(cs, "border-right-style") != "none")
-        bh += resolveLength(styleVal(cs, "border-right-width"), 0, cfs);
-    float mh = resolveLength(styleVal(cs, "margin-left"), 0, cfs) +
-               resolveLength(styleVal(cs, "margin-right"), 0, cfs);
+    if (styleVal(item, Prop::BorderLeftStyle) != "none")
+        bh += resolveLength(styleVal(item, Prop::BorderLeftWidth), 0, cfs);
+    if (styleVal(item, Prop::BorderRightStyle) != "none")
+        bh += resolveLength(styleVal(item, Prop::BorderRightWidth), 0, cfs);
+    float mh = resolveLength(styleVal(item, Prop::MarginLeft), 0, cfs) +
+               resolveLength(styleVal(item, Prop::MarginRight), 0, cfs);
 
-    const std::string& ov = styleVal(cs, "overflow");
-    const std::string& ovx = styleVal(cs, "overflow-x");
+    const std::string& ov = styleVal(item, Prop::Overflow);
+    const std::string& ovx = styleVal(item, Prop::OverflowX);
     bool scrollContainer = (!ov.empty() && ov != "visible") ||
                            (!ovx.empty() && ovx != "visible");
 
-    const std::string& wVal = styleVal(cs, "width");
+    const std::string& wVal = styleVal(item, Prop::Width);
     bool definiteW = !wVal.empty() && wVal != "auto" &&
                      wVal.find('%') == std::string::npos &&
                      !isIntrinsicSizingKeyword(wVal);
     float contribution;
     if (definiteW) {
         float w = resolveLength(wVal, 0, cfs);
-        contribution = (styleVal(cs, "box-sizing") == "border-box")
+        contribution = (styleVal(item, Prop::BoxSizing) == "border-box")
             ? w + mh : w + ph + bh + mh;
     } else if (scrollContainer) {
         contribution = ph + bh + mh;
     } else {
         contribution = computeMinContentWidth(item, metrics) + ph + bh + mh;
     }
-    const std::string& minWVal = styleVal(cs, "min-width");
+    const std::string& minWVal = styleVal(item, Prop::MinWidth);
     if (!minWVal.empty() && minWVal != "auto" &&
         minWVal.find('%') == std::string::npos) {
         float v = resolveLength(minWVal, 0, cfs);
-        float t = (styleVal(cs, "box-sizing") == "border-box")
+        float t = (styleVal(item, Prop::BoxSizing) == "border-box")
             ? v + mh : v + ph + bh + mh;
         if (contribution < t) contribution = t;
     }
-    const std::string& maxWVal = styleVal(cs, "max-width");
+    const std::string& maxWVal = styleVal(item, Prop::MaxWidth);
     if (!maxWVal.empty() && maxWVal != "none" &&
         maxWVal.find('%') == std::string::npos) {
         float v = resolveLength(maxWVal, 0, cfs);
-        float t = (styleVal(cs, "box-sizing") == "border-box")
+        float t = (styleVal(item, Prop::BoxSizing) == "border-box")
             ? v + mh : v + ph + bh + mh;
         if (contribution > t) contribution = t;
     }
@@ -535,14 +536,14 @@ int resolveNamedLine(const GridLineRef& ref, const NamedLines& lineNames, int oc
     return it->second[idx];
 }
 
-GridPlacement parseGridPlacement(const css::ComputedStyle& style,
+GridPlacement parseGridPlacement(const LayoutNode* node,
                                  const std::unordered_map<std::string, GridArea>& namedAreas,
                                  const NamedLines& colLines = {},
                                  const NamedLines& rowLines = {}) {
     GridPlacement gp;
 
     // Check grid-area first (shorthand)
-    const std::string& area = styleVal(style, "grid-area");
+    const std::string& area = styleVal(node, Prop::GridArea);
     if (!area.empty() && area != "auto") {
         // Check if it's a named area reference (single identifier, no slashes)
         if (area.find('/') == std::string::npos) {
@@ -589,13 +590,13 @@ GridPlacement parseGridPlacement(const css::ComputedStyle& style,
         auto ref = parseGridLineRef(val);
         return resolveNamedLine(ref, colLines);
     };
-    gp.rowStart = resolveRow(styleVal(style, "grid-row-start"));
-    gp.colStart = resolveCol(styleVal(style, "grid-column-start"));
-    gp.rowEnd = resolveRow(styleVal(style, "grid-row-end"));
-    gp.colEnd = resolveCol(styleVal(style, "grid-column-end"));
+    gp.rowStart = resolveRow(styleVal(node, Prop::GridRowStart));
+    gp.colStart = resolveCol(styleVal(node, Prop::GridColumnStart));
+    gp.rowEnd = resolveRow(styleVal(node, Prop::GridRowEnd));
+    gp.colEnd = resolveCol(styleVal(node, Prop::GridColumnEnd));
 
     // Handle grid-row / grid-column shorthands
-    const std::string& gridRow = styleVal(style, "grid-row");
+    const std::string& gridRow = styleVal(node, Prop::GridRow);
     if (!gridRow.empty() && gridRow != "auto") {
         auto slash = gridRow.find('/');
         if (slash != std::string::npos) {
@@ -612,7 +613,7 @@ GridPlacement parseGridPlacement(const css::ComputedStyle& style,
         }
     }
 
-    const std::string& gridCol = styleVal(style, "grid-column");
+    const std::string& gridCol = styleVal(node, Prop::GridColumn);
     if (!gridCol.empty() && gridCol != "auto") {
         auto slash = gridCol.find('/');
         if (slash != std::string::npos) {
@@ -637,7 +638,7 @@ GridPlacement parseGridPlacement(const css::ComputedStyle& style,
 float gridMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     if (!node) return 0.0f;
     auto& style = node->computedStyle();
-    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
     if (fontSize <= 0) fontSize = 16.0f;
 
     // Widest in-flow item's outer max-content contribution — the stand-in
@@ -649,25 +650,25 @@ float gridMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) continue;
         auto& cs = child->computedStyle();
-        if (styleVal(cs, "display") == "none") continue;
-        const std::string& cpos = styleVal(cs, "position");
+        if (styleVal(child, Prop::Display) == "none") continue;
+        const std::string& cpos = styleVal(child, Prop::Position);
         if (cpos == "absolute" || cpos == "fixed") continue;
-        float cfs = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+        float cfs = resolveLength(styleVal(child, Prop::FontSize), fontSize, fontSize);
         if (cfs <= 0) cfs = fontSize;
-        float ph = resolveLength(styleVal(cs, "padding-left"), 0, cfs) +
-                   resolveLength(styleVal(cs, "padding-right"), 0, cfs);
+        float ph = resolveLength(styleVal(child, Prop::PaddingLeft), 0, cfs) +
+                   resolveLength(styleVal(child, Prop::PaddingRight), 0, cfs);
         float bh = 0;
-        if (styleVal(cs, "border-left-style") != "none")
-            bh += resolveLength(styleVal(cs, "border-left-width"), 0, cfs);
-        if (styleVal(cs, "border-right-style") != "none")
-            bh += resolveLength(styleVal(cs, "border-right-width"), 0, cfs);
-        float mh = resolveLength(styleVal(cs, "margin-left"), 0, cfs) +
-                   resolveLength(styleVal(cs, "margin-right"), 0, cfs);
-        const std::string& wVal = styleVal(cs, "width");
+        if (styleVal(child, Prop::BorderLeftStyle) != "none")
+            bh += resolveLength(styleVal(child, Prop::BorderLeftWidth), 0, cfs);
+        if (styleVal(child, Prop::BorderRightStyle) != "none")
+            bh += resolveLength(styleVal(child, Prop::BorderRightWidth), 0, cfs);
+        float mh = resolveLength(styleVal(child, Prop::MarginLeft), 0, cfs) +
+                   resolveLength(styleVal(child, Prop::MarginRight), 0, cfs);
+        const std::string& wVal = styleVal(child, Prop::Width);
         float contribution;
         if (!wVal.empty() && wVal != "auto" && wVal.find('%') == std::string::npos) {
             float w = resolveLength(wVal, 0, cfs);
-            contribution = (styleVal(cs, "box-sizing") == "border-box")
+            contribution = (styleVal(child, Prop::BoxSizing) == "border-box")
                 ? w + mh : w + ph + bh + mh;
         } else {
             contribution = computeMaxContentWidth(child, metrics) + ph + bh + mh;
@@ -677,7 +678,7 @@ float gridMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
 
     // Percentages and auto-fill/auto-fit resolve against an indefinite (0)
     // available size under max-content sizing.
-    auto tracks = parseTrackList(styleVal(style, "grid-template-columns"), 0.0f, fontSize);
+    auto tracks = parseTrackList(styleVal(node, Prop::GridTemplateColumns), 0.0f, fontSize);
     if (tracks.empty()) return itemMax;
 
     float sum = 0.0f;
@@ -689,7 +690,7 @@ float gridMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
         else
             sum += itemMax; // fr / auto / min-content / max-content
     }
-    float gap = resolveLength(styleVal(style, "column-gap"), 0, fontSize);
+    float gap = resolveLength(styleVal(node, Prop::ColumnGap), 0, fontSize);
     if (gap > 0 && tracks.size() > 1) sum += gap * (tracks.size() - 1);
     return sum;
 }
@@ -698,21 +699,13 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (!node) return;
 
     auto& style = node->computedStyle();
-    float fontSize = resolveLength(styleVal(style, "font-size"), 16.0f, 16.0f);
+    float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
     if (fontSize <= 0) fontSize = 16.0f;
 
     // Resolve container edges
-    node->box.margin = resolveEdges(style, "margin", availableWidth, fontSize);
-    node->box.padding = resolveEdges(style, "padding", availableWidth, fontSize);
-
-    Edges borderWidth{};
-    const char* sideNames[] = {"top", "right", "bottom", "left"};
-    float* bw[] = {&borderWidth.top, &borderWidth.right, &borderWidth.bottom, &borderWidth.left};
-    for (int i = 0; i < 4; i++) {
-        if (styleVal(style, std::string("border-") + sideNames[i] + "-style") != "none")
-            *bw[i] = resolveLength(styleVal(style, std::string("border-") + sideNames[i] + "-width"), availableWidth, fontSize);
-    }
-    node->box.border = borderWidth;
+    node->box.margin = resolveEdges(node, kMarginProps, availableWidth, fontSize);
+    node->box.padding = resolveEdges(node, kPaddingProps, availableWidth, fontSize);
+    node->box.border = resolveBorders(node, availableWidth, fontSize);
 
     float paddingH = node->box.padding.left + node->box.padding.right;
     float borderH = node->box.border.left + node->box.border.right;
@@ -720,10 +713,10 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float borderV = node->box.border.top + node->box.border.bottom;
 
     // Container width
-    float specW = resolveDim(styleVal(style, "width"), availableWidth, fontSize);
+    float specW = resolveDim(styleVal(node, Prop::Width), availableWidth, fontSize);
     float containerWidth;
     if (specW >= 0) {
-        if (styleVal(style, "box-sizing") == "border-box")
+        if (styleVal(node, Prop::BoxSizing) == "border-box")
             containerWidth = specW - paddingH - borderH;
         else
             containerWidth = specW;
@@ -734,13 +727,13 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // Parse gap
-    float rowGap = resolveLength(styleVal(style, "row-gap"), containerWidth, fontSize);
-    float colGap = resolveLength(styleVal(style, "column-gap"), containerWidth, fontSize);
+    float rowGap = resolveLength(styleVal(node, Prop::RowGap), containerWidth, fontSize);
+    float colGap = resolveLength(styleVal(node, Prop::ColumnGap), containerWidth, fontSize);
     // gap shorthand handling (already expanded by properties.cpp)
 
     // Parse grid template (with named lines and auto-fill/auto-fit support)
-    auto colParsed = parseTrackListWithNames(styleVal(style, "grid-template-columns"), containerWidth, fontSize, colGap);
-    auto rowParsed = parseTrackListWithNames(styleVal(style, "grid-template-rows"), containerWidth, fontSize, rowGap);
+    auto colParsed = parseTrackListWithNames(styleVal(node, Prop::GridTemplateColumns), containerWidth, fontSize, colGap);
+    auto rowParsed = parseTrackListWithNames(styleVal(node, Prop::GridTemplateRows), containerWidth, fontSize, rowGap);
     auto colTracks = std::move(colParsed.tracks);
     auto rowTracks = std::move(rowParsed.tracks);
     auto colLineNames = std::move(colParsed.lineNames);
@@ -751,8 +744,8 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     int autoFitRowBegin = rowParsed.autoFitBegin, autoFitRowEnd = rowParsed.autoFitEnd;
 
     // Parse implicit track sizing (default to Auto if not specified)
-    const std::string& autoColVal = styleVal(style, "grid-auto-columns");
-    const std::string& autoRowVal = styleVal(style, "grid-auto-rows");
+    const std::string& autoColVal = styleVal(node, Prop::GridAutoColumns);
+    const std::string& autoRowVal = styleVal(node, Prop::GridAutoRows);
     TrackSize autoColTrack = (autoColVal.empty() || autoColVal == "auto")
         ? TrackSize{TrackSize::Auto, 0, 0, -1, false}
         : parseTrackSize(autoColVal, containerWidth, fontSize);
@@ -761,7 +754,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         : parseTrackSize(autoRowVal, containerWidth, fontSize);
 
     // Parse named grid areas
-    auto namedAreas = parseGridTemplateAreas(styleVal(style, "grid-template-areas"));
+    auto namedAreas = parseGridTemplateAreas(styleVal(node, Prop::GridTemplateAreas));
 
     // Infer track counts from template areas if tracks not explicitly defined
     if (!namedAreas.empty()) {
@@ -790,15 +783,15 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto* child : getLayoutChildren(node)) {
         if (child->isTextNode()) continue;
         auto& cs = child->computedStyle();
-        if (styleVal(cs, "display") == "none") {
+        if (styleVal(child, Prop::Display) == "none") {
             child->box = LayoutBox{};
             continue;
         }
-        const std::string& childPos = styleVal(cs, "position");
+        const std::string& childPos = styleVal(child, Prop::Position);
         if (childPos == "absolute" || childPos == "fixed") continue;
         GridItem item;
         item.node = child;
-        item.placement = parseGridPlacement(cs, namedAreas, colLineNames, rowLineNames);
+        item.placement = parseGridPlacement(child, namedAreas, colLineNames, rowLineNames);
         item.row = -1; item.col = -1;
         item.rowSpan = 1; item.colSpan = 1;
         items.push_back(item);
@@ -860,7 +853,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // Check auto-flow direction
-    const std::string& autoFlow = styleVal(style, "grid-auto-flow");
+    const std::string& autoFlow = styleVal(node, Prop::GridAutoFlow);
     bool columnFlow = (autoFlow == "column");
 
     // Pre-pass: mark cells occupied for items with fully explicit placement
@@ -1060,9 +1053,9 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // collapse to their content size since freeSpace = 0 - usedSpace = 0.
     float rowAvailable = 0.0f;
     {
-        float specH = resolveDim(styleVal(style, "height"), node->availableHeight, fontSize);
+        float specH = resolveDim(styleVal(node, Prop::Height), node->availableHeight, fontSize);
         if (specH >= 0) {
-            if (styleVal(style, "box-sizing") == "border-box")
+            if (styleVal(node, Prop::BoxSizing) == "border-box")
                 rowAvailable = specH - paddingV - borderV;
             else
                 rowAvailable = specH;
@@ -1077,8 +1070,8 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Container-level justify-items / align-items defaults to "stretch".
     // Per-item justify-self / align-self can override.
-    const std::string& containerJustifyItems = styleVal(style, "justify-items");
-    const std::string& containerAlignItems = styleVal(style, "align-items");
+    const std::string& containerJustifyItems = styleVal(node, Prop::JustifyItems);
+    const std::string& containerAlignItems = styleVal(node, Prop::AlignItems);
     auto resolveAlign = [](const std::string& self, const std::string& items) {
         if (!self.empty() && self != "auto" && self != "normal") return self;
         if (!items.empty() && items != "normal") return items;
@@ -1105,8 +1098,8 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // On a reused box this re-states the width it already holds: the inputs
         // (itemWidth and the item's own padding/border/margin) are unchanged.
         auto& cs = item.node->computedStyle();
-        const std::string& w = styleVal(cs, "width");
-        std::string justifySelf = resolveAlign(styleVal(cs, "justify-self"), containerJustifyItems);
+        const std::string& w = styleVal(item.node, Prop::Width);
+        std::string justifySelf = resolveAlign(styleVal(item.node, Prop::JustifySelf), containerJustifyItems);
         if ((w == "auto" || w.empty()) && justifySelf == "stretch") {
             float cw = itemWidth -
                 item.node->box.padding.left - item.node->box.padding.right -
@@ -1205,9 +1198,9 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         // Stretch item to fill grid area (default behavior) — only when align-self resolves to stretch
         auto& cs = item.node->computedStyle();
-        const std::string& h = styleVal(cs, "height");
-        std::string alignSelf = resolveAlign(styleVal(cs, "align-self"), containerAlignItems);
-        std::string justifySelfPos = resolveAlign(styleVal(cs, "justify-self"), containerJustifyItems);
+        const std::string& h = styleVal(item.node, Prop::Height);
+        std::string alignSelf = resolveAlign(styleVal(item.node, Prop::AlignSelf), containerAlignItems);
+        std::string justifySelfPos = resolveAlign(styleVal(item.node, Prop::JustifySelf), containerJustifyItems);
         if ((h == "auto" || h.empty()) && alignSelf == "stretch") {
             float ch = areaH -
                 item.node->box.margin.top - item.node->box.margin.bottom -
@@ -1272,14 +1265,14 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             item.node->box.margin.top + item.node->box.padding.top + item.node->box.border.top;
 
         // Apply position: relative offset
-        const std::string& childPos = styleVal(cs, "position");
+        const std::string& childPos = styleVal(item.node, Prop::Position);
         if (childPos == "relative" || childPos == "sticky") {
-            float childFontSize = resolveLength(styleVal(cs, "font-size"), fontSize, fontSize);
+            float childFontSize = resolveLength(styleVal(item.node, Prop::FontSize), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;
-            const std::string& topVal = styleVal(cs, "top");
-            const std::string& leftVal = styleVal(cs, "left");
-            const std::string& bottomVal = styleVal(cs, "bottom");
-            const std::string& rightVal = styleVal(cs, "right");
+            const std::string& topVal = styleVal(item.node, Prop::Top);
+            const std::string& leftVal = styleVal(item.node, Prop::Left);
+            const std::string& bottomVal = styleVal(item.node, Prop::Bottom);
+            const std::string& rightVal = styleVal(item.node, Prop::Right);
 
             if (topVal != "auto" && !topVal.empty()) {
                 item.node->box.contentRect.y += resolveLength(topVal, 0, childFontSize);
@@ -1309,9 +1302,9 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (naturalH < 0) naturalH = 0;
     }
 
-    float specH = resolveDim(styleVal(style, "height"), 0, fontSize);
+    float specH = resolveDim(styleVal(node, Prop::Height), 0, fontSize);
     if (specH >= 0) {
-        if (styleVal(style, "box-sizing") == "border-box")
+        if (styleVal(node, Prop::BoxSizing) == "border-box")
             node->box.contentRect.height = specH - paddingV - borderV;
         else
             node->box.contentRect.height = specH;

@@ -250,7 +250,7 @@ static void testMulticolColumnWidth() {
     layoutTree(&root, 800, m);
 
     // 600px / 150px = 4 columns
-    check(isMulticolContainer(root.style_), "isMulticolContainer returns true");
+    check(isMulticolContainer(&root), "isMulticolContainer returns true");
     check(root.box.contentRect.width > 0, "multicol column-width: has width");
 }
 

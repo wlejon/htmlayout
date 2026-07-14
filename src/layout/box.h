@@ -1,5 +1,6 @@
 #pragma once
 #include "css/cascade.h"
+#include "layout/style_props.h"
 #include <string>
 #include <string_view>
 #include <vector>
@@ -143,7 +144,19 @@ struct LayoutBox {
 // Abstract interface for a node in the layout tree.
 // Consumers implement this to bridge their DOM.
 struct LayoutNode {
+    LayoutNode() = default;
+
     virtual ~LayoutNode() = default;
+
+    // Move-only. The style cache below is a unique_ptr, which makes copying a node
+    // ill-formed anyway — but declaring that deliberately is the honest version:
+    // layout identifies nodes by address (parents cache pointers to children, the
+    // reuse machinery keys on the node's own recorded inputs), so a copied node was
+    // never a second node, only a way to lose track of the first.
+    LayoutNode(LayoutNode&&) = default;
+    LayoutNode& operator=(LayoutNode&&) = default;
+    LayoutNode(const LayoutNode&) = delete;
+    LayoutNode& operator=(const LayoutNode&) = delete;
 
     // Identity
     virtual std::string_view tagName() const = 0;
@@ -305,6 +318,16 @@ struct LayoutNode {
     // a position/display change is a layout-affecting style change, so it
     // always arrives through one of them.
     int8_t subtreeHasPositioned = -1;
+
+    // This node's style, projected into a flat array indexed by Prop, and the pass
+    // that projected it. Valid only within that pass — a consumer may rewrite a
+    // ComputedStyle between passes without marking anything dirty, so nothing here
+    // is trusted once the pass ends. See style_cache.h, which owns all of this;
+    // the storage lives on the node only because that is where the style does.
+    // Mutable: reading a style is conceptually const, and filling the cache is how
+    // a read is served.
+    mutable std::unique_ptr<NodeStyleCache> styleCache;
+    mutable uint32_t styleCachePass = 0;
 
     // Root node only: the document-global inputs that any node's lengths may
     // resolve against — the viewport (vw/vh/vmin/vmax) and the root font-size
