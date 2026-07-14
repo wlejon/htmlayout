@@ -442,13 +442,15 @@ LayoutNode* hitTest(LayoutNode* root, float x, float y) {
 void markDirty(LayoutNode* node) {
     if (!node) return;
     node->box.dirty = true;
-    // Walk up to root, marking ancestors dirty
-    LayoutNode* p = node->parent();
-    while (p) {
-        if (p->box.dirty) break; // already dirty up the chain
+    // Walk all the way to the root. Stopping at the first already-dirty
+    // ancestor would assume every dirty node eventually reaches layoutNode()
+    // and has its flag cleared — which is false for the structural nodes some
+    // formatting contexts position by hand (table rows and row groups get
+    // their boxes written directly by layoutTable, never via layoutNode). Such
+    // a node stays dirty forever and would swallow the walk, leaving the
+    // container above it clean and its whole subtree skipped as unchanged.
+    for (LayoutNode* p = node->parent(); p; p = p->parent())
         p->box.dirty = true;
-        p = p->parent();
-    }
 }
 
 void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
