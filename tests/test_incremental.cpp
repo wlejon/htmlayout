@@ -3,6 +3,10 @@
 #include "layout/box.h"
 #include "layout/formatting_context.h"
 #include <cmath>
+#include <cstdio>
+#include <memory>
+#include <string>
+#include <vector>
 
 using namespace htmlayout::layout;
 using namespace htmlayout::css;
@@ -162,10 +166,161 @@ void testCleanSubtreeIsStable() {
     check(approx(b.box.contentRect.y, 60.0f), "b follows a's new height");
 }
 
+// ---------------------------------------------------------------------------
+// Grid items are reused across passes, which means the boxes a grid hands back
+// have to be indistinguishable from the ones it would have computed. Grid makes
+// that hard on itself: it writes its own decisions (justify stretch width, align
+// stretch height) straight into an item's box, then reads boxes back as the item
+// contributions that size its auto tracks. Read a *reused* box back and the
+// contribution is last pass's stretched size, so a track could only ever grow.
+//
+// So test it differentially: run the incremental pass, build the same document
+// from scratch, and require every box to agree. A ratchet shows up immediately
+// as a row that didn't shrink.
+
+struct GridDoc {
+    std::vector<std::unique_ptr<Node>> arena;
+    Node* root = nullptr;
+    std::vector<Node*> cells;
+    std::vector<Node*> texts;
+
+    Node* alloc() {
+        arena.push_back(std::make_unique<Node>());
+        return arena.back().get();
+    }
+};
+
+// root(block, 800px) > grid(2 equal columns) > cell(block, 5px padding) > text
+void buildGridDoc(GridDoc& d, const std::vector<std::string>& cellTexts) {
+    d.root = d.alloc();
+    initNode(*d.root, "div", "block");
+    d.root->style["width"] = "800px";
+
+    Node* grid = d.alloc();
+    initNode(*grid, "div", "grid");
+    grid->style["grid-template-columns"] = "1fr 1fr";
+    grid->style["row-gap"] = "10px";
+    grid->style["column-gap"] = "10px";
+    d.root->addChild(grid);
+
+    for (const auto& s : cellTexts) {
+        Node* cell = d.alloc();
+        initNode(*cell, "div", "block");
+        cell->style["padding-top"] = "5px";
+        cell->style["padding-bottom"] = "5px";
+        grid->addChild(cell);
+        d.cells.push_back(cell);
+
+        Node* tx = d.alloc();
+        tx->isText = true;
+        tx->text = s;
+        tx->style["font-size"] = "16px";
+        cell->addChild(tx);
+        d.texts.push_back(tx);
+    }
+}
+
+// Compare every box in two structurally identical trees.
+bool boxesAgree(Node* a, Node* b, std::string& where) {
+    const auto& ra = a->box.contentRect;
+    const auto& rb = b->box.contentRect;
+    if (!approx(ra.x, rb.x) || !approx(ra.y, rb.y) ||
+        !approx(ra.width, rb.width) || !approx(ra.height, rb.height)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "<%s> incremental (%.1f,%.1f %.1fx%.1f) vs fresh (%.1f,%.1f %.1fx%.1f)",
+                 a->isText ? "#text" : a->tag.c_str(),
+                 ra.x, ra.y, ra.width, ra.height, rb.x, rb.y, rb.width, rb.height);
+        where = buf;
+        return false;
+    }
+    for (size_t i = 0; i < a->childNodes.size(); i++)
+        if (!boxesAgree(static_cast<Node*>(a->childNodes[i]),
+                        static_cast<Node*>(b->childNodes[i]), where))
+            return false;
+    return true;
+}
+
+// Lay `doc` out incrementally after `mutate`, build the same document fresh, and
+// require the two to agree box for box.
+void checkGridMatchesFullLayout(const std::vector<std::string>& before,
+                                const std::vector<std::string>& after,
+                                size_t changed, const char* what) {
+    Metrics metrics;
+    Viewport vp{800.0f, 600.0f};
+
+    GridDoc incr;
+    buildGridDoc(incr, before);
+    layoutTree(incr.root, vp, metrics);
+
+    incr.texts[changed]->text = after[changed];
+    markDirty(incr.cells[changed]);
+    layoutTree(incr.root, vp, metrics);
+
+    GridDoc fresh;
+    buildGridDoc(fresh, after);
+    layoutTree(fresh.root, vp, metrics);
+
+    std::string where;
+    bool ok = boxesAgree(incr.root, fresh.root, where);
+    std::string label = std::string(what) + ": incremental grid matches a full layout";
+    if (!ok) label += " [" + where + "]";
+    check(ok, label.c_str());
+}
+
+void testGridItemReuse() {
+    printf("--- Incremental: grid item reuse ---\n");
+
+    // Long enough to wrap in a ~395px column; short enough not to.
+    const std::string tall  = "the quick brown fox jumps over the lazy dog and keeps "
+                              "on running well past the end of the line";
+    const std::string short_ = "brief";
+    const std::string mid   = "a somewhat longer line that wraps exactly once here ok";
+
+    // The ratchet case. Cell 0 is the tallest item in row 0, so it alone sizes
+    // the row, and align-stretch writes that row height into cell 1's box. Make
+    // cell 0 short: the row must shrink, which it cannot do if the track sizing
+    // reads cell 1's stretched box back as its content contribution.
+    checkGridMatchesFullLayout({tall, short_, mid, short_},
+                               {short_, short_, mid, short_}, 0, "row shrinks");
+
+    // And the other direction, which a ratchet would get right by luck.
+    checkGridMatchesFullLayout({short_, short_, mid, short_},
+                               {tall, short_, mid, short_}, 0, "row grows");
+
+    // Changing the item that is *not* driving its row must leave the row alone —
+    // this is the one where cell 1's box is stretched and cell 0's is reused.
+    checkGridMatchesFullLayout({tall, short_, mid, short_},
+                               {tall, mid, mid, short_}, 1, "non-driving item");
+
+    // A row must shrink when its driver shrinks even though a stretched sibling
+    // still holds the old height — same as the first case, but in row 1, so the
+    // rows above it are all clean and reused.
+    checkGridMatchesFullLayout({short_, short_, tall, short_},
+                               {short_, short_, short_, short_}, 2, "second row shrinks");
+
+    // The reuse has to actually be happening, or the checks above pass vacuously.
+    {
+        Metrics metrics;
+        Viewport vp{800.0f, 600.0f};
+        GridDoc d;
+        buildGridDoc(d, {tall, short_, mid, short_});
+        layoutTree(d.root, vp, metrics);
+
+        d.texts[0]->text = short_;
+        markDirty(d.cells[0]);
+        layoutTree(d.root, vp, metrics);
+        const auto& st = lastLayoutStats();
+        check(st.reused > 0, "grid items are reused across passes");
+        check(st.laidOut < 5, "only the changed item's chain is laid out again");
+    }
+}
+
 }  // namespace
 
 void testIncrementalLayout() {
     testMarkDirtyWalksPastStuckAncestor();
     testTableCellTextRelayout();
     testCleanSubtreeIsStable();
+    testGridItemReuse();
 }

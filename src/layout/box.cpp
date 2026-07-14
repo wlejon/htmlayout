@@ -38,6 +38,7 @@ void markSubtreeDirty(LayoutNode* node) {
     node->cachedMinContentW = -1.0f;
     node->cachedMaxContentW = -1.0f;
     node->measuredAtW = std::numeric_limits<float>::quiet_NaN();
+    node->gridMeasuredAtW = std::numeric_limits<float>::quiet_NaN();
     node->subtreeHasPositioned = -1;
     for (auto* child : node->children()) markSubtreeDirty(child);
     // ::before / ::after wrappers hang off the node outside children().
@@ -498,6 +499,7 @@ void markDirty(LayoutNode* node) {
     node->cachedMinContentW = -1.0f;
     node->cachedMaxContentW = -1.0f;
     node->measuredAtW = std::numeric_limits<float>::quiet_NaN();
+    node->gridMeasuredAtW = std::numeric_limits<float>::quiet_NaN();
     node->subtreeHasPositioned = -1;
     // Walk all the way to the root. Stopping at the first already-dirty
     // ancestor would assume every dirty node eventually reaches layoutNode()
@@ -513,6 +515,7 @@ void markDirty(LayoutNode* node) {
         p->cachedMinContentW = -1.0f;
         p->cachedMaxContentW = -1.0f;
         p->measuredAtW = std::numeric_limits<float>::quiet_NaN();
+        p->gridMeasuredAtW = std::numeric_limits<float>::quiet_NaN();
         p->subtreeHasPositioned = -1;
     }
 }

@@ -1010,9 +1010,24 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     for (auto& item : items) {
         float itemAvail = containerWidth / numCols; // rough estimate
-        layoutNode(item.node, itemAvail, metrics);
-        float itemW = item.node->box.fullWidth() + item.node->box.margin.left + item.node->box.margin.right;
-        float itemH = item.node->box.fullHeight() + item.node->box.margin.top + item.node->box.margin.bottom;
+        // The measure exists only to produce the two contributions read back
+        // below, and it is a pure function of (subtree, style, itemAvail) — the
+        // track sizes it feeds are computed after this loop, so nothing it sees
+        // depends on them. Cache the two scalars per item, keyed by the width
+        // they were taken at, so a clean item doesn't re-lay its whole subtree
+        // here just to re-derive them. This is the measure that could never hit
+        // the reuse cache on its own: itemAvail is a guess, and the real layout
+        // below runs at the resolved column width, so the two never match.
+        if (item.node->box.dirty || !(item.node->gridMeasuredAtW == itemAvail)) {
+            layoutNode(item.node, itemAvail, metrics);
+            item.node->gridMeasuredAtW = itemAvail;
+            item.node->gridMeasuredOuterW = item.node->box.fullWidth() +
+                item.node->box.margin.left + item.node->box.margin.right;
+            item.node->gridMeasuredOuterH = item.node->box.fullHeight() +
+                item.node->box.margin.top + item.node->box.margin.bottom;
+        }
+        float itemW = item.node->gridMeasuredOuterW;
+        float itemH = item.node->gridMeasuredOuterH;
 
         if (item.colSpan == 1 && item.col < static_cast<int>(numCols)) {
             colContentSizes[item.col] = std::max(colContentSizes[item.col], itemW);
@@ -1079,9 +1094,16 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (c > item.col) itemWidth += colGap;
         }
 
-        layoutNode(item.node, itemWidth, metrics);
+        // Claim the item so we know whether the box below is one this pass
+        // computed or one handed back from the last. beginLayoutNode returns
+        // false when the cached subtree is still valid for this width — then
+        // the box already holds the geometry this loop would have produced.
+        bool laidNow = beginLayoutNode(item.node, itemWidth);
+        if (laidNow) layoutNode(item.node, itemWidth, metrics);
 
-        // Set content width to fill the grid area only if justify-self resolves to stretch
+        // Set content width to fill the grid area only if justify-self resolves to stretch.
+        // On a reused box this re-states the width it already holds: the inputs
+        // (itemWidth and the item's own padding/border/margin) are unchanged.
         auto& cs = item.node->computedStyle();
         const std::string& w = styleVal(cs, "width");
         std::string justifySelf = resolveAlign(styleVal(cs, "justify-self"), containerJustifyItems);
@@ -1093,8 +1115,17 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (cw > 0) item.node->box.contentRect.width = cw;
         }
 
-        // Update row content sizes after relayout
-        float itemH = item.node->box.fullHeight() + item.node->box.margin.top + item.node->box.margin.bottom;
+        // Update row content sizes after relayout. A reused box holds last
+        // pass's align-stretched height, so reading it back here would feed the
+        // row's previous size in as this pass's content contribution and the row
+        // could never shrink. Use the height recorded when the item was last
+        // really laid out at this width.
+        if (laidNow || std::isnan(item.node->gridNaturalOuterH)) {
+            item.node->gridNaturalOuterH = item.node->box.fullHeight() +
+                item.node->box.margin.top + item.node->box.margin.bottom;
+            item.node->gridNaturalContentH = item.node->box.contentRect.height;
+        }
+        float itemH = item.node->gridNaturalOuterH;
         if (item.rowSpan == 1 && item.row < static_cast<int>(numRows)) {
             rowContentSizes[item.row] = std::max(rowContentSizes[item.row], itemH);
         }
@@ -1183,7 +1214,14 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 item.node->box.padding.top - item.node->box.padding.bottom -
                 item.node->box.border.top - item.node->box.border.bottom;
             if (ch > 0) {
-                bool grew = (ch > item.node->box.contentRect.height + 0.01f);
+                // Judge "did the area stretch me past my content?" against the
+                // content height from the item's last real layout, not against
+                // the box — on a reused item the box already holds the stretched
+                // height this same step wrote last pass, which would read as
+                // "didn't grow" and skip the re-layout that produced it.
+                float naturalH = item.node->gridNaturalContentH;
+                if (std::isnan(naturalH)) naturalH = item.node->box.contentRect.height;
+                bool grew = (ch > naturalH + 0.01f);
                 item.node->box.contentRect.height = ch;
                 // The earlier layoutNode pass ran without a definite height,
                 // so any flex/grid layout inside the item collapsed to content
@@ -1255,14 +1293,6 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
-        // Grid's layout sequence writes container decisions straight into the
-        // item's box (justify stretch width, align stretch height), and the
-        // auto-track sizing pass reads the box back as the item's contribution.
-        // A reused box would hand last pass's STRETCHED size to next pass's
-        // track sizing and tracks could never shrink — so keep grid items on
-        // always-relay semantics until they get the natural-size bookkeeping
-        // flex items have. See layoutNode()'s re-visit re-keying.
-        item.node->cachedAvailWidth = std::numeric_limits<float>::quiet_NaN();
     }
 
     // Set container dimensions

@@ -269,6 +269,31 @@ struct LayoutNode {
     // every real (non-reused) item layout.
     float flexNaturalCross = -1.0f;
 
+    // Grid measure cache. Before it can size auto tracks a grid container lays
+    // every item out once at a rough guess at the column width, and reads the
+    // laid-out outer size back as the item's track contribution. That guess is
+    // essentially never the column width the tracks then resolve to, so the
+    // measure could never hit the reuse cache — every item re-laid its whole
+    // subtree here, every pass, before the real layout re-laid it again. The
+    // measure is a pure function of (subtree, style, width), so cache its two
+    // outputs keyed by the width they were taken at. Invalidated by the
+    // markDirty()/markSubtreeDirty() walks, like the flex cache above.
+    float gridMeasuredAtW = std::numeric_limits<float>::quiet_NaN();
+    float gridMeasuredOuterW = -1.0f;
+    float gridMeasuredOuterH = -1.0f;
+
+    // What this node contributed to its grid container's row sizing, and the
+    // content height it had, when it was last actually laid out at its resolved
+    // column width. Same reason flexNaturalCross exists: align-stretch writes
+    // the stretched height straight into the box, so a reused box reports last
+    // pass's stretched height as this pass's contribution and rows could only
+    // ever ratchet upward. Recomputed on every real (non-reused) item layout.
+    // NaN = never recorded, which a box reused on its first pass as a grid item
+    // can be (a container restyled to display:grid dirties itself, not its
+    // children) — negative margins make -1 an unsafe sentinel here.
+    float gridNaturalOuterH = std::numeric_limits<float>::quiet_NaN();
+    float gridNaturalContentH = std::numeric_limits<float>::quiet_NaN();
+
     // Whether this subtree contains any absolute/fixed element (the node
     // itself included). Lets layoutAbsoluteElements() skip whole clean
     // branches instead of reading position/display on every node each pass.
