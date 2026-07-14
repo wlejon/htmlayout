@@ -5,7 +5,22 @@ namespace htmlayout::layout {
 
 // Determines which layout algorithm to use for a node based on
 // its computed display property, then dispatches to the right one.
+//
+// Incremental: a node whose subtree is clean and whose available space is
+// unchanged since the last pass is returned untouched, cached geometry and all.
 void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics);
+
+// True if `node` has to be laid out at this width — in which case it has been
+// claimed for this pass and its box cleared, ready to be written. False if its
+// cached subtree is still valid, in which case the caller must lay out nothing
+// and must not touch the box.
+//
+// Only callers that write into a node's box *before* laying it out need this;
+// everyone else just calls layoutNode(), which does the same thing internally.
+// The absolute pass is the one such caller: it pre-writes a stretched height so
+// a top+bottom-pinned flex or grid container sizes its children against a
+// definite cross axis, and layoutNode() clearing the box would throw that away.
+bool beginLayoutNode(LayoutNode* node, float availableWidth);
 
 // Sentinel values for intrinsic sizing keywords. Valid CSS sizing values are
 // non-negative, so these specific negative values cannot collide with real lengths.

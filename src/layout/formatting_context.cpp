@@ -781,15 +781,89 @@ static bool hasContainment(const css::ComputedStyle& style, const std::string& t
     return val.find(type) != std::string::npos;
 }
 
+static void layoutNodeInner(LayoutNode* node, float availableWidth, TextMetrics& metrics);
+
+// Take ownership of a node for this pass: record the inputs it is about to be
+// laid out under and clear the geometry the previous pass left in its box.
+//
+// The clear matters because layout reads the box back as an input in places —
+// layoutBlock's "did an outer pass already resolve a definite height for me"
+// probe, layoutAbsoluteChild's shrink-wrap — so a stale value silently drifts
+// the result. Direct text children are cleared with the node: their boxes are
+// written by this node's inline layout, and they are never passed to layoutNode
+// themselves, so this is their only reset. Pseudo-elements re-lay out with their
+// host, since their content and style live on it and the wrapper carries no
+// dirty bit of its own to say either changed.
+static void claimLayoutNode(LayoutNode* node, float availableWidth) {
+    node->lastLayoutPass = currentLayoutPass();
+    node->cachedAvailWidth = availableWidth;
+    node->cachedAvailHeight = node->availableHeight;
+    node->cachedOverrideWidth = node->overrideContentWidth;
+
+    node->box = LayoutBox{};
+    node->box.dirty = false;
+    for (auto* child : node->children())
+        if (child->isTextNode()) child->box = LayoutBox{};
+    if (auto* p = node->pseudoBefore()) markSubtreeDirty(p);
+    if (auto* p = node->pseudoAfter())  markSubtreeDirty(p);
+}
+
+bool beginLayoutNode(LayoutNode* node, float availableWidth) {
+    if (!node) return false;
+    if (node->lastLayoutPass == currentLayoutPass()) return true;  // already ours
+    if (!node->box.dirty &&
+        node->cachedAvailWidth == availableWidth &&
+        node->cachedAvailHeight == node->availableHeight &&
+        node->cachedOverrideWidth == node->overrideContentWidth) {
+        return false;   // cached subtree still valid — don't touch the box
+    }
+    claimLayoutNode(node, availableWidth);
+    return true;
+}
+
 void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (!node) return;
 
+    if (node->lastLayoutPass != currentLayoutPass()) {
+        // Incremental layout. Nothing about this node changed (box.dirty is
+        // clear) and the space it is being laid out into is the same as last
+        // time, so it would recompute the box it already holds — and so would
+        // every descendant, recursively. Hand the cached subtree back untouched.
+        // This is what turns a one-element change from an O(document) pass into
+        // an O(changed) one.
+        if (!beginLayoutNode(node, availableWidth)) return;
+    } else {
+        // A repeat visit in the same pass. Layout does this deliberately: a flex
+        // or grid container lays an item out to measure it, resolves its tracks,
+        // writes the item's used size into its box, and lays it out again to push
+        // that size through the item's own children. So: re-lay it out, and keep
+        // the box it was re-entered with — by now the box carries the container's
+        // decision about this item and is itself an input.
+        //
+        // Its final geometry is then the product of the whole call sequence, not
+        // of any single call's inputs, so there is no key under which it could be
+        // safely reused next pass. Poison the cache and let it start fresh. This
+        // costs nothing in practice: an item is only re-visited when its container
+        // re-lays out, and a container that doesn't re-lay out never reaches its
+        // items at all.
+        node->cachedAvailWidth = std::numeric_limits<float>::quiet_NaN();
+        node->box.dirty = false;
+    }
+
+    layoutNodeInner(node, availableWidth, metrics);
+}
+
+// The layout itself: pick the formatting context from `display` and run it.
+// layoutNode() above owns the incremental bookkeeping and calls this.
+static void layoutNodeInner(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     auto& style = node->computedStyle();
     const std::string& display = styleVal(style, "display");
 
     if (display == "none") {
-        // Hidden — zero-size box, skip children
+        // Hidden — zero-size box, skip children. Stays clean: it will be reused
+        // (as a zero box) until something restyles it back into the flow.
         node->box = LayoutBox{};
+        node->box.dirty = false;
         return;
     }
 
@@ -923,49 +997,29 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     bool shrinkWrap = (!specW && !(left && right));
     bool stretchW = (!specW && left && right);
 
-    // Pre-compute the stretched height when both top+bottom are pinned and
-    // height is auto. Setting box.contentRect.height up front lets the inner
-    // layout (e.g. flex align-items: center, or grid 1fr rows) treat this
-    // container as having a definite cross-axis size instead of collapsing to
-    // content height.  Resolve margin/padding/border from the child's own
-    // style — child->box may not yet contain resolved values (the in-flow
-    // layout pass skips absolute/fixed children).
     bool stretchH = (!specH && top && bottom);
-    if (stretchH) {
-        float marginTop = resolveLength(styleVal(childStyle, "margin-top"), cbHeight, fontSize);
-        float marginBottom = resolveLength(styleVal(childStyle, "margin-bottom"), cbHeight, fontSize);
-        float padTop = resolveLength(styleVal(childStyle, "padding-top"), cbHeight, fontSize);
-        float padBottom = resolveLength(styleVal(childStyle, "padding-bottom"), cbHeight, fontSize);
-        float borTop = (styleVal(childStyle, "border-top-style") != "none")
-            ? resolveLength(styleVal(childStyle, "border-top-width"), cbHeight, fontSize) : 0.0f;
-        float borBottom = (styleVal(childStyle, "border-bottom-style") != "none")
-            ? resolveLength(styleVal(childStyle, "border-bottom-width"), cbHeight, fontSize) : 0.0f;
-        float h = cbHeight - *top - *bottom - marginTop - marginBottom -
-                  padTop - padBottom - borTop - borBottom;
-        if (h > 0) child->box.contentRect.height = h;
-    }
 
-    // Pre-compute stretched width when both left+right are pinned with width:auto.
-    // We must pass this as the available width to the inner layout so flex/grid
-    // children resolve cross size against the actual containing-block width
-    // (cbWidth - left - right) rather than the raw cbWidth.
-    float availW = cbWidth;
+    // The width the inner layout runs at. Margins, padding and border all
+    // resolve from the child's own style here rather than from child->box: the
+    // in-flow pass skips absolute/fixed children, so their box holds no resolved
+    // edges at this point (and reading it as zero would make the inner layout
+    // subtract padding+border from a too-small available width and shrink the
+    // children).
+    //
+    // Stretched width (left+right pinned, width:auto) has to reach the inner
+    // layout so flex/grid children resolve their cross size against the real
+    // containing-block width, not the raw cbWidth.
+    float layoutW = cbWidth;
     if (stretchW) {
-        float w = cbWidth - *left - *right -
-                  child->box.margin.left - child->box.margin.right;
-        // layoutNode treats availW as the parent content width including
+        float mh = resolveLength(styleVal(childStyle, "margin-left"), cbWidth, fontSize) +
+                   resolveLength(styleVal(childStyle, "margin-right"), cbWidth, fontSize);
+        // layoutNode treats layoutW as the parent content width including
         // padding+border for this child; subtract only the margins here.
-        if (w > 0) availW = w;
-    }
-
-    if (shrinkWrap) {
+        float w = cbWidth - *left - *right - mh;
+        if (w > 0) layoutW = w;
+    } else if (shrinkWrap) {
         float maxCW = computeMaxContentWidth(child, metrics);
         if (maxCW > cbWidth) maxCW = cbWidth;
-        // Resolve padding/border/margin from the child's own style here —
-        // child->box may not yet contain resolved values (the in-flow layout
-        // pass skips absolute/fixed children), so reading child->box gives 0
-        // and the inner layout would then subtract padding+border from a too-small
-        // availW and incorrectly shrink children.
         float ph = resolveLength(styleVal(childStyle, "padding-left"), cbWidth, fontSize) +
                    resolveLength(styleVal(childStyle, "padding-right"), cbWidth, fontSize);
         float bh = 0.0f;
@@ -977,9 +1031,35 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
         }
         float mh = resolveLength(styleVal(childStyle, "margin-left"), cbWidth, fontSize) +
                    resolveLength(styleVal(childStyle, "margin-right"), cbWidth, fontSize);
-        layoutNode(child, maxCW + ph + bh + mh, metrics);
-    } else {
-        layoutNode(child, availW, metrics);
+        layoutW = maxCW + ph + bh + mh;
+    }
+
+    // Claim the node for this layout pass — which clears the geometry the
+    // previous pass left in its box — BEFORE pre-writing the stretched height
+    // below. layoutNode() would otherwise clear the box on its own first visit
+    // of the pass and throw that height away, and the height is an *input*: it
+    // is what lets a top+bottom-pinned flex or grid container size its children
+    // against a definite cross axis instead of collapsing to content height.
+    //
+    // beginLayoutNode returns false when the child's cached subtree is still
+    // valid for these inputs. Nothing is laid out then — the box already holds
+    // the right geometry — and we fall through to reposition it.
+    if (beginLayoutNode(child, layoutW)) {
+        // Pre-computed stretched height: see above.
+        if (stretchH) {
+            float marginTop = resolveLength(styleVal(childStyle, "margin-top"), cbHeight, fontSize);
+            float marginBottom = resolveLength(styleVal(childStyle, "margin-bottom"), cbHeight, fontSize);
+            float padTop = resolveLength(styleVal(childStyle, "padding-top"), cbHeight, fontSize);
+            float padBottom = resolveLength(styleVal(childStyle, "padding-bottom"), cbHeight, fontSize);
+            float borTop = (styleVal(childStyle, "border-top-style") != "none")
+                ? resolveLength(styleVal(childStyle, "border-top-width"), cbHeight, fontSize) : 0.0f;
+            float borBottom = (styleVal(childStyle, "border-bottom-style") != "none")
+                ? resolveLength(styleVal(childStyle, "border-bottom-width"), cbHeight, fontSize) : 0.0f;
+            float h = cbHeight - *top - *bottom - marginTop - marginBottom -
+                      padTop - padBottom - borTop - borBottom;
+            if (h > 0) child->box.contentRect.height = h;
+        }
+        layoutNode(child, layoutW, metrics);
     }
 
     // Stretch width if both left and right are set and width is auto

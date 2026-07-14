@@ -613,7 +613,10 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // definite cross size, pre-set contentRect.height to the stretch
                 // height so the inner layout (e.g. a CSS Grid with 1fr rows or
                 // a nested flex column) sees a definite height up front rather
-                // than collapsing to content size.
+                // than collapsing to content size. Computed here but written
+                // below, after the item has been claimed for this layout pass —
+                // see beginLayoutNode.
+                float preStretchH = -1.0f;
                 {
                     const std::string& itemHVal = styleVal(cs, "height");
                     bool itemAutoH = (itemHVal == "auto" || itemHVal.empty());
@@ -652,10 +655,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                                 bor += resolveLength(styleVal(cs, "border-top-width"), mainAvailable, childFontSize);
                             if (styleVal(cs, "border-bottom-style") != "none")
                                 bor += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, childFontSize);
-                            float stretchH = containerCrossH - pad - bor;
-                            if (stretchH > 0) {
-                                item->node->box.contentRect.height = stretchH;
-                            }
+                            preStretchH = containerCrossH - pad - bor;
                         }
                     }
                 }
@@ -677,7 +677,17 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     if (flexedContentW < 0) flexedContentW = 0;
                     item->node->overrideContentWidth = flexedContentW;
                 }
-                layoutNode(item->node, contentWidth, metrics);
+                // Claim the item before writing the stretch height into its box:
+                // that height is an *input* to its inner layout, and layoutNode()
+                // clears a node's box on its first visit of a pass. An item with a
+                // definite flex-basis (`flex: 1`) is never measured, so this final
+                // layout IS its first visit. beginLayoutNode returns false when the
+                // item's cached subtree is still valid — then nothing is laid out
+                // and the writes below simply re-state what the box already holds.
+                if (beginLayoutNode(item->node, contentWidth)) {
+                    if (preStretchH > 0) item->node->box.contentRect.height = preStretchH;
+                    layoutNode(item->node, contentWidth, metrics);
+                }
                 item->node->overrideContentWidth = -1.0f;
                 item->node->box.contentRect.width = contentWidth -
                     item->node->box.padding.left - item->node->box.padding.right -
@@ -708,7 +718,6 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     borV += resolveLength(styleVal(cs, "border-bottom-width"), mainAvailable, ifs);
                 float grownContentH = item->finalMain - padV - borV;
                 if (grownContentH < 0) grownContentH = 0;
-                item->node->box.contentRect.height = grownContentH;
                 // Non-stretch cross alignment sizes an auto-width item to its
                 // fit-content width (CSS Flexbox §9.4 hypothetical cross
                 // size: min(max-content, container width)), not the full
@@ -737,7 +746,18 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         if (fit < itemAvailW) itemAvailW = fit;
                     }
                 }
-                layoutNode(item->node, itemAvailW, metrics);
+                // Claim the item before writing the grown height into its box: that
+                // height is an *input* to its inner layout (it is what lets a nested
+                // `flex: 1` or `1fr` descendant distribute the space), and layoutNode()
+                // clears a node's box on its first visit of a pass. An item with a
+                // definite flex-basis (`flex: 1`) is never measured, so this final
+                // layout IS its first visit. beginLayoutNode returns false when the
+                // item's cached subtree is still valid — then nothing is laid out and
+                // the re-apply below simply re-states what the box already holds.
+                if (beginLayoutNode(item->node, itemAvailW)) {
+                    item->node->box.contentRect.height = grownContentH;
+                    layoutNode(item->node, itemAvailW, metrics);
+                }
                 // Re-apply (block/flex inner layout may have overwritten) — the
                 // flex contract is that the item is finalMain on the main axis.
                 item->node->box.contentRect.height = grownContentH;

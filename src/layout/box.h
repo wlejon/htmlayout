@@ -5,6 +5,7 @@
 #include <vector>
 #include <span>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <cstdint>
 
@@ -62,7 +63,15 @@ struct LayoutBox {
     // Whether text content was truncated by overflow (for text-overflow: ellipsis)
     bool textTruncated = false;
 
-    // Dirty flag for incremental relayout
+    // Needs re-layout. Set by markDirty()/markSubtreeDirty() when the node's
+    // style, content or structure changed; cleared by layoutNode() once the
+    // node has been laid out. A node whose flag is clear holds geometry that
+    // is still valid for the inputs recorded in LayoutNode's cached* fields,
+    // and layoutNode() skips it (and its whole subtree) outright.
+    //
+    // Text nodes are never passed to layoutNode() — their parent's inline
+    // layout owns their boxes — so their flag stays set, which is what makes
+    // a dirty parent always re-measure its text.
     bool dirty = true;
 
     // Placed text runs — filled for text nodes during inline layout. Empty
@@ -197,6 +206,40 @@ struct LayoutNode {
     // Viewport height, propagated from root to all descendants.
     // Used as fallback for absolute elements whose containing block has no definite height.
     float viewportHeight = 0;
+
+    // ---- Incremental layout ----
+    //
+    // The inputs of the pass that produced `box`. Everything layout learns
+    // about a node from outside it arrives through these three values (plus
+    // the two document-globals below), so a clean node re-entered with the
+    // same inputs would recompute exactly the box it already has — layoutNode()
+    // returns immediately and its entire subtree is skipped. The node's own
+    // position is written by its parent *after* layoutNode() returns, so a
+    // reused box needs no repositioning of its own; contentRect.x/y being
+    // stale on entry is expected.
+    //
+    // NaN never compares equal, so a node that has never been laid out (or was
+    // reset) always runs.
+    float cachedAvailWidth    = std::numeric_limits<float>::quiet_NaN();
+    float cachedAvailHeight   = std::numeric_limits<float>::quiet_NaN();
+    float cachedOverrideWidth = std::numeric_limits<float>::quiet_NaN();
+
+    // The pass in which layoutNode() last cleared this box. Layout is allowed
+    // to call layoutNode() on the same node more than once per pass — a flex or
+    // grid container measures an item, resolves its tracks, writes the used size
+    // straight into the item's box, and lays it out again to distribute that
+    // size — so the box is cleared on the *first* call of each pass and left
+    // alone on the rest, which is what lets those writes survive as inputs.
+    uint32_t lastLayoutPass = 0;
+
+    // Root node only: the document-global inputs that any node's lengths may
+    // resolve against — the viewport (vw/vh/vmin/vmax) and the root font-size
+    // (rem). A subtree that is otherwise untouched still has to re-layout when
+    // either changes, and has no local signal to notice it, so layoutTree()
+    // compares these on the root and dirties the whole tree when they move.
+    float cachedViewportW    = std::numeric_limits<float>::quiet_NaN();
+    float cachedViewportH    = std::numeric_limits<float>::quiet_NaN();
+    float cachedRootFontSize = std::numeric_limits<float>::quiet_NaN();
 };
 
 // Text measurement callback — consumers provide this (e.g. via Skia)
@@ -253,6 +296,12 @@ struct Viewport {
 
 // Perform layout on a tree, computing LayoutBox for every node.
 // viewportWidth is the available width for the root element.
+//
+// Layout is incremental: only nodes marked dirty (see markDirty /
+// markSubtreeDirty), nodes whose available space changed, and their ancestors
+// are recomputed — every other subtree keeps the geometry it already has. A
+// caller that marks nothing therefore gets no work done, so a consumer must
+// mark what it changed, or markSubtreeDirty(root) for an unconditional pass.
 void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics);
 
 // Layout with explicit viewport dimensions for proper vw/vh resolution.
@@ -270,12 +319,21 @@ LayoutNode* hitTest(LayoutNode* root, float x, float y);
 // Get children for layout, flattening any 'display: contents' nodes into the parent's sequence.
 std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node);
 
-// Mark a subtree as dirty for incremental relayout.
-// Marks the given node and all its ancestors as needing re-layout.
+// Mark a node as needing re-layout, and every ancestor up to the root with it
+// (a changed child can resize its parent, which can resize *its* parent, so the
+// whole chain has to be recomputed for the change to reach the page).
 void markDirty(LayoutNode* node);
 
-// Incremental layout: only re-layout dirty subtrees.
-// Falls back to full layout if root is dirty.
+// Mark a node and everything below it as needing re-layout — the unconditional
+// pass. Consumers use this when a change is not attributable to individual
+// nodes: a fresh layout tree, a new stylesheet, a resize of something the
+// layout tree can't see.
+void markSubtreeDirty(LayoutNode* node);
+
+// Monotonic counter, bumped once per layoutTree() call. See LayoutNode::lastLayoutPass.
+uint32_t currentLayoutPass();
+
+// Deprecated: layoutTree() is itself incremental now. Kept as an alias.
 void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& metrics);
 
 // Style invalidation: given a set of changed property names,

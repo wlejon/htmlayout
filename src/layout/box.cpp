@@ -16,26 +16,47 @@ void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
     layoutTree(root, Viewport{viewportWidth, 0.0f}, metrics);
 }
 
-// Reset every box in the tree to defaults so layoutTree can be called
-// repeatedly on the same (persistent) tree without carrying stale padding/
-// border/margin/contentRect state from the previous run. A few code paths —
-// notably layoutAbsoluteChild's shrink-wrap calculation — read these fields
-// to compute available widths, which silently drifts layout if not cleared.
-static void resetBoxes(LayoutNode* node) {
+// Bumped once per layoutTree() call, so layoutNode() can tell its first visit to
+// a node this pass (which clears the box) from the later ones (which must not —
+// see LayoutNode::lastLayoutPass). Layout is single-threaded, one tree at a
+// time, so a file-scoped counter is enough; it only ever has to be *different*
+// from the value a node last recorded.
+static uint32_t g_layoutPass = 0;
+
+uint32_t currentLayoutPass() { return g_layoutPass; }
+
+void markSubtreeDirty(LayoutNode* node) {
     if (!node) return;
-    node->box = LayoutBox{};
-    for (auto* child : node->children()) resetBoxes(child);
+    node->box.dirty = true;
+    for (auto* child : node->children()) markSubtreeDirty(child);
+    // ::before / ::after wrappers hang off the node outside children().
+    if (auto* p = node->pseudoBefore()) markSubtreeDirty(p);
+    if (auto* p = node->pseudoAfter())  markSubtreeDirty(p);
 }
 
 void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics) {
     if (!root) return;
+    ++g_layoutPass;
     setLayoutViewport(viewport.width, viewport.height);
     // rem resolves against the root element's font-size. The root's computed
     // font-size is already absolute (px/unitless) by the time it reaches layout,
     // so resolve it against the initial 16px base (em/% would compound off 16).
-    setRootFontSize(resolveLength(styleVal(root->computedStyle(), "font-size"),
-                                  16.0f, 16.0f));
-    resetBoxes(root);
+    float rootFontSize = resolveLength(styleVal(root->computedStyle(), "font-size"),
+                                       16.0f, 16.0f);
+    setRootFontSize(rootFontSize);
+
+    // The viewport and the rem base are readable from any node's lengths but
+    // are not part of any node's own inputs, so a subtree with a `50vw` child
+    // has no way to notice they moved. Dirty everything when they do.
+    if (!(root->cachedViewportW == viewport.width) ||
+        !(root->cachedViewportH == viewport.height) ||
+        !(root->cachedRootFontSize == rootFontSize)) {
+        markSubtreeDirty(root);
+        root->cachedViewportW = viewport.width;
+        root->cachedViewportH = viewport.height;
+        root->cachedRootFontSize = rootFontSize;
+    }
+
     root->availableHeight = viewport.height;
     root->viewportHeight = viewport.height;
     layoutNode(root, viewport.width, metrics);
@@ -430,61 +451,8 @@ void markDirty(LayoutNode* node) {
     }
 }
 
-namespace {
-
-void layoutNodeIncremental(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
-    if (!node) return;
-    if (!node->box.dirty) return; // skip clean subtrees
-
-    layoutNode(node, availableWidth, metrics);
-    node->box.dirty = false;
-
-    // Children are laid out by layoutNode, mark them clean
-    for (auto* child : node->children()) {
-        child->box.dirty = false;
-    }
-}
-
-} // anonymous namespace
-
 void layoutTreeIncremental(LayoutNode* root, float viewportWidth, TextMetrics& metrics) {
-    if (!root) return;
-
-    if (root->box.dirty) {
-        // Root is dirty: full relayout
-        layoutTree(root, viewportWidth, metrics);
-        // Mark entire tree clean
-        std::vector<LayoutNode*> stack = {root};
-        while (!stack.empty()) {
-            auto* n = stack.back();
-            stack.pop_back();
-            n->box.dirty = false;
-            for (auto* c : getLayoutChildren(n)) stack.push_back(c);
-        }
-    } else {
-        // Walk tree, re-layout only dirty subtrees
-        std::vector<std::pair<LayoutNode*, float>> stack;
-        stack.push_back({root, viewportWidth});
-        while (!stack.empty()) {
-            auto [node, avail] = stack.back();
-            stack.pop_back();
-            if (node->box.dirty) {
-                layoutNode(node, avail, metrics);
-                // Mark subtree clean
-                std::vector<LayoutNode*> sub = {node};
-                while (!sub.empty()) {
-                    auto* n = sub.back();
-                    sub.pop_back();
-                    n->box.dirty = false;
-                    for (auto* c : getLayoutChildren(n)) sub.push_back(c);
-                }
-            } else {
-                for (auto* c : node->children()) {
-                    stack.push_back({c, node->box.contentRect.width});
-                }
-            }
-        }
-    }
+    layoutTree(root, viewportWidth, metrics);
 }
 
 // Layout-affecting properties: if any of these change, relayout is needed.
