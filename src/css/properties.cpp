@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <unordered_map>
+#include <unordered_set>
+#include <string_view>
 #include <stdexcept>
 
 namespace htmlayout::css {
@@ -532,6 +534,44 @@ bool isFontStyle(const std::string& v) {
 
 std::vector<ExpandedDecl> expandShorthand(const std::string& property,
                                            const std::string& value) {
+    // Fast path: the overwhelming majority of declarations name a longhand that
+    // has no branch below and falls straight through to the identity return —
+    // but only after splitValue() has tokenised the value and the whole ladder
+    // of name comparisons has been walked and missed. Skip all of it for any
+    // property this function does not actually expand. The set is exactly the
+    // properties with a `property == "..."` branch below; keep the two in sync.
+    static const std::unordered_set<std::string_view> kExpandable = {
+        "margin", "padding", "inset", "border-width", "border-style",
+        "border-color", "border", "border-top", "border-right",
+        "border-bottom", "border-left", "border-radius", "flex", "flex-flow",
+        "gap", "background", "font", "transition", "animation", "outline",
+        "list-style", "columns", "column-rule", "overflow", "container",
+        "grid-area", "grid-column", "grid-row", "grid-template",
+        "place-content", "place-items", "place-self",
+        // Logical properties (remapped to physical / logical longhands below).
+        "block-size", "inline-size", "min-block-size", "min-inline-size",
+        "max-block-size", "max-inline-size",
+        "margin-block", "margin-block-start", "margin-block-end",
+        "margin-inline", "margin-inline-start", "margin-inline-end",
+        "padding-block", "padding-block-start", "padding-block-end",
+        "padding-inline", "padding-inline-start", "padding-inline-end",
+        "inset-block", "inset-block-start", "inset-block-end",
+        "inset-inline", "inset-inline-start", "inset-inline-end",
+        "border-block", "border-block-color", "border-block-style",
+        "border-block-width", "border-block-start", "border-block-start-color",
+        "border-block-start-style", "border-block-start-width",
+        "border-block-end", "border-block-end-color", "border-block-end-style",
+        "border-block-end-width",
+        "border-inline", "border-inline-color", "border-inline-style",
+        "border-inline-width", "border-inline-start",
+        "border-inline-start-color", "border-inline-start-style",
+        "border-inline-start-width", "border-inline-end",
+        "border-inline-end-color", "border-inline-end-style",
+        "border-inline-end-width",
+    };
+    if (kExpandable.find(property) == kExpandable.end())
+        return {{property, value}};
+
     auto parts = splitValue(value);
     if (parts.empty()) return {{property, value}};
 
