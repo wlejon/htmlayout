@@ -17,14 +17,14 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - Structural pseudo-classes: `:root`, `:empty`, `:first-child`, `:last-child`, `:only-child`, `:first-of-type`, `:last-of-type`, `:only-of-type`, `:nth-child(an+b)`, `:nth-last-child`, `:nth-of-type`, `:nth-last-of-type`
 - Logical pseudo-classes: `:not()`, `:is()`, `:where()`, `:has()`
 - UI/state pseudo-classes: `:hover`, `:focus`, `:focus-within`, `:focus-visible`, `:active`, `:link`, `:visited`, `:any-link`, `:target`, `:checked`, `:disabled`, `:enabled`, `:required`, `:optional`, `:read-only`, `:read-write`, `:placeholder-shown`, `:indeterminate`, `:defined`
-- Pseudo-elements: `::before`, `::after`, `::slotted()`, `::part()`
+- Pseudo-elements: `::before`, `::after`, `::placeholder`, `::selection`, `::slotted()`, `::part()`
 - Full cascade with specificity, source order, `!important`, and inheritance (Cascade Level 5)
 - `@layer` cascade layers with spec-compliant priority ordering (including `!important` reversal)
 - `@container` queries with named containers and size containment
 - Shorthand expansion for ~150 properties (`margin`, `padding`, `border`, `flex`, `grid`, `font`, `container`, `background`, etc.), including multi-layer `background` with `position / size` slash syntax
 - Color parsing (named, hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`)
 - `transform` and `transform-origin` parsing into a 2D affine matrix or 4×4 matrix (3D functions: `translate3d`, `translateZ`, `scale3d`, `scaleZ`, `rotateX/Y/Z`, `rotate3d`, `perspective`, `matrix3d`) for consumer-side rendering
-- `@media` query evaluation (`min/max-width`, `min/max-height`, `orientation`, range syntax, logical `or`)
+- `@media` query evaluation (`min/max-width`, `min/max-height`, `orientation`, `prefers-color-scheme`, range syntax, logical `or`)
 - `@supports` feature queries
 - `@import` resolution with consumer-provided callback (with media/layer qualifiers)
 - CSS Variables (`var()`) with fallback and inheritance

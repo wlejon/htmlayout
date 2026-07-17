@@ -1082,6 +1082,12 @@ bool evaluateMediaFeature(const std::string& feature, const MediaContext& ctx) {
     std::string value = f.substr(colonPos + 1);
     trimInPlace(name); trimInPlace(value);
 
+    // Discrete (non-length) features first.
+    if (name == "prefers-color-scheme") {
+        for (auto& c : value) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return value == ctx.colorScheme;
+    }
+
     float val = parseMediaLength(value);
 
     if (name == "min-width") return ctx.viewportWidth >= val;

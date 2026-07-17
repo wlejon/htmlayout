@@ -264,6 +264,42 @@ static void testMediaQueries() {
     // not prefix
     check(evaluateMediaQuery("not print", {1024, 768, "screen"}) == true,
           "@media: not print matches screen");
+
+    // prefers-color-scheme
+    check(evaluateMediaQuery("(prefers-color-scheme: dark)", {1024, 768, "screen", "dark"}) == true,
+          "@media: prefers-color-scheme:dark matches dark context");
+    check(evaluateMediaQuery("(prefers-color-scheme: dark)", {1024, 768, "screen", "light"}) == false,
+          "@media: prefers-color-scheme:dark doesn't match light context");
+    check(evaluateMediaQuery("(prefers-color-scheme: light)", {1024, 768, "screen", "light"}) == true,
+          "@media: prefers-color-scheme:light matches light context");
+    check(evaluateMediaQuery("(prefers-color-scheme: light)", {1024, 768, "screen"}) == true,
+          "@media: default context is light");
+    check(evaluateMediaQuery("(prefers-color-scheme: DARK)", {1024, 768, "screen", "dark"}) == true,
+          "@media: prefers-color-scheme value is case-insensitive");
+    check(evaluateMediaQuery("not (prefers-color-scheme: dark)", {1024, 768, "screen", "light"}) == true,
+          "@media: not (prefers-color-scheme:dark) matches light");
+    check(evaluateMediaQuery("screen and (prefers-color-scheme: dark) and (min-width: 500px)",
+                             {1024, 768, "screen", "dark"}) == true,
+          "@media: prefers-color-scheme combines with type and width");
+
+    // Cascade-level: a dark context includes @media (prefers-color-scheme: dark) blocks
+    auto schemeSheet = parse(
+        "div { color: black; }\n"
+        "@media (prefers-color-scheme: dark) { div { color: white; } }\n"
+    );
+    MediaContext darkCtx{1024, 768, "screen", "dark"};
+    Cascade cascadeDark;
+    cascadeDark.addStylesheet(schemeSheet, nullptr, &darkCtx);
+    MockElement d3; d3.tag = "div";
+    auto s3 = cascadeDark.resolve(d3);
+    check(s3["color"] == "white", "@media: dark-scheme block applies in dark context");
+
+    MediaContext lightCtx{1024, 768, "screen", "light"};
+    Cascade cascadeLight;
+    cascadeLight.addStylesheet(schemeSheet, nullptr, &lightCtx);
+    MockElement d4; d4.tag = "div";
+    auto s4 = cascadeLight.resolve(d4);
+    check(s4["color"] == "black", "@media: dark-scheme block skipped in light context");
 }
 
 static void testCustomProperties() {
@@ -391,6 +427,59 @@ static void testPseudoElements() {
     auto d2Style = cascade2.resolve(d2);
     auto d2Before = cascade2.resolvePseudo(d2, "before", d2Style);
     check(d2Before["color"] == "green", "::before: inherits color from element");
+
+    // ::placeholder / ::selection — styled-box pseudos (no generated content).
+    Cascade cascade3;
+    cascade3.addStylesheet(parse(
+        "input { color: black; }\n"
+        "input::placeholder { color: rgb(200, 50, 50); opacity: 0.5; }\n"
+        "input::selection { background-color: gold; color: navy; }\n"
+        ".fancy::placeholder { color: teal; }\n"
+    ));
+
+    check(cascade3.hasPseudoElementRules("placeholder"),
+          "::placeholder: rules bucketed by name");
+    check(cascade3.hasPseudoElementRules("selection"),
+          "::selection: rules bucketed by name");
+
+    MockElement input; input.tag = "input";
+    auto inputStyle = cascade3.resolve(input);
+    // The pseudo-element rule must NOT leak onto the element itself.
+    check(inputStyle["color"] == "black",
+          "::placeholder: rule does not restyle the input element");
+    check(inputStyle["background-color"] != "gold",
+          "::selection: rule does not restyle the input element");
+
+    auto phStyle = cascade3.resolvePseudo(input, "placeholder", inputStyle);
+    check(!phStyle.empty(), "::placeholder: style resolves");
+    check(phStyle["color"] == "rgb(200, 50, 50)", "::placeholder: color applies");
+    check(phStyle["opacity"] == "0.5", "::placeholder: opacity applies");
+
+    auto selStyle = cascade3.resolvePseudo(input, "selection", inputStyle);
+    check(selStyle["background-color"] == "gold", "::selection: background-color applies");
+    check(selStyle["color"] == "navy", "::selection: color applies");
+
+    // Compound subject: .fancy::placeholder wins over input::placeholder
+    MockElement fancy; fancy.tag = "input"; fancy.classes = "fancy";
+    auto fancyStyle = cascade3.resolve(fancy);
+    auto fancyPh = cascade3.resolvePseudo(fancy, "placeholder", fancyStyle);
+    check(fancyPh["color"] == "teal", "::placeholder: class-scoped rule wins by specificity");
+
+    // Unstyled element resolves empty (consumer falls back to its default paint)
+    MockElement plain; plain.tag = "textarea";
+    auto plainStyle = cascade3.resolve(plain);
+    auto plainSel = cascade3.resolvePseudo(plain, "selection", plainStyle);
+    check(plainSel.empty(), "::selection: empty for element without matching rules");
+
+    // Selector parsing: ::placeholder / ::selection compile as pseudo-elements
+    auto sel1 = parseSelector("input::placeholder");
+    bool foundPh = false;
+    for (auto& s : sel1.chain.entries[0].compound.simples)
+        if (s.type == SimpleSelectorType::PseudoElement && s.value == "placeholder")
+            foundPh = true;
+    check(foundPh, "::placeholder: parses as PseudoElement simple selector");
+    check(parseSelector("p::selection").chain.entries.size() == 1,
+          "::selection: parses as single compound");
 }
 
 static void testUserAgentStylesheet() {
