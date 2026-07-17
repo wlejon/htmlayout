@@ -21,7 +21,7 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - Full cascade with specificity, source order, `!important`, and inheritance (Cascade Level 5)
 - `@layer` cascade layers with spec-compliant priority ordering (including `!important` reversal)
 - `@container` queries with named containers and size containment
-- Shorthand expansion for ~150 properties (`margin`, `padding`, `border`, `flex`, `grid`, `font`, `container`, `background`, etc.), including multi-layer `background` with `position / size` slash syntax
+- Shorthand expansion for ~150 properties (`margin`, `padding`, `border`, `flex`, `grid`, `font`, `container`, `background`, etc.), including multi-layer `background` with `position / size` slash syntax and `border-image` with its `source slice / width / outset repeat` slash syntax (the `border-image-*` longhands are registered with spec initial values; rendering the nine-slice is the consumer's job)
 - Color parsing (named, hex, `rgb()`, `rgba()`, `hsl()`, `hsla()`)
 - `transform` and `transform-origin` parsing into a 2D affine matrix or 4×4 matrix (3D functions: `translate3d`, `translateZ`, `scale3d`, `scaleZ`, `rotateX/Y/Z`, `rotate3d`, `perspective`, `matrix3d`) for consumer-side rendering
 - `@media` query evaluation (`min/max-width`, `min/max-height`, `orientation`, `prefers-color-scheme`, range syntax, logical `or`)

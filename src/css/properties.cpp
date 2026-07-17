@@ -42,6 +42,15 @@ const std::vector<PropertyDef>& knownProperties() {
         {"border-right-color","currentcolor", false},
         {"border-bottom-color","currentcolor",false},
         {"border-left-color", "currentcolor", false},
+        // CSS border-image (Backgrounds-3 §6, nine-slice). Not inherited;
+        // initial values per spec. The `border-image` shorthand expands into
+        // these; the renderer consumes them at paint time (slice clamping to
+        // the image bounds is a use-time concern, not a parse-time one).
+        {"border-image-source", "none",    false},
+        {"border-image-slice",  "100%",    false},
+        {"border-image-width",  "1",       false},
+        {"border-image-outset", "0",       false},
+        {"border-image-repeat", "stretch", false},
         {"overflow",          "visible",false},
         {"overflow-x",        "visible",false},
         {"overflow-y",        "visible",false},
@@ -502,6 +511,94 @@ void expandBorder(const std::vector<std::string>& parts,
         out.push_back({std::string("border-") + side + "-style", bc.style});
         out.push_back({std::string("border-") + side + "-color", bc.color});
     }
+    // Per spec the `border` shorthand also resets border-image. Resetting the
+    // source alone is what disables border-image painting (the remaining
+    // longhands are inert without a source), and it keeps the expansion of
+    // this very common shorthand small.
+    out.push_back({"border-image-source", "none"});
+}
+
+// border-image shorthand:
+//   <source> || <slice> [/ <width>]? [/ <outset>]? || <repeat>
+// e.g. `url(x.png) 30 fill / 20px / 5 round space`. Token classes are
+// unambiguous (url()/gradient()/none = source, the four tiling keywords =
+// repeat, `fill` belongs to slice), so source and repeat may appear anywhere;
+// the numeric groups are assigned slice -> width -> outset in slash order.
+// Always emits all five longhands (shorthand semantics reset the rest).
+void expandBorderImage(const std::string& value,
+                       std::vector<ExpandedDecl>& out) {
+    // Tokenize: whitespace-separated at paren/quote depth 0; '/' is its own
+    // token at depth 0 (slashes inside url(...) paths stay put).
+    std::vector<std::string> toks;
+    {
+        std::string t;
+        int depth = 0;
+        bool inQ = false;
+        char qc = 0;
+        for (char c : value) {
+            if (inQ) { t += c; if (c == qc) inQ = false; continue; }
+            if (c == '"' || c == '\'') { inQ = true; qc = c; t += c; continue; }
+            if (c == '(') { ++depth; t += c; continue; }
+            if (c == ')') { --depth; t += c; continue; }
+            if (depth == 0 && std::isspace(static_cast<unsigned char>(c))) {
+                if (!t.empty()) { toks.push_back(t); t.clear(); }
+                continue;
+            }
+            if (depth == 0 && c == '/') {
+                if (!t.empty()) { toks.push_back(t); t.clear(); }
+                toks.push_back("/");
+                continue;
+            }
+            t += c;
+        }
+        if (!t.empty()) toks.push_back(t);
+    }
+
+    std::string source = "none";
+    std::vector<std::string> slice, width, outset, repeat;
+    bool fill = false;
+    int slot = 0;  // 0 = slice, 1 = width, 2 = outset
+    for (auto& t : toks) {
+        std::string lower = t;
+        for (auto& ch : lower)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        if (t == "/") { if (slot < 2) ++slot; continue; }
+        if (lower == "none") { source = "none"; continue; }
+        if (lower.compare(0, 4, "url(") == 0 ||
+            lower.compare(0, 6, "image(") == 0 ||
+            lower.find("-gradient(") != std::string::npos ||
+            lower.compare(0, 16, "linear-gradient(") == 0 ||
+            lower.compare(0, 16, "radial-gradient(") == 0 ||
+            lower.compare(0, 15, "conic-gradient(") == 0) {
+            source = t;
+            continue;
+        }
+        if (lower == "stretch" || lower == "repeat" || lower == "round" ||
+            lower == "space") {
+            if (repeat.size() < 2) repeat.push_back(lower);
+            continue;
+        }
+        if (lower == "fill") { fill = true; continue; }
+        if (slot == 0) slice.push_back(t);
+        else if (slot == 1) width.push_back(t);
+        else outset.push_back(t);
+    }
+
+    auto join = [](const std::vector<std::string>& v) {
+        std::string s;
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (i) s += " ";
+            s += v[i];
+        }
+        return s;
+    };
+    std::string sliceVal = slice.empty() ? "100%" : join(slice);
+    if (fill) sliceVal += " fill";
+    out.push_back({"border-image-source", source});
+    out.push_back({"border-image-slice", sliceVal});
+    out.push_back({"border-image-width", width.empty() ? "1" : join(width)});
+    out.push_back({"border-image-outset", outset.empty() ? "0" : join(outset)});
+    out.push_back({"border-image-repeat", repeat.empty() ? "stretch" : join(repeat)});
 }
 
 void expandBorderSide(const std::string& side,
@@ -543,7 +640,8 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
     static const std::unordered_set<std::string_view> kExpandable = {
         "margin", "padding", "inset", "border-width", "border-style",
         "border-color", "border", "border-top", "border-right",
-        "border-bottom", "border-left", "border-radius", "flex", "flex-flow",
+        "border-bottom", "border-left", "border-radius", "border-image",
+        "flex", "flex-flow",
         "gap", "background", "font", "transition", "animation", "outline",
         "list-style", "columns", "column-rule", "overflow", "container",
         "grid-area", "grid-column", "grid-row", "grid-template",
@@ -609,6 +707,12 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
     if (property == "border") {
         std::vector<ExpandedDecl> out;
         expandBorder(parts, out);
+        return out;
+    }
+
+    if (property == "border-image") {
+        std::vector<ExpandedDecl> out;
+        expandBorderImage(value, out);
         return out;
     }
 

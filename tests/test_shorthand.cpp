@@ -45,11 +45,87 @@ static void testPadding() {
 static void testBorder() {
     printf("--- Shorthand: border ---\n");
     auto r = expandShorthand("border", "1px solid black");
-    check(r.size() == 12, "border -> 12 longhands (4 sides x 3 properties)");
+    check(r.size() == 13, "border -> 13 longhands (4 sides x 3 properties + border-image reset)");
     check(r[0].property == "border-top-width" && r[0].value == "1px", "border-top-width");
     check(r[1].property == "border-top-style" && r[1].value == "solid", "border-top-style");
     check(r[2].property == "border-top-color" && r[2].value == "black", "border-top-color");
     check(r[3].property == "border-right-width" && r[3].value == "1px", "border-right-width");
+    check(r[12].property == "border-image-source" && r[12].value == "none",
+          "border resets border-image-source");
+}
+
+static void testBorderImage() {
+    printf("--- Shorthand: border-image ---\n");
+
+    // Helper: find a longhand's value in the expansion.
+    auto get = [](const std::vector<ExpandedDecl>& r, const char* prop) -> std::string {
+        for (auto& d : r)
+            if (d.property == prop) return d.value;
+        return "<missing>";
+    };
+
+    // Full slash form: source slice fill / width / outset repeat.
+    auto r1 = expandShorthand("border-image", "url(nine.png) 30 fill / 20px / 5 round space");
+    check(r1.size() == 5, "border-image -> 5 longhands");
+    check(get(r1, "border-image-source") == "url(nine.png)", "bi full: source");
+    check(get(r1, "border-image-slice") == "30 fill", "bi full: slice keeps fill");
+    check(get(r1, "border-image-width") == "20px", "bi full: width");
+    check(get(r1, "border-image-outset") == "5", "bi full: outset");
+    check(get(r1, "border-image-repeat") == "round space", "bi full: two repeats");
+
+    // Source only: everything else resets to its initial value.
+    auto r2 = expandShorthand("border-image", "url(x.png)");
+    check(get(r2, "border-image-source") == "url(x.png)", "bi source-only: source");
+    check(get(r2, "border-image-slice") == "100%", "bi source-only: slice initial");
+    check(get(r2, "border-image-width") == "1", "bi source-only: width initial");
+    check(get(r2, "border-image-outset") == "0", "bi source-only: outset initial");
+    check(get(r2, "border-image-repeat") == "stretch", "bi source-only: repeat initial");
+
+    // none resets the source (and the shorthand resets the rest).
+    auto r3 = expandShorthand("border-image", "none");
+    check(get(r3, "border-image-source") == "none", "bi none: source none");
+    check(get(r3, "border-image-slice") == "100%", "bi none: slice initial");
+
+    // Slice + repeat without any slash; repeat keyword is not eaten by slice.
+    auto r4 = expandShorthand("border-image", "url(x.png) 25% repeat");
+    check(get(r4, "border-image-slice") == "25%", "bi: percentage slice");
+    check(get(r4, "border-image-repeat") == "repeat", "bi: single repeat");
+    check(get(r4, "border-image-width") == "1", "bi: width stays initial");
+
+    // Order freedom: repeat keywords before the source.
+    auto r5 = expandShorthand("border-image", "stretch round url(x.png) 10 20 30 40");
+    check(get(r5, "border-image-source") == "url(x.png)", "bi reordered: source");
+    check(get(r5, "border-image-slice") == "10 20 30 40", "bi reordered: 4-value slice");
+    check(get(r5, "border-image-repeat") == "stretch round", "bi reordered: repeats");
+
+    // width `auto` and slashes without surrounding spaces.
+    auto r6 = expandShorthand("border-image", "url(x.png) 10/auto/2px stretch");
+    check(get(r6, "border-image-slice") == "10", "bi tight slash: slice");
+    check(get(r6, "border-image-width") == "auto", "bi tight slash: width auto");
+    check(get(r6, "border-image-outset") == "2px", "bi tight slash: outset");
+    check(get(r6, "border-image-repeat") == "stretch", "bi tight slash: repeat");
+
+    // url with a path slash must not be treated as a group separator.
+    auto r7 = expandShorthand("border-image", "url(img/nine.png) 30 / 10px");
+    check(get(r7, "border-image-source") == "url(img/nine.png)", "bi: slash inside url kept");
+    check(get(r7, "border-image-width") == "10px", "bi: width after slash");
+
+    // Gradient source is recognized as a source token.
+    auto r8 = expandShorthand("border-image", "linear-gradient(red, blue) 30");
+    check(get(r8, "border-image-source") == "linear-gradient(red, blue)", "bi: gradient source");
+    check(get(r8, "border-image-slice") == "30", "bi gradient: slice");
+
+    // Longhands pass through unexpanded (registry knows them).
+    auto r9 = expandShorthand("border-image-slice", "30 fill");
+    check(r9.size() == 1 && r9[0].property == "border-image-slice" && r9[0].value == "30 fill",
+          "border-image-slice longhand passes through");
+    check(initialValue("border-image-slice") == "100%", "slice initial = 100%");
+    check(initialValue("border-image-width") == "1", "width initial = 1");
+    check(initialValue("border-image-outset") == "0", "outset initial = 0");
+    check(initialValue("border-image-repeat") == "stretch", "repeat initial = stretch");
+    check(initialValue("border-image-source") == "none", "source initial = none");
+    check(!isInherited("border-image-source"), "border-image-source not inherited");
+    check(!isInherited("border-image-slice"), "border-image-slice not inherited");
 }
 
 static void testBorderSide() {
@@ -211,6 +287,7 @@ void testShorthand() {
     testBorder();
     testBorderSide();
     testBorderWidth();
+    testBorderImage();
     testFlex();
     testFlexFlow();
     testGap();
