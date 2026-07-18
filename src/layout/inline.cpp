@@ -841,6 +841,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 bi.excluded = it.forceBreak;
                 if (!it.forceBreak && it.node) {
                     if (it.node->isTextNode() && !it.isInlineBlock) bi.text = it.text;
+                    else                                            bi.subtree = it.node;
                     bi.opposesBase =
                         ((styleVal(it.node, Prop::Direction) == "rtl") != isRtl);
                 }

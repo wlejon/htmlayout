@@ -12,6 +12,11 @@ namespace {
 // or an inline-block between two Arabic words should behave.
 constexpr char kObjectReplacement[] = "\xEF\xBF\xBC";
 
+// How much of an inline element's text is worth gathering to decide its level.
+// The level comes from the first strong character; anything past the first few
+// dozen bytes cannot change the answer for the item as a whole.
+constexpr size_t kSubtreeTextBudget = 256;
+
 bool isAsciiSpace(char c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
 }
@@ -19,12 +24,33 @@ bool isAsciiSpace(char c) {
 // Rule L1 asks whether a trailing item is whitespace. Whitespace that reaches
 // layout has already been collapsed to ASCII spaces by the text splitter, so
 // this does not need the full Unicode whitespace set.
+// Empty is NOT whitespace here. An item with no display text of its own is an
+// element or an atomic box, not a space — and treating it as one would let the
+// L1 scan below walk straight past it and reset the whole line to the paragraph
+// level, undoing the reordering it was supposed to refine.
 bool isAllWhitespace(std::string_view s) {
-    if (s.empty()) return true;
+    if (s.empty()) return false;
     for (char c : s) {
         if (!isAsciiSpace(c)) return false;
     }
     return true;
+}
+
+// Append a subtree's text, depth first. Bounded: bidi only ever needs enough
+// characters to find the strong ones that decide the item's level, and an
+// inline element holding a whole article is not a reason to build a copy of it.
+void appendSubtreeText(const LayoutNode* n, std::string& out, size_t budget) {
+    if (!n || out.size() >= budget) return;
+    if (n->isTextNode()) {
+        std::string_view t = n->textContent();
+        if (out.size() + t.size() > budget) t = t.substr(0, budget - out.size());
+        out.append(t);
+        return;
+    }
+    for (const LayoutNode* c : n->children()) {
+        if (out.size() >= budget) return;
+        appendSubtreeText(c, out, budget);
+    }
 }
 
 } // namespace
@@ -45,7 +71,7 @@ std::vector<int> visualOrderForLine(const std::vector<BidiItem>& items,
     bool anyText = false;
     for (const auto& it : items) {
         if (it.opposesBase) anyOpposing = true;
-        if (!it.text.empty()) anyText = true;
+        if (!it.text.empty() || it.subtree) anyText = true;
     }
     const bool canResolveText = metrics.bidiAware() && anyText;
     if (!rtlBase && !anyOpposing && !canResolveText) return identity;
@@ -59,10 +85,18 @@ std::vector<int> visualOrderForLine(const std::vector<BidiItem>& items,
     for (size_t i = 0; i < items.size(); ++i) {
         itemStart[i] = line.size();
         if (items[i].excluded) continue;
-        if (items[i].opposesBase || items[i].text.empty()) {
+        if (items[i].opposesBase) {
             line += kObjectReplacement;
-        } else {
+        } else if (!items[i].text.empty()) {
             line.append(items[i].text);
+        } else if (items[i].subtree) {
+            const size_t before = line.size();
+            appendSubtreeText(items[i].subtree, line, before + kSubtreeTextBudget);
+            // An element with no text of its own is an atomic box: an image, an
+            // empty inline, an inline-block sized by CSS.
+            if (line.size() == before) line += kObjectReplacement;
+        } else {
+            line += kObjectReplacement;
         }
     }
 

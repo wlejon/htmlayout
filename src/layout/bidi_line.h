@@ -32,6 +32,17 @@ struct BidiItem {
     // its contents.
     std::string_view text;
 
+    // An inline element whose text belongs to THIS paragraph — <b>, <a>, a
+    // plain <span>. Bidi does not stop at an element boundary: `<p>` holding
+    // Arabic where one word is bolded is still one Arabic paragraph, and the
+    // bold word has to reorder with the rest. Set this to the element's node
+    // and the resolution walks its text; `text` above is for items that
+    // already carry their own display string.
+    //
+    // Ignored when `opposesBase` is set — an item that declares its own
+    // direction is an isolate, and its contents must not leak out.
+    LayoutNode* subtree = nullptr;
+
     // The item's own `direction` differs from the line's base direction. Such
     // an item is an isolate: its contents resolve independently and the item as
     // a whole sits at the opposite level, whatever its text says. This is what

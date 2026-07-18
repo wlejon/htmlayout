@@ -200,6 +200,18 @@ void test_bidi() {
                                     textItem(alef), textItem("  ")};
         check(orderStr(visualOrderForLine(items, false, m)) == "2 1 0 3",
               "trailing whitespace stays at the line's end");
+
+        // An item with no display text of its own is an element or an atomic
+        // box, not a space. Reading it as one lets the scan walk past it and
+        // reset every level on the line, which silently turns the reordering
+        // back into logical order — the failure mode looks like bidi was never
+        // implemented rather than like a bug in rule L1.
+        BidiItem box;
+        box.opposesBase = false;   // an ordinary <span>, no text of its own
+        std::vector<BidiItem> withBox{textItem(alef), textItem(" "),
+                                      textItem(alef), box};
+        check(orderStr(visualOrderForLine(withBox, false, m)) == "2 1 0 3",
+              "an empty-text item at the line end does not reset L1 past itself");
     }
 
     printf("--- Bidi: forced breaks keep their place ---\n");

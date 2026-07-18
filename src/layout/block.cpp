@@ -1158,7 +1158,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     BidiItem bi;
                     bi.excluded = it.forceBreak;
                     if (!it.forceBreak && it.node) {
-                        if (!it.isElement) bi.text = it.text;
+                        if (it.isElement) bi.subtree = it.node;
+                        else              bi.text = it.text;
                         bi.opposesBase =
                             ((styleVal(it.node, Prop::Direction) == "rtl") != rtlBase);
                     }
@@ -1816,6 +1817,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     bi.excluded = it.forceBreak || it.isFloat;
                     if (!bi.excluded && it.node) {
                         if (it.isText) bi.text = it.text;
+                        else           bi.subtree = it.node;
                         bi.opposesBase =
                             ((styleVal(it.node, Prop::Direction) == "rtl") != anonRtlBase);
                     }
