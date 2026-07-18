@@ -381,6 +381,33 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             "baseline-shift",
             "marker-start", "marker-mid", "marker-end",
         };
+        static const char* const kSvgTextPresAttrs[] = {
+            "direction", "unicode-bidi",
+        };
+        // `direction` and `unicode-bidi` are presentation attributes only on
+        // SVG text content elements. Unlike the names above they collide with
+        // nothing in HTML *because* HTML spells the same idea `dir` — so
+        // seeding them unconditionally would invent a `<div direction="rtl">`
+        // that no browser honours. Gate them on the tags that can carry them.
+        static const char* const kSvgTextTags[] = {
+            "text", "tspan", "textpath", "tref", "altglyph",
+        };
+        bool isSvgTextTag = false;
+        {
+            std::string_view tag = elem.tagName();
+            for (const char* t : kSvgTextTags) {
+                if (tag.size() == std::string_view(t).size() &&
+                    std::equal(tag.begin(), tag.end(), t,
+                               [](char a, char b) {
+                                   return std::tolower(static_cast<unsigned char>(a)) ==
+                                          std::tolower(static_cast<unsigned char>(b));
+                               })) {
+                    isSvgTextTag = true;
+                    break;
+                }
+            }
+        }
+
         for (const char* attr : kSvgPresAttrs) {
             std::string_view v = elem.getAttribute(attr);
             if (v.empty()) continue;
@@ -396,6 +423,13 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
                 if (e != b && *e == '\0') value += "px";
             }
             presDecls.push_back({std::string(attr), std::move(value), false});
+        }
+        if (isSvgTextTag) {
+            for (const char* attr : kSvgTextPresAttrs) {
+                std::string_view v = elem.getAttribute(attr);
+                if (v.empty()) continue;
+                presDecls.push_back({std::string(attr), std::string(v), false});
+            }
         }
         for (auto& decl : presDecls) {
             matched.push_back({
