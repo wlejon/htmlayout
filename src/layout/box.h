@@ -390,6 +390,132 @@ struct TextMetrics {
                                 std::string_view fontWeight) {
         return lineHeight(fontFamily, fontSize, fontWeight);
     }
+
+    // -----------------------------------------------------------------------
+    // Caret geometry.
+    //
+    // Everything above answers "how wide is this text". Caret and selection
+    // need the inverse and the interior: where inside a run does byte N sit,
+    // which byte does x name, and which bytes are welded together into one
+    // indivisible unit.
+    //
+    // Width-only measurement cannot answer those correctly. It forces the
+    // caller to assume width(text[0..N)) is the caret x at N, which is a
+    // prefix sum of per-character advances — true for no font that kerns, and
+    // false by construction wherever two characters ligate into one glyph or a
+    // letter's form depends on its neighbour. A consumer with a real shaper
+    // knows the answer exactly and should say so; the defaults below reproduce
+    // the historical prefix-measurement behaviour so a consumer that
+    // implements only the pure virtuals keeps working unchanged.
+    // -----------------------------------------------------------------------
+
+    // One caret position: an x offset from the run origin plus which side of
+    // the character it names.
+    struct CaretX {
+        float x = 0.0f;
+        bool  isLeadingEdge = true;
+    };
+
+    // One byte offset, up to two visual positions. A single logical offset has
+    // two x positions where the text changes direction — the trailing edge of
+    // the run before it and the leading edge of the run after. Nothing fills
+    // `secondary` yet; callers must already handle it being filled, so that
+    // adding bidi changes this function's implementations and not its callers.
+    struct CaretXPair {
+        CaretX primary;
+        CaretX secondary;
+        bool   hasSecondary = false;
+    };
+
+    // The byte extent of one indivisible unit of text. A caret may sit at
+    // either end but never inside, which is what keeps arrow keys from landing
+    // in the middle of a ligature or an Indic syllable.
+    struct ClusterSpan {
+        int byteStart = 0;
+        int byteEnd   = 0;
+    };
+
+    // True when this consumer answers the three queries below from a shaper's
+    // cluster map rather than from the prefix-measurement defaults. Layout
+    // uses it only for diagnostics; correctness must not depend on it.
+    virtual bool clusterAware() const { return false; }
+
+    // x of a caret sitting at `byteOffset` bytes into `text`. Offsets inside a
+    // cluster resolve to that cluster's leading edge.
+    virtual CaretXPair caretXAtOffset(std::string_view text, int byteOffset,
+                                      std::string_view fontFamily,
+                                      float fontSize,
+                                      std::string_view fontWeight) {
+        const int n = static_cast<int>(text.size());
+        int off = byteOffset < 0 ? 0 : (byteOffset > n ? n : byteOffset);
+        off = snapUtf8Back(text, off);
+        CaretXPair out;
+        out.primary.x = off == 0 ? 0.0f
+            : measureWidth(text.substr(0, static_cast<size_t>(off)),
+                           fontFamily, fontSize, fontWeight);
+        out.primary.isLeadingEdge = (off < n);
+        return out;
+    }
+
+    // Byte offset nearest to `x` within `text`, snapped to a cluster boundary.
+    virtual int offsetAtCaretX(std::string_view text, float x,
+                               std::string_view fontFamily,
+                               float fontSize,
+                               std::string_view fontWeight) {
+        const int n = static_cast<int>(text.size());
+        if (n == 0 || x <= 0.0f) return 0;
+        // Candidate caret sites are the UTF-8 character boundaries; prefix
+        // widths over them are monotonic, so binary-search rather than
+        // measuring every one.
+        std::vector<int> bounds;
+        bounds.reserve(static_cast<size_t>(n) + 1);
+        for (int i = 0; i <= n; ++i) {
+            if (i == n || isUtf8Lead(text, i)) bounds.push_back(i);
+        }
+        auto widthAt = [&](int bi) {
+            const int b = bounds[static_cast<size_t>(bi)];
+            return b == 0 ? 0.0f
+                 : measureWidth(text.substr(0, static_cast<size_t>(b)),
+                                fontFamily, fontSize, fontWeight);
+        };
+        int lo = 0, hi = static_cast<int>(bounds.size()) - 1;
+        if (x >= widthAt(hi)) return bounds[static_cast<size_t>(hi)];
+        while (hi - lo > 1) {
+            const int mid = (lo + hi) / 2;
+            if (widthAt(mid) <= x) lo = mid; else hi = mid;
+        }
+        const float wl = widthAt(lo);
+        const float wh = widthAt(hi);
+        return (x - wl <= wh - x) ? bounds[static_cast<size_t>(lo)]
+                                  : bounds[static_cast<size_t>(hi)];
+    }
+
+    // The indivisible unit containing `byteOffset`. Without a shaper the best
+    // available answer is the UTF-8 character, which is what caret movement
+    // stepped over before clusters existed.
+    virtual ClusterSpan clusterRangeAt(std::string_view text, int byteOffset,
+                                       std::string_view fontFamily,
+                                       float fontSize,
+                                       std::string_view fontWeight) {
+        (void)fontFamily; (void)fontSize; (void)fontWeight;
+        const int n = static_cast<int>(text.size());
+        if (byteOffset < 0) byteOffset = 0;
+        if (byteOffset >= n) return {n, n};
+        const int s = snapUtf8Back(text, byteOffset);
+        int e = s + 1;
+        while (e < n && !isUtf8Lead(text, e)) ++e;
+        return {s, e};
+    }
+
+protected:
+    static bool isUtf8Lead(std::string_view s, int i) {
+        if (i < 0 || i >= static_cast<int>(s.size())) return true;
+        return (static_cast<unsigned char>(s[static_cast<size_t>(i)]) & 0xC0) != 0x80;
+    }
+    static int snapUtf8Back(std::string_view s, int i) {
+        while (i > 0 && !isUtf8Lead(s, i)) --i;
+        return i;
+    }
 };
 
 // Viewport dimensions for layout

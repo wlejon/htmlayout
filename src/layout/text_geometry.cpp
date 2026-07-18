@@ -44,106 +44,77 @@ FontKey resolveFont(LayoutNode* textNode) {
     return fk;
 }
 
-// UTF-8 codepoint boundary offsets into `s`: index 0, then the byte offset of
-// every subsequent leading byte, then s.size(). Guarantees every value is a
-// safe split point for substr() — splitting mid-sequence would otherwise feed
-// invalid UTF-8 into Skia's measureText and abort inside SkAutoToGlyphs.
-std::vector<int> codepointBoundaries(const std::string& s) {
-    std::vector<int> out;
-    out.reserve(s.size() + 1);
-    out.push_back(0);
-    for (size_t i = 0; i < s.size(); ) {
-        unsigned char c = static_cast<unsigned char>(s[i]);
-        int step = 1;
-        if ((c & 0x80) == 0)      step = 1;
-        else if ((c & 0xE0) == 0xC0) step = 2;
-        else if ((c & 0xF0) == 0xE0) step = 3;
-        else if ((c & 0xF8) == 0xF0) step = 4;
-        i += step;
-        if (i > s.size()) i = s.size();
-        out.push_back(static_cast<int>(i));
-    }
-    return out;
+// A run's source range and its displayed text are two different strings: the
+// source keeps the whitespace the display collapsed away, so they share
+// endpoints but not interior offsets. These two convert between them the only
+// way the run records enough information for — proportionally — which is exact
+// at the endpoints and approximate in between, exactly as before. The change
+// in this file is not how source and display map onto each other; it is that
+// display offsets now become x through the cluster map instead of through a
+// prefix width.
+int displayToSrc(const PlacedTextRun& run, int displayByte) {
+    const int srcLen = run.srcEnd - run.srcStart;
+    if (run.text.empty() || srcLen <= 0) return run.srcStart;
+    const double ratio = static_cast<double>(displayByte) /
+                         static_cast<double>(run.text.size());
+    int srcOff = run.srcStart + static_cast<int>(ratio * srcLen + 0.5);
+    return std::max(run.srcStart, std::min(srcOff, run.srcEnd));
 }
 
-// Approximate source offset corresponding to an x position inside a run.
-// Binary-searches prefix widths in the post-collapse `text`, then scales the
-// resulting character index linearly back onto the run's source range.
+int srcToDisplay(const PlacedTextRun& run, int srcOffset) {
+    const int srcLen = run.srcEnd - run.srcStart;
+    if (run.text.empty() || srcLen <= 0) return 0;
+    const int clamped = std::max(run.srcStart, std::min(srcOffset, run.srcEnd));
+    const double ratio = static_cast<double>(clamped - run.srcStart) /
+                         static_cast<double>(srcLen);
+    int b = static_cast<int>(ratio * run.text.size() + 0.5);
+    return std::max(0, std::min(b, static_cast<int>(run.text.size())));
+}
+
+// Source offset corresponding to an x position inside a run.
+//
+// Asks the metrics consumer which byte `x` names. A shaping consumer answers
+// from the cluster map, so the result can never land inside a ligature or a
+// combining sequence; the interface default reproduces the prefix-width
+// binary search this function used to do inline.
 int srcOffsetAtX(const PlacedTextRun& run, float x, TextMetrics& metrics,
                  const FontKey& fk) {
-    int srcLen = run.srcEnd - run.srcStart;
-    if (srcLen <= 0) return run.srcStart;
+    if (run.srcEnd <= run.srcStart) return run.srcStart;
 
-    float local = x - run.x;
+    const float local = x - run.x;
     if (local <= 0) return run.srcStart;
     if (local >= run.width) return run.srcEnd;
-
     if (run.text.empty()) return run.srcStart;
 
-    // Boundary indices are codepoint-aligned byte offsets into run.text.
-    std::vector<int> bounds = codepointBoundaries(run.text);
-    int nb = static_cast<int>(bounds.size()); // #boundaries (codepoints + 1)
-
-    auto widthAt = [&](int bi) {
-        int byteOff = bounds[bi];
-        return byteOff == 0 ? 0.0f
-             : metrics.measureWidth(run.text.substr(0, byteOff),
-                                    fk.family, fk.size, fk.weight);
-    };
-
-    // Binary search over boundary indices. Prefix widths are monotonic.
-    int lo = 0, hi = nb - 1;
-    while (lo < hi) {
-        int mid = (lo + hi + 1) / 2;
-        float w = widthAt(mid);
-        if (w <= local) lo = mid;
-        else hi = mid - 1;
-    }
-    // Pick nearest boundary (prev vs. next).
-    float wLo = widthAt(lo);
-    int hiIdx = std::min(lo + 1, nb - 1);
-    float wHi = widthAt(hiIdx);
-    int displayByte = (std::abs(local - wHi) < std::abs(local - wLo))
-        ? bounds[hiIdx]
-        : bounds[lo];
-
-    // Scale back to source range. Whitespace-collapse means displayed length
-    // may be less than source length; linear scaling picks a reasonable
-    // nearby byte offset.
-    double ratio = static_cast<double>(displayByte) /
-                   static_cast<double>(run.text.size());
-    int srcOff = run.srcStart +
-                 static_cast<int>(ratio * srcLen + 0.5);
-    if (srcOff < run.srcStart) srcOff = run.srcStart;
-    if (srcOff > run.srcEnd)   srcOff = run.srcEnd;
-    return srcOff;
+    const int displayByte = metrics.offsetAtCaretX(run.text, local,
+                                                   fk.family, fk.size, fk.weight);
+    return displayToSrc(run, displayByte);
 }
 
-// Reverse mapping: x within a run for a given source offset.
+// Reverse mapping: the caret positions within a run for a source offset.
+//
+// Returns the pair rather than a float even though only `primary` is ever
+// filled today: a source offset at a direction boundary has two visual x
+// positions, and callers that collapse the answer to one float here would all
+// have to be rewritten when that becomes possible. Callers that genuinely want
+// one number call caretXAtSrcOffset below and say so at the call site.
+TextMetrics::CaretXPair caretsAtSrcOffset(const PlacedTextRun& run, int srcOffset,
+                                          TextMetrics& metrics, const FontKey& fk) {
+    TextMetrics::CaretXPair out;
+    out.primary.x = run.x;
+    if (run.text.empty() || run.srcEnd == run.srcStart) return out;
+
+    const int displayByte = srcToDisplay(run, srcOffset);
+    TextMetrics::CaretXPair c = metrics.caretXAtOffset(run.text, displayByte,
+                                                       fk.family, fk.size, fk.weight);
+    c.primary.x += run.x;
+    c.secondary.x += run.x;
+    return c;
+}
+
 float xAtSrcOffset(const PlacedTextRun& run, int srcOffset,
                    TextMetrics& metrics, const FontKey& fk) {
-    if (run.text.empty() || run.srcEnd == run.srcStart) return run.x;
-    int srcLen = run.srcEnd - run.srcStart;
-    int clamped = std::max(run.srcStart, std::min(srcOffset, run.srcEnd));
-    double ratio = static_cast<double>(clamped - run.srcStart) /
-                   static_cast<double>(srcLen);
-    int prefixByte = static_cast<int>(ratio * run.text.size() + 0.5);
-    prefixByte = std::max(0, std::min(prefixByte, static_cast<int>(run.text.size())));
-    // Snap to nearest codepoint boundary so substr() won't split a UTF-8
-    // sequence and hand invalid bytes to Skia.
-    std::vector<int> bounds = codepointBoundaries(run.text);
-    int snapped = bounds.back();
-    for (size_t i = 0; i < bounds.size(); ++i) {
-        if (bounds[i] >= prefixByte) {
-            snapped = (i > 0 && (prefixByte - bounds[i-1] < bounds[i] - prefixByte))
-                    ? bounds[i-1] : bounds[i];
-            break;
-        }
-    }
-    float w = snapped == 0 ? 0.0f
-            : metrics.measureWidth(run.text.substr(0, snapped),
-                                   fk.family, fk.size, fk.weight);
-    return run.x + w;
+    return caretsAtSrcOffset(run, srcOffset, metrics, fk).primary.x;
 }
 
 // Walk the layout tree accumulating offsets so each visited node carries the

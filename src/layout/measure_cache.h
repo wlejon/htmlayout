@@ -67,6 +67,28 @@ public:
                           [&] { return inner_.naturalHeight(f, s, w); });
     }
 
+    // Caret geometry passes straight through, uncached.
+    //
+    // Forwarding matters more than caching here. The base class answers these
+    // from prefix measurement, so a MeasureCache that did NOT override them
+    // would quietly downgrade a consumer with a real shaper to the fallback
+    // — and do it invisibly, since the answers would still be plausible.
+    // Layout itself never asks these (caret and selection call the consumer's
+    // metrics directly), so there is no repeat traffic to memoize.
+    bool clusterAware() const override { return inner_.clusterAware(); }
+    CaretXPair caretXAtOffset(std::string_view t, int off, std::string_view f,
+                              float s, std::string_view w) override {
+        return inner_.caretXAtOffset(t, off, f, s, w);
+    }
+    int offsetAtCaretX(std::string_view t, float x, std::string_view f,
+                       float s, std::string_view w) override {
+        return inner_.offsetAtCaretX(t, x, f, s, w);
+    }
+    ClusterSpan clusterRangeAt(std::string_view t, int off, std::string_view f,
+                               float s, std::string_view w) override {
+        return inner_.clusterRangeAt(t, off, f, s, w);
+    }
+
     TextMetrics& inner() { return inner_; }
 
 private:
