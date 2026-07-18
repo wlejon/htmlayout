@@ -4,6 +4,7 @@
 #include "layout/style_util.h"
 #include "layout/style_cache.h"
 #include "layout/text.h"
+#include "layout/bidi_line.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -827,7 +828,29 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         float cursorX = xOffset;
         if (lineIdx == 0) cursorX += textIndent;
 
-        for (size_t itemIdx = 0; itemIdx < line.items.size(); itemIdx++) {
+        // Bidi visual reordering — the same step the block IFCs run. An inline
+        // element laying out its own lines has to reorder them too, or Hebrew
+        // inside a <span> stays in logical order while the same text in a <p>
+        // does not.
+        std::vector<int> visual;
+        {
+            std::vector<BidiItem> bidiItems;
+            bidiItems.reserve(line.items.size());
+            for (const auto& it : line.items) {
+                BidiItem bi;
+                bi.excluded = it.forceBreak;
+                if (!it.forceBreak && it.node) {
+                    if (it.node->isTextNode() && !it.isInlineBlock) bi.text = it.text;
+                    bi.opposesBase =
+                        ((styleVal(it.node, Prop::Direction) == "rtl") != isRtl);
+                }
+                bidiItems.push_back(bi);
+            }
+            visual = visualOrderForLine(bidiItems, isRtl, metrics);
+        }
+
+        for (size_t vi = 0; vi < visual.size(); vi++) {
+            const size_t itemIdx = static_cast<size_t>(visual[vi]);
             auto& item = line.items[itemIdx];
             if (item.node && (item.isInlineBlock || !item.node->isTextNode())) {
                 // Position inline-block/inline element

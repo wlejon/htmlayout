@@ -7,6 +7,7 @@ add_library(htmlayout_layout STATIC
     table.cpp
     text.cpp
     text_geometry.cpp
+    bidi_line.cpp
     multicol.cpp
     formatting_context.cpp
     style_cache.cpp

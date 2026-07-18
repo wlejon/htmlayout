@@ -5,6 +5,9 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
+#include <vector>
+#include <cstdint>
 
 namespace htmlayout::layout {
 
@@ -89,10 +92,36 @@ public:
         return inner_.clusterRangeAt(t, off, f, s, w);
     }
 
+    // Bidi. Forwarded for the same reason as the caret queries — the base
+    // class's answer (everything at the base level) is a plausible-looking lie
+    // that would silently turn every RTL paragraph back into logical order.
+    //
+    // Unlike the caret queries this one IS memoized, because layout does repeat
+    // it: a block is measured for min-content width, again for max-content, and
+    // again for the real pass, and each of those rebuilds the same line text and
+    // asks the same question about it.
+    bool bidiAware() const override { return inner_.bidiAware(); }
+
+    void bidiLevels(std::string_view text, bool rtlBase,
+                    std::vector<uint8_t>& out) override {
+        const size_t h = mix(std::hash<std::string_view>{}(text), rtlBase ? 1u : 0u);
+        if (auto it = bidi_.find(h);
+            it != bidi_.end() && it->second.first == text &&
+            it->second.second.size() == text.size()) {
+            out = it->second.second;
+            return;
+        }
+        inner_.bidiLevels(text, rtlBase, out);
+        if (bidi_.size() < kMaxBidi) {
+            bidi_.emplace(h, std::make_pair(std::string(text), out));
+        }
+    }
+
     TextMetrics& inner() { return inner_; }
 
 private:
     static constexpr size_t kMaxWidths = 1 << 16;
+    static constexpr size_t kMaxBidi   = 1 << 12;
 
     // Owning key and a non-owning probe of it. Heterogeneous lookup (is_transparent
     // below) is the whole point: a hit must not build a std::string out of a word
@@ -200,6 +229,9 @@ private:
 
     TextMetrics& inner_;
     std::unordered_map<TextKey, float, TextHash, TextEq> widths_;
+    // Line text -> resolved per-byte levels. Keyed by hash with the text kept
+    // alongside so a collision is detected rather than silently answered wrong.
+    std::unordered_map<size_t, std::pair<std::string, std::vector<uint8_t>>> bidi_;
     std::unordered_map<FontKey, Font, FontHash, FontEq> fonts_;
 };
 

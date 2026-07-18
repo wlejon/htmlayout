@@ -6,6 +6,7 @@
 #include "test_shorthand.h"
 #include "test_layout.h"
 #include "test_inline.h"
+#include "test_bidi.h"
 #include "test_flex.h"
 #include "test_hittest.h"
 #include "test_calc.h"
@@ -53,6 +54,9 @@ int main() {
     printf("\n");
 
     testInlineLayout();
+    printf("\n");
+
+    test_bidi();
     printf("\n");
 
     testFlexLayout();

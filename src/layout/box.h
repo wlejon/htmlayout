@@ -10,6 +10,7 @@
 #include <memory>
 #include <cstdint>
 #include <utility>
+#include <algorithm>
 
 namespace htmlayout::layout {
 
@@ -505,6 +506,72 @@ struct TextMetrics {
         int e = s + 1;
         while (e < n && !isUtf8Lead(text, e)) ++e;
         return {s, e};
+    }
+
+    // -----------------------------------------------------------------------
+    // Bidi (UAX #9).
+    //
+    // Layout has to reorder a line's runs into visual order, and to do that it
+    // needs each run's resolved embedding level. Resolving levels needs the
+    // Unicode bidi character classes, which layout has no business carrying —
+    // so the consumer with a Unicode implementation answers, and layout does
+    // the reordering.
+    //
+    // The split is deliberate: level resolution needs a Unicode database,
+    // reordering does not. Rule L2 is a dozen lines of reversal, so it has a
+    // real implementation here rather than a stub, and a consumer that
+    // implements nothing at all still reorders `direction: rtl` boxes exactly
+    // as it did before bidi existed.
+    // -----------------------------------------------------------------------
+
+    // True when bidiLevels() below answers from a real Unicode implementation.
+    // Layout uses it to skip building the line's text when the answer would be
+    // uniform anyway.
+    virtual bool bidiAware() const { return false; }
+
+    // Resolved embedding level of every BYTE of `text` (each byte of a
+    // multi-byte character carries its character's level, so a byte offset can
+    // be looked up directly). The default puts everything at the base level —
+    // which is what an engine with no bidi implementation displays.
+    virtual void bidiLevels(std::string_view text, bool rtlBase,
+                            std::vector<uint8_t>& out) {
+        out.assign(text.size(), rtlBase ? 1 : 0);
+    }
+
+    // Rule L2: from the highest level down to the lowest odd level, reverse
+    // every maximal run at that level or above. `levels` are a line's items in
+    // logical order; the result maps visual slot -> logical index.
+    static std::vector<int> reorderVisual(const std::vector<uint8_t>& levels) {
+        std::vector<int> order(levels.size());
+        for (size_t i = 0; i < levels.size(); ++i) order[i] = static_cast<int>(i);
+        if (levels.empty()) return order;
+
+        std::vector<uint8_t> lv = levels;
+        int maxLevel = 0;
+        int minOdd = 0xFF;
+        for (uint8_t l : lv) {
+            if (l > maxLevel) maxLevel = l;
+            if ((l & 1) && l < minOdd) minOdd = l;
+        }
+        if (minOdd == 0xFF) return order;   // nothing right-to-left
+
+        for (int L = maxLevel; L >= minOdd; --L) {
+            size_t j = 0;
+            while (j < lv.size()) {
+                if (lv[j] >= L) {
+                    size_t k = j;
+                    while (k < lv.size() && lv[k] >= L) ++k;
+                    std::reverse(order.begin() + static_cast<long>(j),
+                                 order.begin() + static_cast<long>(k));
+                    std::reverse(lv.begin() + static_cast<long>(j),
+                                 lv.begin() + static_cast<long>(k));
+                    j = k;
+                } else {
+                    ++j;
+                }
+            }
+        }
+        return order;
     }
 
 protected:

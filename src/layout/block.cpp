@@ -4,6 +4,7 @@
 #include "layout/style_util.h"
 #include "layout/style_cache.h"
 #include "layout/text.h"
+#include "layout/bidi_line.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -1138,48 +1139,33 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
             float lineBaseline = cursorY + line.above;
 
-            // Bidi visual reordering (UAX #9 rule L2). The line's items are in
-            // logical order; when the block's base direction is rtl (or an
-            // opposite-direction inline island is present), reorder them for
-            // painting/positioning. Each item takes the base embedding level,
-            // bumped by one when its own `direction` opposes the base (the HTML
-            // `dir` attribute isolates such runs). Then, from the highest level
-            // down to the lowest odd level, reverse each maximal run at that
-            // level or higher. Latin-only content means no per-glyph shaping —
-            // this is box-order reordering only.
+            // Bidi visual reordering (UAX #9). The line's items are in logical
+            // order; reordering turns that into the order they are painted in.
+            //
+            // Two things decide an item's embedding level: the characters it
+            // contains, resolved over the whole line by the metrics consumer,
+            // and its own `direction` when that opposes the base — the HTML
+            // `dir` attribute isolates such a run, so it sits one level above
+            // the base whatever its text says.
+            const bool rtlBase = (direction == "rtl");
             std::vector<size_t> order;
             order.reserve(line.end - line.start);
-            for (size_t i = line.start; i < line.end; i++) order.push_back(i);
             {
-                const int baseLevel = (direction == "rtl") ? 1 : 0;
-                std::vector<int> lvl;
-                lvl.reserve(order.size());
-                int maxLvl = 0;
-                for (size_t idx : order) {
-                    int level = baseLevel;
-                    const IFCItem& it = items[idx];
+                std::vector<BidiItem> bidiItems;
+                bidiItems.reserve(line.end - line.start);
+                for (size_t i = line.start; i < line.end; i++) {
+                    const IFCItem& it = items[i];
+                    BidiItem bi;
+                    bi.excluded = it.forceBreak;
                     if (!it.forceBreak && it.node) {
-                        const std::string& idir =
-                            styleVal(it.node, Prop::Direction);
-                        bool itemRtl = (idir == "rtl");
-                        if (itemRtl != (direction == "rtl")) level = baseLevel + 1;
+                        if (!it.isElement) bi.text = it.text;
+                        bi.opposesBase =
+                            ((styleVal(it.node, Prop::Direction) == "rtl") != rtlBase);
                     }
-                    lvl.push_back(level);
-                    maxLvl = std::max(maxLvl, level);
+                    bidiItems.push_back(bi);
                 }
-                for (int L = maxLvl; L >= 1; L--) {
-                    size_t j = 0;
-                    while (j < order.size()) {
-                        if (lvl[j] >= L) {
-                            size_t k = j;
-                            while (k < order.size() && lvl[k] >= L) k++;
-                            std::reverse(order.begin() + j, order.begin() + k);
-                            std::reverse(lvl.begin() + j, lvl.begin() + k);
-                            j = k;
-                        } else {
-                            j++;
-                        }
-                    }
+                for (int idx : visualOrderForLine(bidiItems, rtlBase, metrics)) {
+                    order.push_back(line.start + static_cast<size_t>(idx));
                 }
             }
 
@@ -1812,7 +1798,36 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // line.xStart is the float-aware left edge of this line.
             float cx = line.xStart + xOff;
             float lineBaseline = cursorY + line.above;
-            for (size_t i = line.start; i < line.end; i++) {
+
+            // Bidi visual reordering, exactly as the dedicated IFC does it —
+            // an anonymous block wrapping a paragraph of Hebrew is the same
+            // problem and deserves the same answer. Floats are excluded: they
+            // were placed while the line was being built and are not part of
+            // its inline sequence.
+            const bool anonRtlBase = (bfcDirection == "rtl");
+            std::vector<size_t> anonOrder;
+            anonOrder.reserve(line.end - line.start);
+            {
+                std::vector<BidiItem> bidiItems;
+                bidiItems.reserve(line.end - line.start);
+                for (size_t i = line.start; i < line.end; i++) {
+                    const AnonItem& it = anonItems[i];
+                    BidiItem bi;
+                    bi.excluded = it.forceBreak || it.isFloat;
+                    if (!bi.excluded && it.node) {
+                        if (it.isText) bi.text = it.text;
+                        bi.opposesBase =
+                            ((styleVal(it.node, Prop::Direction) == "rtl") != anonRtlBase);
+                    }
+                    bidiItems.push_back(bi);
+                }
+                for (int idx : visualOrderForLine(bidiItems, anonRtlBase, metrics)) {
+                    anonOrder.push_back(line.start + static_cast<size_t>(idx));
+                }
+            }
+
+            for (size_t oi = 0; oi < anonOrder.size(); oi++) {
+                size_t i = anonOrder[oi];
                 auto& ai = anonItems[i];
                 if (ai.isFloat) continue; // placed during line building
                 if (ai.forceBreak) {
