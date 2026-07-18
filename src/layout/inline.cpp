@@ -359,7 +359,16 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             // lines afterwards (buttons center their labels via the UA
             // sheet). runIdx >= 0 indexes the child's textRuns; -1 is the
             // child's own box.
-            struct IbPlaced { LayoutNode* child; int runIdx; };
+            // `advance` and `gapBefore` are what bidi reordering needs to
+            // re-run the pen: this stacker folds collapsed inter-item spaces
+            // into the cursor rather than emitting them as items, so a gap is
+            // not recoverable from the entries' positions after the fact.
+            struct IbPlaced {
+                LayoutNode* child;
+                int runIdx;
+                float advance = 0.0f;
+                float gapBefore = 0.0f;
+            };
             std::vector<IbPlaced> ibLine;
             std::vector<std::pair<std::vector<IbPlaced>, float>> ibLines;
             auto ibEndLine = [&](float lineW) {
@@ -402,6 +411,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         // it (CSS2 §10.8); taking max() here made the natural
                         // height win and inflated the box.
                         float h = ibLineHeight;
+                        float gapUsed = 0.0f;
                         if (cursorX > 0 &&
                             cursorX + ibPending + run.width > contentAvail + kFitSlack) {
                             ibEndLine(cursorX);
@@ -411,6 +421,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                             lineMaxH = 0;
                         } else {
                             cursorX += ibPending;
+                            gapUsed = ibPending;
                         }
                         ibPending = 0;
                         // Center the font's natural box in the line via
@@ -455,7 +466,8 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         }
                         child->box.textRuns.push_back(std::move(placed));
                         ibLine.push_back({child,
-                            static_cast<int>(child->box.textRuns.size()) - 1});
+                            static_cast<int>(child->box.textRuns.size()) - 1,
+                            run.width, gapUsed});
                         cursorX += run.width;
                         lineMaxH = std::max(lineMaxH, h);
                         // Hard line break preserved by white-space: pre /
@@ -488,6 +500,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     layoutNode(child, contentAvail, metrics);
                     float cw = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
                     float ch = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
+                    float gapUsed = 0.0f;
                     if (cursorX > 0 && cursorX + ibPending + cw > contentAvail + kFitSlack) {
                         ibEndLine(cursorX);
                         maxContentW = std::max(maxContentW, cursorX);
@@ -496,13 +509,14 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         lineMaxH = 0;
                     } else {
                         cursorX += ibPending;
+                        gapUsed = ibPending;
                     }
                     ibPending = 0;
                     child->box.contentRect.x = cursorX + child->box.margin.left +
                         child->box.padding.left + child->box.border.left;
                     child->box.contentRect.y = cursorY + child->box.margin.top +
                         child->box.padding.top + child->box.border.top;
-                    ibLine.push_back({child, -1});
+                    ibLine.push_back({child, -1, cw, gapUsed});
                     cursorX += cw;
                     // The line still includes the block's strut (CSS2 §10.8):
                     // a line of only atomic inlines shorter than the
@@ -527,6 +541,90 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 ibEndLine(cursorX);
                 maxContentW = std::max(maxContentW, cursorX);
                 cursorY += lineMaxH;
+            }
+
+            // Bidi visual reordering, for the same reason the block IFCs and
+            // the inline path above do it — and it was missing here, so
+            // `<button><span>שלום</span> <span>עולם</span></button>` kept its
+            // labels in logical order while the identical markup in a <div>
+            // did not.
+            //
+            // This stacker places items as it walks them instead of building a
+            // line and then positioning it, so there was no line to reorder.
+            // There is one now: `ibLines` already records each line's entries
+            // for the text-align pass below. Reordering re-runs the pen over
+            // those entries in visual order, which is the same edit the align
+            // pass makes — it rewrites x on a placed run or box — just with a
+            // per-item offset rather than one shift for the whole line.
+            //
+            // Collapsed spaces between items were folded into the cursor and
+            // never became items, so each entry carries the gap that preceded
+            // it and the gap travels with it. For the reversal this actually
+            // performs that is the right answer: the space between two words
+            // stays between them whichever order they end up in.
+            for (auto& [entries, lineW] : ibLines) {
+                if (entries.size() < 2) continue;
+                std::vector<BidiItem> bidiItems;
+                bidiItems.reserve(entries.size());
+                for (auto& e : entries) {
+                    BidiItem bi;
+                    if (e.runIdx >= 0) {
+                        bi.text = e.child->box.textRuns[
+                            static_cast<size_t>(e.runIdx)].text;
+                    } else {
+                        bi.subtree = e.child;
+                        bi.opposesBase =
+                            ((styleVal(e.child, Prop::Direction) == "rtl") != isRtl);
+                    }
+                    bidiItems.push_back(bi);
+                }
+                std::vector<int> visual = visualOrderForLine(bidiItems, isRtl, metrics);
+                if (visual.size() != entries.size()) continue;
+
+                // Identity order is the overwhelmingly common case; skip it so
+                // ordinary Latin content is not rewritten at all.
+                bool reordered = false;
+                for (size_t k = 0; k < visual.size(); ++k) {
+                    if (static_cast<size_t>(visual[k]) != k) { reordered = true; break; }
+                }
+                if (!reordered) continue;
+
+                float pen = 0.0f;
+                std::vector<IbPlaced> ordered;
+                ordered.reserve(entries.size());
+                for (int slot : visual) {
+                    IbPlaced& e = entries[static_cast<size_t>(slot)];
+                    pen += e.gapBefore;
+                    if (e.runIdx >= 0) {
+                        e.child->box.textRuns[static_cast<size_t>(e.runIdx)].x = pen;
+                    } else {
+                        // Element boxes report the CONTENT origin, so the pen
+                        // (a margin-box position) has to be walked in past the
+                        // left margin, border and padding — exactly as the
+                        // original placement did.
+                        e.child->box.contentRect.x = pen + e.child->box.margin.left +
+                            e.child->box.padding.left + e.child->box.border.left;
+                    }
+                    pen += e.advance;
+                    ordered.push_back(e);
+                }
+                entries = std::move(ordered);
+
+                // A text node's contentRect spans its runs, which have just
+                // moved; re-derive it or the node's reported rect still points
+                // at where the text used to be.
+                for (auto& e : entries) {
+                    if (e.runIdx < 0) continue;
+                    auto& rs = e.child->box.textRuns;
+                    if (rs.empty()) continue;
+                    float minX = rs[0].x, maxX = rs[0].x + rs[0].width;
+                    for (auto& r : rs) {
+                        minX = std::min(minX, r.x);
+                        maxX = std::max(maxX, r.x + r.width);
+                    }
+                    e.child->box.contentRect.x = minX;
+                    e.child->box.contentRect.width = maxX - minX;
+                }
             }
 
             // text-align inside the inline-block: shift each completed line
