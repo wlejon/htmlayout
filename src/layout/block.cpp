@@ -670,7 +670,17 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                             // trailing space, line-edge trimming can drop
                             // it, and justify can expand it.
                             IFCItem sp{};
-                            sp.width = spaceWidth;
+                            // The gap as the splitter measured it in context,
+                            // not an isolated " ". The words on either side
+                            // already absorbed the kerning that straddles this
+                            // space, so an isolated measurement double-counts
+                            // it and the reassembled line ends up wider than
+                            // max-content — which sizes shrink-to-fit boxes,
+                            // so the line would then wrap inside a box built
+                            // to hold it. Falls back when the splitter had no
+                            // context to offer (letter/word-spacing paths).
+                            sp.width = run.spaceBefore > 0.0f ? run.spaceBefore
+                                                              : spaceWidth;
                             // Same natural box as the words on either side —
                             // identical font, identical strut, so this cannot
                             // change the line height (the words already set
@@ -1516,7 +1526,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         AnonItem sp{};
                         // Real height, for the same reason as the IFC path
                         // above: selection geometry discards a zero-height run.
-                        sp.node = inl; sp.width = anonSpaceWidth; sp.height = run.height;
+                        // Contextual gap width, as in the IFC path above.
+                        sp.node = inl;
+                        sp.width = run.spaceBefore > 0.0f ? run.spaceBefore
+                                                          : anonSpaceWidth;
+                        sp.height = run.height;
                         sp.isText = true; sp.baseline = anonStrut.ascent;
                         sp.text = " ";
                         sp.srcStart = prevSrcEnd; sp.srcEnd = run.srcStart;

@@ -91,6 +91,17 @@ public:
                                float s, std::string_view w) override {
         return inner_.clusterRangeAt(t, off, f, s, w);
     }
+    // Same reasoning, and the one this class originally forgot. advanceBetween
+    // is asked for a slice of a shaping the consumer already has, so it can
+    // charge each cluster the advance it has IN CONTEXT. The base class answers
+    // by re-measuring the substring on its own, which drops exactly the kerning
+    // the caller asked about — and plausibly, so line breaking simply came out
+    // slightly wide with no visible sign of the downgrade.
+    float advanceBetween(std::string_view t, int startByte, int endByte,
+                         std::string_view f, float s,
+                         std::string_view w) override {
+        return inner_.advanceBetween(t, startByte, endByte, f, s, w);
+    }
 
     // Bidi. Forwarded for the same reason as the caret queries — the base
     // class's answer (everything at the base level) is a plausible-looking lie

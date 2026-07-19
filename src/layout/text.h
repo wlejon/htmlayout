@@ -34,6 +34,14 @@ struct TextRun {
     // .text) to decide where a width-driven wrap may actually land.
     bool canBreakBefore = false;
     bool canBreakAfter  = false;
+    // Advance of the collapsed whitespace immediately before this run, taken
+    // in context rather than by measuring " " on its own. Word-mode callers
+    // re-insert the inter-word gaps as their own items and must use this, not
+    // an isolated space measurement: a word's own advance already absorbed
+    // whatever kerning straddles the space, so an isolated " " double-counts
+    // the difference and the reassembled line comes out wider than the same
+    // text measured whole. Zero on the first run of a text node.
+    float spaceBefore = 0.0f;
     // True when a hard line break (a literal newline preserved by
     // white-space: pre/pre-wrap/pre-line) immediately follows this run.
     // The IFC line builder treats this like a <br>: terminate the

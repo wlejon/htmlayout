@@ -772,6 +772,89 @@ static void testMaxContentSingleLineConsistency() {
     check(oneLine, "max-content: all text runs share one baseline (no wrap)");
 }
 
+// Sub-additive metric: the whole string measures NARROWER than its pieces,
+// because a kern pair straddles every space. Real fonts do this, and it is the
+// opposite pressure from RoundUpTextMetrics above — which is the point. The
+// two together pin max-content from both sides: it may not come out narrower
+// than the line the packer builds (the box would wrap inside itself) and it
+// may not come out wider than the text it holds (shrink-to-fit overshoots).
+//
+// advanceBetween is overridden to slice the contextual shaping rather than
+// re-measure the substring, which is what a cluster-aware shaper does and what
+// makes the words and gaps sum back to the whole.
+struct KernAcrossSpaceTextMetrics : public TextMetrics {
+    static constexpr float kPerChar = 10.0f;
+    static constexpr float kKern    = 2.0f;  // pulled in at every space
+
+    // Kerning is a property of a PAIR, so a space only tightens when it has
+    // neighbours on both sides. That is what makes measuring " " on its own
+    // lose the effect — and losing it is the bug under test.
+    static float advanceAt(std::string_view s, size_t i) {
+        bool interiorSpace = s[i] == ' ' && i > 0 && i + 1 < s.size();
+        return interiorSpace ? (kPerChar - kKern) : kPerChar;
+    }
+    float measureWidth(std::string_view text, std::string_view, float,
+                       std::string_view) override {
+        float w = 0;
+        for (size_t i = 0; i < text.size(); ++i) w += advanceAt(text, i);
+        return w;
+    }
+    // A slice of the whole shaping: each character keeps the advance it has in
+    // the FULL string, so the parts partition the total exactly.
+    float advanceBetween(std::string_view text, int startByte, int endByte,
+                         std::string_view, float, std::string_view) override {
+        if (endByte <= startByte) return 0.0f;
+        float w = 0;
+        for (int i = startByte; i < endByte && i < (int)text.size(); ++i)
+            w += advanceAt(text, static_cast<size_t>(i));
+        return w;
+    }
+    float lineHeight(std::string_view, float, std::string_view) override {
+        return 20.0f;
+    }
+};
+
+static void testMaxContentKerningAcrossSpaces() {
+    printf("--- Max-content: kerning across spaces is not double-counted ---\n");
+    InlineMockNode root;
+    initBlock(root);
+
+    InlineMockNode textNode;
+    textNode.isText = true;
+    textNode.text = "this column has substantially more text";
+    root.addChild(&textNode);
+
+    KernAcrossSpaceTextMetrics metrics;
+
+    float mn = 0, mx = 0;
+    measureWordModeIntrinsics(textNode.text, "serif", 16.0f, "normal", 0, 0,
+                              "none", metrics, mn, mx);
+    float whole = metrics.measureWidth(textNode.text, "serif", 16.0f, "normal");
+
+    // Summing words measured in isolation plus isolated spaces loses the kern
+    // at every space — that overshoot is what made shrink-to-fit boxes wider
+    // than their own text.
+    float pieceSum = 0;
+    for (const char* w : {"this", "column", "has", "substantially", "more", "text"})
+        pieceSum += metrics.measureWidth(w, "serif", 16.0f, "normal");
+    pieceSum += 5 * metrics.measureWidth(" ", "serif", 16.0f, "normal");
+    check(pieceSum > whole,
+          "kerning: the naive piece sum really does overshoot (metric is "
+          "sub-additive, so this test exercises the bug)");
+
+    check(approx(mx, whole),
+          "kerning: max-content equals the whole-string advance, not the "
+          "inflated piece sum");
+
+    // And the packer agrees: a box sized to that max-content holds one line.
+    float maxc = computeMaxContentWidth(&root, metrics);
+    check(approx(maxc, whole), "kerning: computeMaxContentWidth agrees");
+    root.style["width"] = std::to_string(maxc) + "px";
+    layoutTree(&root, 1000, metrics);
+    check(approx(root.box.contentRect.height, 20),
+          "kerning: text still fits on ONE line at that width");
+}
+
 // ========== Entry point ==========
 
 void testInlineLayout() {
@@ -811,4 +894,5 @@ void testInlineLayout() {
 
     // Intrinsic-sizing ↔ layout consistency
     testMaxContentSingleLineConsistency();
+    testMaxContentKerningAcrossSpaces();
 }
