@@ -219,9 +219,22 @@ struct TextNodeEntry {
     Rect  clip; // absolute clip rect (scroll containers / overflow:hidden)
 };
 
-void collectTextNodes(LayoutNode* root, std::vector<TextNodeEntry>& out) {
+// Is `n` inside `scope` (or scope itself)? A null scope accepts everything.
+bool withinScope(const LayoutNode* n, const LayoutNode* scope) {
+    if (!scope) return true;
+    for (const LayoutNode* p = n; p; p = p->parent()) {
+        if (p == scope) return true;
+    }
+    return false;
+}
+
+void collectTextNodes(LayoutNode* root, std::vector<TextNodeEntry>& out,
+                      const LayoutNode* scope = nullptr) {
+    // Always walks from `root` so the accumulated offsets stay absolute; the
+    // scope filters what is eligible, it does not move the origin.
     forEachNode(root, [&](const OffsetFrame& f) {
-        if (f.node->isTextNode() && !f.node->box.textRuns.empty()) {
+        if (f.node->isTextNode() && !f.node->box.textRuns.empty() &&
+            withinScope(f.node, scope)) {
             out.push_back({f.node, f.ox, f.oy, f.clip});
         }
     });
@@ -233,12 +246,13 @@ void collectTextNodes(LayoutNode* root, std::vector<TextNodeEntry>& out) {
 // hitTestText
 // ---------------------------------------------------------------------------
 
-TextHit hitTestText(LayoutNode* root, float x, float y, TextMetrics& metrics) {
+TextHit hitTestText(LayoutNode* root, float x, float y, TextMetrics& metrics,
+                    const LayoutNode* scope) {
     TextHit result;
     if (!root) return result;
 
     std::vector<TextNodeEntry> entries;
-    collectTextNodes(root, entries);
+    collectTextNodes(root, entries, scope);
 
     // Find a text node whose placed runs contain (x,y). If the hit is outside
     // every run, pick the closest run by vertical+horizontal distance — so

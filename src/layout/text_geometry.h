@@ -17,7 +17,14 @@ struct TextHit {
 // Coordinate space: (x, y) are absolute layout coordinates (same space used
 // by hitTest()). The query walks the tree accumulating offsets in the same
 // way hitTest does.
-TextHit hitTestText(LayoutNode* root, float x, float y, TextMetrics& metrics);
+//
+// `scope` restricts the answer to text inside one subtree while still walking
+// from `root`, which is what keeps the coordinates absolute. Passing the
+// subtree as `root` instead would look equivalent and is not: the walk starts
+// its offset accumulation at (0, 0), so every run would come back positioned
+// relative to the subtree and get compared against an absolute query point.
+TextHit hitTestText(LayoutNode* root, float x, float y, TextMetrics& metrics,
+                    const LayoutNode* scope = nullptr);
 
 // Caret geometry for a cursor at `srcOffset` within `textNode`'s source text.
 // Output (x, y) are absolute layout coordinates; height is the caret's
