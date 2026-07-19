@@ -1,6 +1,7 @@
 #include "layout/text_geometry.h"
 #include "layout/box.h"
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <limits>
 #include <vector>
@@ -339,6 +340,8 @@ std::vector<Rect> getSelectionRects(LayoutNode* root,
                                     LayoutNode* endNode, int endOff,
                                     TextMetrics& metrics) {
     std::vector<Rect> out;
+    std::vector<bool> bandRtl;       // parallel to out; direction of each band
+    std::vector<bool> bandNeutral;   // and whether it was whitespace-only
     if (!root || !startNode || !endNode) return out;
 
     // Walk text nodes in tree order; determine whether each is before start,
@@ -371,33 +374,111 @@ std::vector<Rect> getSelectionRects(LayoutNode* root,
             int clippedEnd   = runEnd;
             if (isStart && runEnd <= startOff) continue;
             if (isStart && runStart < startOff) clippedStart = startOff;
-            if (isEnd && runStart >= endOff) {
-                inside = false;
-                break;
-            }
+            // `continue`, not `break`: after bidi reordering a node's runs are
+            // stored in VISUAL order, so a run lying past the end of the range
+            // says nothing about the ones after it. Breaking here dropped every
+            // remaining run — a selection over the logically-first word of a
+            // reversed line came back empty, because the word drawn leftmost is
+            // the one this loop met first.
+            if (isEnd && runStart >= endOff) continue;
             if (isEnd && runEnd > endOff) clippedEnd = endOff;
             if (clippedEnd <= clippedStart) continue;
 
             PlacedTextRun shifted = run;
             shifted.x = rx;
             shifted.y = ry;
-            float x1 = xAtSrcOffset(shifted, clippedStart, metrics, fk);
-            float x2 = xAtSrcOffset(shifted, clippedEnd, metrics, fk);
-            if (x2 < x1) std::swap(x1, x2);
-            Rect r;
-            r.x = x1;
-            r.y = ry;
-            r.width = std::max(0.0f, x2 - x1);
-            r.height = run.height;
-            // Clip to the nearest scroll/overflow-hidden ancestor so text that
-            // is scrolled out of view (or lies outside a clipped container)
-            // doesn't bleed over neighboring UI.
-            Rect clipped = intersectRect(r, e.clip);
-            if (clipped.width <= 0 || clipped.height <= 0) continue;
-            out.push_back(clipped);
+            // Whitespace shaped on its own has no direction of its own — it is
+            // a UAX #9 neutral, and which side it belongs to is decided by its
+            // neighbours below, not here.
+            const bool runIsNeutral = !run.text.empty() &&
+                std::all_of(run.text.begin(), run.text.end(), [](unsigned char ch) {
+                    return std::isspace(ch) != 0;
+                });
+            // One band per direction run. A logical range that crosses a
+            // direction boundary is several disjoint rectangles on screen, so
+            // this cannot be a single rect derived from the two endpoints —
+            // for a wholly RTL range those endpoints coincide and the rect
+            // vanishes.
+            const int dStart = srcToDisplay(shifted, clippedStart);
+            const int dEnd   = srcToDisplay(shifted, clippedEnd);
+            for (const auto& band : metrics.selectionBoxes(
+                     shifted.text, std::min(dStart, dEnd), std::max(dStart, dEnd),
+                     fk.family, fk.size, fk.weight)) {
+                Rect r;
+                r.x = rx + band.x;
+                r.y = ry;
+                r.width = std::max(0.0f, band.width);
+                r.height = run.height;
+                // Clip to the nearest scroll/overflow-hidden ancestor so text
+                // that is scrolled out of view (or lies outside a clipped
+                // container) doesn't bleed over neighboring UI.
+                Rect clipped = intersectRect(r, e.clip);
+                if (clipped.width <= 0 || clipped.height <= 0) continue;
+                out.push_back(clipped);
+                bandRtl.push_back(band.rtl);
+                bandNeutral.push_back(runIsNeutral);
+            }
         }
 
         if (isEnd) { inside = false; break; }
+    }
+
+    // Runs are split at every wrap opportunity, so a single unbroken stretch of
+    // selected text arrives here as one rect per word. Callers see this list
+    // directly through getClientRects(), where the meaningful unit is a visual
+    // band — one per line, and one per direction run within a line — not one
+    // per word. Merge rects that sit on the same line and touch.
+    // UAX #9 N1/N2, applied to the bands rather than to characters: a run of
+    // whitespace between two runs of the SAME direction joins them; otherwise
+    // it takes the paragraph's base direction. Bands are still in logical
+    // order here, which is the order the rule is defined over — the visual
+    // sort below would give the wrong neighbours.
+    //
+    // This is what decides whether the space in "<hebrew> <hebrew>" is part of
+    // the Hebrew (it is — one selection band) while the space in
+    // "start <hebrew>" is part of the Latin.
+    if (!out.empty()) {
+        const bool baseRtl =
+            styleProp(startNode->computedStyle(), "direction") == "rtl";
+        for (std::size_t i = 0; i < bandNeutral.size(); ++i) {
+            if (!bandNeutral[i]) continue;
+            std::size_t p = i, n = i;
+            bool haveP = false, haveN = false;
+            while (p-- > 0) { if (!bandNeutral[p]) { haveP = true; break; } }
+            for (n = i + 1; n < bandNeutral.size(); ++n) {
+                if (!bandNeutral[n]) { haveN = true; break; }
+            }
+            bandRtl[i] = (haveP && haveN && bandRtl[p] == bandRtl[n])
+                       ? bandRtl[p] : baseRtl;
+        }
+    }
+
+    if (out.size() > 1) {
+        std::vector<std::size_t> order(out.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+            if (out[a].y != out[b].y) return out[a].y < out[b].y;
+            return out[a].x < out[b].x;
+        });
+        std::vector<Rect> merged;
+        std::vector<bool>  mergedRtl;
+        for (std::size_t k = 0; k < order.size(); ++k) {
+            const Rect& r = out[order[k]];
+            const bool  rtl = bandRtl[order[k]];
+            if (!merged.empty()) {
+                Rect& m = merged.back();
+                const bool sameLine = (std::abs(r.y - m.y) < 0.01f &&
+                                       std::abs(r.height - m.height) < 0.01f);
+                if (sameLine && mergedRtl.back() == rtl &&
+                    r.x <= m.x + m.width + 0.01f) {
+                    m.width = std::max(m.x + m.width, r.x + r.width) - m.x;
+                    continue;
+                }
+            }
+            merged.push_back(r);
+            mergedRtl.push_back(rtl);
+        }
+        out = std::move(merged);
     }
 
     return out;

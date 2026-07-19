@@ -491,6 +491,75 @@ struct TextMetrics {
                                   : bounds[static_cast<size_t>(hi)];
     }
 
+    // One horizontal band of a selection: an x offset from the run origin and
+    // a width.
+    struct SelBox {
+        float x = 0.0f;
+        float width = 0.0f;
+        // Direction of the run this band came from. Two touching bands are
+        // still two bands when they differ: a selection spanning left-to-right
+        // into right-to-left text is reported as one rect per direction run,
+        // even though they meet at a shared edge.
+        bool  rtl = false;
+    };
+
+    // The visual extent(s) of the bytes in [startByte, endByte).
+    //
+    // A logical range is ONE band only while the text runs in one direction.
+    // Cross a direction boundary and it becomes several disjoint bands, which
+    // is why this returns a list: "abc <hebrew> def" selected over just the
+    // Hebrew is one band, but selected from the middle of "abc" to the middle
+    // of the Hebrew is two, and no pair of caret positions describes that.
+    //
+    // Deriving the band from the caret x at each endpoint — the obvious thing,
+    // and what callers did before this existed — is wrong in exactly the case
+    // that matters: for a wholly right-to-left range both endpoints resolve to
+    // the same leading edge and the band collapses to zero width.
+    //
+    // The default keeps that single-band behaviour for consumers with no
+    // shaper, where text is unidirectional and the two agree.
+    virtual std::vector<SelBox> selectionBoxes(std::string_view text,
+                                               int startByte, int endByte,
+                                               std::string_view fontFamily,
+                                               float fontSize,
+                                               std::string_view fontWeight) {
+        std::vector<SelBox> out;
+        if (endByte <= startByte) return out;
+        const float x1 = caretXAtOffset(text, startByte, fontFamily, fontSize,
+                                        fontWeight).primary.x;
+        const float x2 = caretXAtOffset(text, endByte, fontFamily, fontSize,
+                                        fontWeight).primary.x;
+        out.push_back({std::min(x1, x2), std::abs(x2 - x1)});
+        return out;
+    }
+
+    // How much horizontal advance the bytes in [startByte, endByte) contribute
+    // when `text` is shaped as one string.
+    //
+    // This is NOT the distance between the two endpoints' caret positions. In
+    // right-to-left text the caret x decreases with byte offset, and at a
+    // direction boundary both endpoints can resolve to the same edge — so the
+    // difference is negative, zero, or (worse) plausible but wrong. Summing the
+    // advances of the clusters the range covers has none of those problems: it
+    // is a length, not a position, so direction never enters, and the parts sum
+    // to the whole by construction.
+    //
+    // Line breaking wants exactly this: the width a word costs *with* its
+    // neighbours' kerning, which measuring the word alone cannot give.
+    //
+    // The default falls back to prefix measurement, which reproduces the
+    // isolated-word sum for consumers with no shaper.
+    virtual float advanceBetween(std::string_view text,
+                                 int startByte, int endByte,
+                                 std::string_view fontFamily,
+                                 float fontSize,
+                                 std::string_view fontWeight) {
+        if (endByte <= startByte) return 0.0f;
+        return measureWidth(text.substr(static_cast<size_t>(startByte),
+                                        static_cast<size_t>(endByte - startByte)),
+                            fontFamily, fontSize, fontWeight);
+    }
+
     // The indivisible unit containing `byteOffset`. Without a shaper the best
     // available answer is the UTF-8 character, which is what caret movement
     // stepped over before clusters existed.

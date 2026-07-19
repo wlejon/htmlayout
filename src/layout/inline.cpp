@@ -385,6 +385,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         fontFamily, fontSize, fontWeight, whiteSpace, metrics,
                         "normal", "normal", ls, ws, styleVal(node, Prop::TextTransform));
                     bool firstRun = true;
+                    int ibPrevSrcEnd = 0;
                     child->box.textRuns.clear();
                     if (runs.empty() && cursorX > 0 &&
                         (whiteSpace == "normal" || whiteSpace.empty())) {
@@ -434,6 +435,33 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         // one; negative when line-height < natural (glyphs
                         // hang out both sides). Blink floors the ascent side.
                         float halfLead = std::floor((h - run.height) * 0.5f);
+
+                        // The collapsed whitespace between two words of one
+                        // text node becomes a real run, not just cursor
+                        // advance. Caret and selection geometry map DOM
+                        // offsets through textRuns, so a space that exists
+                        // only as a gap belongs to no run and is invisible to
+                        // them: every Range spanning it lost the space's
+                        // width, and offsets past it mapped into the wrong
+                        // run. It is also its own line entry, so the bidi
+                        // reorder and text-align passes below move it with
+                        // everything else instead of leaving it behind.
+                        if (gapUsed > 0.0f && run.srcStart > ibPrevSrcEnd) {
+                            PlacedTextRun sp;
+                            sp.x = cursorX - gapUsed;
+                            sp.y = cursorY + halfLead;
+                            sp.width = gapUsed;
+                            sp.height = run.height;
+                            sp.text = " ";
+                            sp.srcStart = ibPrevSrcEnd;
+                            sp.srcEnd = run.srcStart;
+                            child->box.textRuns.push_back(std::move(sp));
+                            ibLine.push_back({child,
+                                static_cast<int>(child->box.textRuns.size()) - 1,
+                                gapUsed, 0.0f});
+                            gapUsed = 0.0f;   // now carried by the space item
+                        }
+
                         PlacedTextRun placed;
                         placed.x = cursorX;
                         placed.y = cursorY + halfLead;
@@ -468,6 +496,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                         ibLine.push_back({child,
                             static_cast<int>(child->box.textRuns.size()) - 1,
                             run.width, gapUsed});
+                        ibPrevSrcEnd = run.srcEnd;
                         cursorX += run.width;
                         lineMaxH = std::max(lineMaxH, h);
                         // Hard line break preserved by white-space: pre /

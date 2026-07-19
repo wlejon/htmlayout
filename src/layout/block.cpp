@@ -671,7 +671,15 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                             // it, and justify can expand it.
                             IFCItem sp{};
                             sp.width = spaceWidth;
-                            sp.height = 0.0f; // doesn't grow the line
+                            // Same natural box as the words on either side —
+                            // identical font, identical strut, so this cannot
+                            // change the line height (the words already set
+                            // it). It has to be a real height because caret and
+                            // selection geometry read the PLACED run, and a
+                            // zero-height run is discarded as degenerate: with
+                            // 0 here every Range spanning a space silently lost
+                            // the space's width.
+                            sp.height = run.height;
                             sp.above = strutAbove;
                             sp.below = strutBelow;
                             sp.baseline = strutAscent;
@@ -1506,7 +1514,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         // item so wrap decisions exclude the trailing space
                         // and line-edge trimming can drop it.
                         AnonItem sp{};
-                        sp.node = inl; sp.width = anonSpaceWidth; sp.height = 0;
+                        // Real height, for the same reason as the IFC path
+                        // above: selection geometry discards a zero-height run.
+                        sp.node = inl; sp.width = anonSpaceWidth; sp.height = run.height;
                         sp.isText = true; sp.baseline = anonStrut.ascent;
                         sp.text = " ";
                         sp.srcStart = prevSrcEnd; sp.srcEnd = run.srcStart;

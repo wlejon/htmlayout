@@ -119,12 +119,28 @@ void measureWordModeIntrinsics(const std::string& srcText,
     float spaceWidth = metrics.measureWidth(" ", fontFamily, fontSize, fontWeight)
                        + letterSpacing + wordSpacing;
 
+    // min-content puts each word on a line of its own, so measuring words in
+    // isolation is exactly right here.
     for (const auto& word : words) {
-        float w = measureWord(word.text);
-        outMin = std::max(outMin, w);
-        outMax += w;
+        outMin = std::max(outMin, measureWord(word.text));
     }
-    outMax += static_cast<float>(words.size() - 1) * spaceWidth;
+
+    // max-content is the whole thing on ONE line, so it must be measured as
+    // one shaped string. Adding up per-word widths and space widths drops
+    // every kern pair that straddles a space, which made the intrinsic width
+    // wider than the line breaker's own measurement of the same text — a
+    // shrink-to-fit box came out wider than the text it wraps.
+    std::string collapsed;
+    for (size_t i = 0; i < words.size(); ++i) {
+        if (i) collapsed += ' ';
+        collapsed += words[i].text;
+    }
+    outMax = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
+    if (letterSpacing != 0)
+        outMax += letterSpacing * static_cast<float>(utf8CodepointCount(collapsed));
+    if (wordSpacing != 0)
+        outMax += wordSpacing * static_cast<float>(words.size() - 1);
+    (void)spaceWidth;
 }
 
 std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
@@ -315,9 +331,47 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
     auto words = scanWords(text);
     if (words.empty()) return runs;
 
+    // Kerning does not stop at a space. Measuring each word on its own and
+    // adding a space width between them drops every kern pair that straddles
+    // one, so a line comes out wider than the same string shaped in one go —
+    // "A V" at 28px Arial by 1.5px — and text overflows the box that was
+    // measured for it.
+    //
+    // So shape the collapsed text ONCE and take every width below as the
+    // difference of two caret positions inside that shaping. Word widths and
+    // the gaps between them then carry their real context, and the parts sum
+    // to the whole by construction.
+    //
+    // Only for plain spacing: letter-spacing and word-spacing insert advances
+    // the shaping does not know about, and their arithmetic below is already
+    // correct. Without a cluster-aware consumer caretXAtOffset falls back to
+    // prefix measurement, which reproduces the old sum exactly.
+    const bool contextualWidths = (letterSpacing == 0 && wordSpacing == 0);
+    std::string collapsed;
+    std::vector<int> wStart(words.size()), wEnd(words.size());
+    if (contextualWidths) {
+        for (size_t i = 0; i < words.size(); ++i) {
+            if (i) collapsed += ' ';
+            wStart[i] = static_cast<int>(collapsed.size());
+            collapsed += words[i].text;
+            wEnd[i] = static_cast<int>(collapsed.size());
+        }
+    }
+    // Advance summed over the clusters the byte range covers — a length, so it
+    // stays correct when the text reorders. Differencing the two endpoints'
+    // caret POSITIONS instead looks equivalent and is not: in right-to-left
+    // text x decreases with byte offset, and at a direction boundary both
+    // endpoints resolve to the same edge, which made a Hebrew word measure
+    // 10.7px wider than it is and shifted everything after it.
+    auto spanWidth = [&](size_t first, size_t last) -> float {
+        return metrics.advanceBetween(collapsed, wStart[first], wEnd[last],
+                                      fontFamily, fontSize, fontWeight);
+    };
+
     // Greedy line packing
     std::string currentLine;
     float currentWidth = 0;
+    size_t lineFirstWord = 0;
     int runSrcStart = words.front().srcStart;
     int runSrcEnd   = words.front().srcEnd;
     float spaceWidth = measureSpace();
@@ -358,17 +412,27 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
     for (size_t i = 0; i < words.size(); i++) {
         float wordWidth = measureWithSpacing(words[i].text);
 
+        auto startLineAt = [&](size_t k) {
+            currentLine = words[k].text;
+            lineFirstWord = k;
+            currentWidth = contextualWidths ? spanWidth(k, k)
+                                            : measureWithSpacing(words[k].text);
+            runSrcStart = words[k].srcStart;
+            runSrcEnd   = words[k].srcEnd;
+        };
+
         if (currentLine.empty()) {
             if (canBreakWord && wordWidth > availableWidth) {
                 breakWordByChar(words[i]);
             } else {
-                currentLine = words[i].text;
-                currentWidth = wordWidth;
-                runSrcStart = words[i].srcStart;
-                runSrcEnd   = words[i].srcEnd;
+                startLineAt(i);
             }
         } else {
-            float testWidth = currentWidth + spaceWidth + wordWidth;
+            // The candidate line measured as one shaped string, not as the
+            // running total plus a space plus the word.
+            float testWidth = contextualWidths
+                ? spanWidth(lineFirstWord, i)
+                : currentWidth + spaceWidth + wordWidth;
             if (testWidth <= availableWidth + kFitSlack) {
                 currentLine += " " + words[i].text;
                 currentWidth = testWidth;
@@ -380,10 +444,7 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
                 if (canBreakWord && wordWidth > availableWidth) {
                     breakWordByChar(words[i]);
                 } else {
-                    currentLine = words[i].text;
-                    currentWidth = wordWidth;
-                    runSrcStart = words[i].srcStart;
-                    runSrcEnd   = words[i].srcEnd;
+                    startLineAt(i);
                 }
             }
         }
