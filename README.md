@@ -27,9 +27,11 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - `@media` query evaluation (`min/max-width`, `min/max-height`, `orientation`, `prefers-color-scheme`, range syntax, logical `or`)
 - `@supports` feature queries
 - `@import` resolution with consumer-provided callback (with media/layer qualifiers)
-- CSS Variables (`var()`) with fallback and inheritance
+- CSS Variables (`var()`) with fallback and inheritance, substituted before shorthand expansion
 - Built-in user-agent stylesheet
 - Shadow DOM and web component support: `:host`, `:host()`, `:host-context()`, `::slotted()`, `::part()`, scoped stylesheets
+- SVG presentation properties (`fill`, `stroke*`, `clip-path`, `paint-order`, `marker-*`, `text-anchor`, `dominant-baseline`, `stop-color`, …) settable via CSS *and* seeded from the matching presentation attribute as the lowest-priority declaration; `direction` / `unicode-bidi` are seeded only on SVG text content elements
+- Restyle-scoping hints so consumers can skip work a change cannot reach: `usesHoverPseudo()`, `hoverCanAffect()`, `hoverInvalidatesDescendants()`, `hoverAffectsSiblings()`, `classAffectsDescendants()`, `hasPseudoElementRules()`, `usesContainerQueries()`, `usesForcedInherit()`
 
 **Layout Engine**
 - Block formatting context with margin collapsing and floats (`left`, `right`, `clear`)
@@ -41,9 +43,10 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - Length units: `px`, `em`, `%`, `vw`, `vh`, `vmin`, `vmax`, `rem`, `ch`, `ex`, `pt`, `cm`, `mm`, `in`, `pc`
 - `calc()` expressions with basic math (`+`, `-`, `*`, `/`) and nested parentheses
 - Intrinsic sizing (`min-content`, `max-content`, `fit-content`)
+- Bidirectional text: per-line reordering (UAX #9 rule L2) across inline element boundaries, `direction` / `unicode-bidi` isolates, and RTL-aware caret and selection geometry. Character-level resolution comes from the consumer's `TextMetrics::bidiLevels()`; without it the engine still reorders whole boxes by their declared `direction`
 - Hit testing with z-order, overflow clipping, and `pointer-events`
-- Text geometry queries: caret rect, selection rectangles, and text-node hit testing for editor/selection UIs
-- Incremental (dirty-flag) relayout
+- Text geometry queries: caret rect, selection rectangles, and text-node hit testing for editor/selection UIs. Caret positions come from the consumer's shaper cluster map when it provides one, so ligatures and kerning land correctly
+- Incremental (dirty-flag) relayout that reuses untouched subtrees, with per-pass statistics (`lastLayoutStats()`)
 - `text-overflow: ellipsis`, `overflow-wrap`, `word-break`, `white-space` handling, `text-indent`
 - `letter-spacing`, `word-spacing` applied during text measurement
 - `display: contents` (children promoted into parent formatting context)
@@ -55,12 +58,13 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - **Positioning**: `position: sticky` applies a static offset only; scroll-based clamping is not performed (layout-time only).
 - **At-rules**: `@font-face` and `@keyframes` are parsed and exposed on the `Cascade` (`Cascade::fontFaces()` / `Cascade::keyframes()`) for the consumer to act on, but the engine itself does no font loading or animation. `@scope` is not implemented.
 - **Animations & transitions**: not run — transitions/animations are parsed but produce no time-varying values.
-- **Bidirectional text**: `direction: rtl` affects text alignment but does not reorder inline content. No Unicode bidi algorithm.
+- **Bidirectional text**: the engine reorders each line (rule L2) and honors `direction` isolates, but it does not itself implement the UAX #9 W/N rules that assign character levels. Supply them from ICU (or equivalent) via `TextMetrics::bidiLevels()` / `bidiAware()`; the default reports one uniform level, which reorders boxes but not the characters inside a mixed-direction run.
 - **Color**: only legacy color formats (named, hex, `rgb`/`rgba`, `hsl`/`hsla`). `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, and `color-mix()` are not parsed.
 - **Generated content**: `::before` / `::after` boxes participate in layout via consumer-supplied pseudo nodes (`LayoutNode::pseudoBefore()` / `pseudoAfter()`); `content:` string literals, CSS counters, and list-style markers are not synthesized by the engine.
 - **Logical properties**: `margin-inline-*`, `padding-inline-*`, `inset-inline-*` etc. expand to physical properties assuming `writing-mode: horizontal-tb` and `direction: ltr`. Vertical writing modes are not fully supported.
 - **Grid**: `subgrid` is not implemented.
 - **Filters & effects**: `filter`, `backdrop-filter`, and `will-change` are not honored beyond stacking-context effects.
+- **Writing modes**: `writing-mode: vertical-*` is parsed but layout is horizontal-tb only.
 
 ## Requirements
 
@@ -85,6 +89,14 @@ ctest --test-dir build -C Debug --output-on-failure
 ./build/tests/htmlayout_test             # Linux
 ```
 
+The suite is a single assertion-driven executable — currently 1,925 checks
+across tokenizer, parser, selectors, cascade, every formatting context, hit
+testing, bidi, text geometry, and incremental relayout.
+
+The `htmlayout` CMake target is an INTERFACE library aggregating the two static
+libraries `htmlayout_css` and `htmlayout_layout`. Headers are included relative
+to `src/` (`#include "css/cascade.h"`, `#include "layout/box.h"`).
+
 ## Continuous Integration
 
 GitHub Actions runs on every push to `main` and every pull request:
@@ -93,6 +105,40 @@ GitHub Actions runs on every push to `main` and every pull request:
 - **Coverage** — a separate job in the same workflow builds with `--coverage` and reports line/branch coverage for `include/` and `src/` with `gcovr` (the vendored gumbo parser and the tests themselves are filtered out). The summary is posted to the job page and the full HTML report is uploaded as a build artifact.
 - **[CodeQL](.github/workflows/codeql.yml)** — `security-extended` static analysis of the C++ sources, also on a weekly schedule. gumbo is built ahead of the traced build so upstream findings stay out of this repo's Security tab.
 - **[Dependabot](.github/dependabot.yml)** — weekly updates for the pinned GitHub Actions. gumbo is vendored in tree, so there is no package manifest to watch.
+
+## Performance
+
+Layout is built to run every frame, so the engine owns the repeated work rather
+than leaving each consumer to discover it:
+
+- **Incremental relayout** — `markDirty()` / `layoutTreeIncremental()` re-run only
+  the changed chains and hand back cached subtrees untouched. Flex and grid items
+  are reusable across passes, subtree intrinsic widths are cached, and per-node
+  subtree hit bounds are only recomputed when something moved.
+- **Per-pass caches** — a `MeasureCache` memoizes the consumer's shaper for the
+  duration of one pass (min-content sizing, max-content sizing, and line breaking
+  otherwise ask the same questions repeatedly), and a `NodeStyleCache` projects
+  each node's `ComputedStyle` into a flat array indexed by property on first
+  visit. Both are scoped to a single synchronous pass, which is the whole
+  invalidation story: nothing they cache can change while the pass runs.
+- **Selector indexing** — rules are bucketed by subject key, and pseudo-element
+  rules are indexed separately, so a hover flip re-matches only what a rule names.
+- **Instrumentation** — `lastLayoutStats()` reports nodes laid out vs. reused vs.
+  visited, time split across the three passes (`treeMs` / `absoluteMs` /
+  `hitBoundsMs`), style lookups and misses, and measure calls vs. actual shapes.
+
+```bash
+# The benchmark must be built and run in Release — timing a Debug build of a
+# container-heavy library measures the debug iterators, not the engine.
+cmake -B build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release --config Release --target htmlayout_bench
+```
+
+`tools/ab.sh` runs a baseline and the working tree interleaved (min-of-N, built
+in a detached git worktree so nothing touches your checkout), and
+`tools/parity.sh` diffs both halves against Chromium through the `bro` parity
+harness — the check for rewrites that produce subtly wrong layout rather than
+failing tests.
 
 ## Usage
 
@@ -150,6 +196,17 @@ class MyTextMetrics : public htmlayout::layout::TextMetrics {
                        float fontSize, std::string_view fontWeight) override;
     float lineHeight(std::string_view fontFamily, float fontSize,
                      std::string_view fontWeight) override;
+    // Optional (all have default impls, so the two pure virtuals above are
+    // enough to get running):
+    //   ascent() / xHeight() / naturalHeight() — exact font metrics for
+    //     baseline alignment, vertical-align: middle, and text-run rects
+    //     (defaults approximate 0.8em / 0.5em / lineHeight)
+    //   caretXAtOffset() / offsetAtCaretX() / clusterRangeAt() + clusterAware() —
+    //     answer caret queries from the shaper's cluster map instead of prefix
+    //     widths, which is what makes carets correct across kerning pairs,
+    //     ligatures, and Indic syllables
+    //   bidiLevels() + bidiAware() — UAX #9 character levels (e.g. from ICU);
+    //     without them the engine reorders boxes but not characters
 };
 ```
 
@@ -199,8 +256,13 @@ LayoutNode* hit = hitTest(rootNode, mouseX, mouseY);
 ### 5. Incremental relayout
 
 ```cpp
-markDirty(changedNode);
-layoutTreeIncremental(rootNode, viewportWidth, metrics);
+// Skip the pass entirely when no changed property can move a box:
+if (needsRelayout({"color", "background-color"})) {
+    markDirty(changedNode);            // or markSubtreeDirty() for a whole branch
+    layoutTreeIncremental(rootNode, viewportWidth, metrics);
+}
+
+const LayoutStats& s = lastLayoutStats();   // laidOut / reused / visits, per-pass ms
 ```
 
 ### 6. Text geometry (caret and selection)
@@ -223,8 +285,12 @@ src/css/       CSS tokenizer, parser, selector matcher, cascade, properties,
                color, transform, UA stylesheet
 src/layout/    Block, inline, flex, grid, table, multi-column layout,
                formatting-context dispatch, hit testing, text breaking,
-               text geometry (caret/selection)
+               bidi line reordering, text geometry (caret/selection),
+               per-pass style and measurement caches
 tests/         Test suite (single htmlayout_test executable)
+bench/         Release-only layout benchmark and sampling profiler
+tools/         ab.sh (baseline-vs-working-tree A/B), parity.sh (Chromium parity)
+scripts/       coverage.ps1 (local coverage run)
 third_party/   Bundled gumbo HTML5 parser
 docs/          Architecture document (docs/architecture.md)
 ```
@@ -242,6 +308,7 @@ Key design principles:
 - **No global state** -- `Cascade` is instance-based. Layout is a pure tree walk. Multiple independent instances can coexist.
 - **Web component support** -- Full Shadow DOM scoping with `:host`, `:host-context()`, `::slotted()`, `::part()`, and `:defined`. Cascade layers (`@layer`) and container queries (`@container`) for modern component authoring.
 - **No rendering** -- Layout outputs positioned boxes. Drawing is your responsibility.
+- **The repeated work belongs to the library** -- caching the shaper, projecting styles, and scoping a restyle are things every consumer would otherwise reinvent, so they live here behind pass-scoped lifetimes that need no invalidation contract.
 
 See [`docs/architecture.md`](docs/architecture.md) for the full design document and API reference.
 

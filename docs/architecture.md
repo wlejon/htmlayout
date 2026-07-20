@@ -19,9 +19,17 @@ htmlayout does NOT own the DOM or render anything. It computes styles and positi
 cmake -B build
 cmake --build build --config Debug
 ./build/tests/Debug/htmlayout_test.exe
+
+# Benchmarks must be Release — see bench/CMakeLists.txt
+cmake -B build-release -DCMAKE_BUILD_TYPE=Release
+cmake --build build-release --config Release --target htmlayout_bench
 ```
 
-Uses Visual Studio generator (multi-config) on Windows. Vcpkg at D:/vcpkg is auto-detected. MSVC 2022, C++20.
+Uses Visual Studio generator (multi-config) on Windows. Vcpkg at D:/vcpkg is auto-detected. MSVC 2022, C++20. CI additionally builds with GCC and Clang on Linux and on macOS/arm64.
+
+`htmlayout` is an INTERFACE target aggregating two static libraries,
+`htmlayout_css` and `htmlayout_layout`; `htmlayout_layout` links `htmlayout_css`.
+Include paths are rooted at `src/`.
 
 ## Project Structure
 
@@ -31,24 +39,36 @@ src/
     tokenizer.h/cpp    — CSS tokenizer (text → tokens)
     parser.h/cpp       — CSS parser (tokens → rules + declarations)
     selector.h/cpp     — CSS selector parser + matcher
-    cascade.h/cpp      — Style cascade with scope support (shadow DOM)
+    cascade.h/cpp      — Style cascade with scope support (shadow DOM),
+                         rule indexing, and restyle-scoping hints
     properties.h/cpp   — CSS property registry (defaults, inheritance, shorthands)
     color.h/cpp        — Color parsing (named, hex, rgb, hsl)
+    transform.h/cpp    — transform / transform-origin → 2D affine or 4x4 matrix
     ua_stylesheet.h/cpp — Built-in default styles
   layout/
-    box.h/cpp          — Core types (Rect, Edges, LayoutBox) + tree entry point
+    box.h/cpp          — Core types (Rect, Edges, LayoutBox), the LayoutNode /
+                         TextMetrics interfaces, tree entry point, hit testing,
+                         and LayoutStats
     block.h/cpp        — Block formatting context (including floats and BFC)
     inline.h/cpp       — Inline formatting context (line boxes and IFC)
     flex.h/cpp         — Flexbox layout
     grid.h/cpp         — CSS Grid layout
     table.h/cpp        — Table layout
     text.h/cpp         — Text measurement and line breaking
+    bidi_line.h/cpp    — Per-line bidi reordering (UAX #9 rule L2)
+    text_geometry.h/cpp — Caret rects, selection rects, text-node hit testing
+    style_cache.h/cpp  — Per-pass projection of ComputedStyle into a flat array
+    measure_cache.h    — Per-pass memo in front of the consumer's shaper
+    style_props.h      — The Prop enum layout reads styles by
     multicol.h/cpp     — Multi-column container detection
     formatting_context.h/cpp — Dispatch + length resolution + calc()
 third_party/
   gumbo/               — HTML5 parser (C library)
-tests/
-  main.cpp             — Integration test harness
+tests/                 — Single htmlayout_test executable (1,925 assertions)
+bench/                 — Release-only layout benchmark + sampling profiler
+tools/                 — ab.sh (A/B against a baseline worktree),
+                         parity.sh (bro-vs-Chromium parity, both halves)
+scripts/               — coverage.ps1
 docs/
   architecture.md      — This file
 ```
@@ -96,7 +116,7 @@ Parses and matches CSS selectors. This is the critical piece for shadow DOM supp
 2. **Compound selectors**: `div.class#id`, `.a.b`
 3. **Combinators**: descendant (` `), child (`>`), adjacent sibling (`+`), general sibling (`~`)
 4. **Pseudo-classes**: `:first-child`, `:last-child`, `:nth-child(n)`, `:nth-last-child(n)`, `:nth-of-type(n)`, `:nth-last-of-type(n)`, `:only-child`, `:first-of-type`, `:last-of-type`, `:only-of-type`, `:root`, `:empty`, `:not(sel)`, `:is(sel)`, `:where(sel)`, `:has(sel)`, `:hover`, `:focus`, `:active`, `:focus-within`, `:focus-visible`, `:any-link`, `:link`, `:visited`, `:checked`, `:disabled`, `:enabled`, `:required`, `:optional`, `:read-only`, `:read-write`, `:placeholder-shown`, `:indeterminate`, `:target`, `:host`, `:host(sel)`, `:host-context(sel)`, `:defined`
-5. **Pseudo-elements**: `::before`, `::after`, `::slotted(sel)`, `::part(name)`
+5. **Pseudo-elements**: `::before`, `::after`, `::placeholder`, `::selection`, `::slotted(sel)`, `::part(name)`
 6. **Comma-separated lists**: `h1, h2, h3`
 
 **Specificity**: Calculated as (id_count, class_count, type_count) packed into a uint32 for comparison.
@@ -127,7 +147,13 @@ Resolves the final computed style for each element. This is the "C" in CSS.
 9. Inherit properties from `parentStyle` if `inherited: true`.
 10. Fall back to `initialValue` for remaining properties.
 
-**Output**: `ComputedStyle` (`unordered_map<string, string>`) — maps longhand property names to their resolved values.
+**Output**: `ComputedStyle` — maps longhand property names to their resolved values. The map is heterogeneously keyed (`SvHash`/`SvEq`), because layout reads it hundreds of thousands of times per pass with string literals and a `std::string`-keyed map would construct — and often heap-allocate — a key on every read.
+
+SVG presentation attributes (`fill`, `stroke-width`, …) enter the cascade at step 0 as specificity-0 declarations: they beat inheritance but lose to any author rule or inline style. `direction` and `unicode-bidi` are seeded only on SVG text content elements, since HTML spells the same idea `dir`.
+
+**Rule indexing**: rules are bucketed by subject key (id / class / tag), and pseudo-element rules are indexed by name, so matching probes a handful of candidates instead of scanning the sheet.
+
+**Restyle-scoping hints**: the cascade records what its rules can reach so a consumer can decide *not* to re-resolve. `usesHoverPseudo()`, `hoverCanAffect()`, `hoverInvalidatesDescendants()`, and `hoverAffectsSiblings()` bound a hover flip to the elements whose rule set actually changed; `classAffectsDescendants()` does the same for a class toggle; `hasPseudoElementRules()` and `contentIsStateful()` gate the generated-content pass; `usesContainerQueries()` tells the consumer a second style pass after layout is needed; `usesForcedInherit()` warns that an inherited-value diff is not a sufficient restyle boundary. All are conservative in the presence of `:has()`, whose matching runs the other way.
 
 Reference: https://www.w3.org/TR/css-cascade-5/
 
@@ -159,9 +185,12 @@ Layout writes results directly into each `LayoutNode::box` (a `LayoutBox` struct
 
 ```cpp
 void layoutTree(LayoutNode* root, float viewportWidth, TextMetrics& metrics);
+void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics);
 ```
 
-Walks the tree, resolves CSS lengths, and dispatches each node to the appropriate formatting context based on its `display` property.
+Walks the tree, resolves CSS lengths, and dispatches each node to the appropriate formatting context based on its `display` property. The `Viewport` overload supplies a height, which `vh`/`vmin`/`vmax` need.
+
+`layoutTree()` runs three passes: in-flow layout, absolute/fixed positioning, and per-node subtree hit-bounds caching. Only the first is incremental, which is why `LayoutStats` times them separately — a pass whose cost does not move with `laidOut` is being spent in one of the other two.
 
 ### Formatting Context Dispatch (`formatting_context.h`)
 
@@ -258,17 +287,55 @@ Breaks text into runs that fit within available width:
 LayoutNode* hitTest(LayoutNode* root, float x, float y);
 ```
 
-Finds the deepest node whose layout box contains the point (x, y). Respects z-order (later siblings on top), overflow clipping, and `pointer-events: none`.
+Finds the deepest node whose layout box contains the point (x, y). Respects z-order (later siblings on top), overflow clipping, and `pointer-events: none`. Each node caches the bounds of its own subtree during layout, so a miss prunes the whole branch instead of descending it.
+
+### Bidi Reordering (`bidi_line.h`)
+
+UAX #9 resolves embedding levels over a *paragraph* and reorders them per *line*, which is why this runs after line breaking rather than inside the text splitter: only once the breaker has decided which runs share a line is there a line to reorder. Every inline formatting context funnels through here — the dedicated IFC, the anonymous-block IFC, and the pure-inline path.
+
+The split of responsibility with the consumer:
+
+- The engine implements rule L2 (reverse maximal runs from the highest level down to the lowest odd level), treats an item whose own `direction` opposes the base as an isolate, and walks an inline element's subtree so bidi does not stop at a `<b>` boundary.
+- The consumer supplies character levels through `TextMetrics::bidiLevels()` (e.g. from ICU) and advertises it with `bidiAware()`. The default assigns one uniform level, which reorders boxes by their declared direction but not the characters inside a mixed-direction run.
+
+### Text Geometry (`text_geometry.h`)
+
+Caret rect, selection rectangles (emitted per direction run), and text-node hit testing, for consumers building editors or selection UIs.
+
+Caret positions come from `TextMetrics::caretXAtOffset()` / `offsetAtCaretX()` / `clusterRangeAt()` when the consumer implements them from a shaper's cluster map. The defaults reproduce prefix-width measurement, which is wrong for any font that kerns and wrong by construction where two characters ligate — so a consumer with a real shaper should say so via `clusterAware()`.
+
+### Incremental Relayout
+
+`markDirty(node)` marks a node and its ancestor chain; `markSubtreeDirty(node)` marks a whole branch. `layoutTreeIncremental()` then re-runs only the dirty chains and hands back cached subtrees untouched. Flex and grid items are reusable across passes, and subtree intrinsic widths are cached.
+
+`needsRelayout({props...})` lets a consumer skip the pass entirely when no changed property can move a box. Document-global inputs (viewport size, root font size) have no local signal, so the root compares them and dirties the whole tree when they move.
+
+### Per-Pass Caches
+
+Both caches are scoped to one synchronous layout pass, and that scope *is* the invalidation story — nothing they cache can change while the pass runs, and the next pass starts empty.
+
+- **`MeasureCache`** wraps the consumer's `TextMetrics`. Min-content sizing, max-content sizing, and line breaking each walk the same words, so one pass over a large document makes tens of thousands of `measureWidth()` calls resolving to a few hundred distinct questions. Shaping is the most expensive thing layout asks anyone to do, so the repeats belong to the library rather than to every consumer in turn.
+- **`NodeStyleCache`** projects a node's `ComputedStyle` into a flat array indexed by `Prop` on its first visit in a pass. Layout visits a node ~2.75 times per pass and asks each for every property it knows about; most of those miss, and a miss pays a map probe *plus* a second lookup in the property registry for the initial value. Keeping the cache pass-scoped is deliberate: a consumer may rewrite a `ComputedStyle` without marking the node dirty (a paint-only `:hover` does exactly that), so a cache outliving the pass could hand hit testing a stale transform.
+
+Outside a pass, reads go to the live map.
+
+### Instrumentation (`LayoutStats`)
+
+`lastLayoutStats()` reports, per pass: nodes laid out, reused, and visited; the three passes' times; style lookups and misses; and measure calls vs. calls that reached the shaper. `styleLookupHistogram()` / `styleLookupSiteHistogram()` attribute lookups to a property or a call site. `bench/` samples a Release build; `tools/ab.sh` compares a change against a baseline built in a detached worktree, interleaved and reported as min-of-N; `tools/parity.sh` diffs both halves against Chromium through the `bro` parity harness, which is what catches a rewrite that binds a property to the wrong node without failing a test.
 
 ---
 
 ## Known Limitations
 
 - **Positioning**: `position: sticky` applies a static offset only; scroll-based clamping is not performed (layout-time only).
-- **At-rules**: `@font-face` and `@keyframes` are parsed but discarded (no font loading or animation).
-- **Bidirectional text**: `direction: rtl` affects text alignment but does not reorder inline content. No Unicode bidi algorithm.
-- **Logical properties**: Map to physical properties assuming `writing-mode: horizontal-tb` and `direction: ltr`. Vertical writing modes are not fully supported.
+- **At-rules**: `@font-face` and `@keyframes` are parsed and exposed on `Cascade` (`fontFaces()` / `keyframes()`) for the consumer to act on; the engine loads no fonts and runs no animations. `@scope` is not implemented.
+- **Animations & transitions**: parsed, never advanced — no time-varying values.
+- **Bidirectional text**: the engine reorders lines and honors isolates, but does not implement the UAX #9 W/N rules that assign character levels; supply those via `TextMetrics::bidiLevels()`.
+- **Color**: legacy formats only (named, hex, `rgb`/`rgba`, `hsl`/`hsla`). No `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, or `color-mix()`.
+- **Generated content**: `::before` / `::after` boxes lay out via consumer-supplied pseudo nodes; the engine synthesizes no `content:` strings, counters, or list markers.
+- **Logical properties**: Map to physical properties assuming `writing-mode: horizontal-tb` and `direction: ltr`. Vertical writing modes are not supported.
 - **Grid subgrid**: `subgrid` keyword is not implemented.
+- **Filters & effects**: `filter`, `backdrop-filter`, `will-change` affect stacking context creation only.
 
 ---
 
@@ -279,3 +346,4 @@ Finds the deepest node whose layout box contains the point (x, y). Respects z-or
 3. **Scope-aware by design** — shadow DOM scoping is a first-class parameter, not an afterthought.
 4. **Minimal dependencies** — only gumbo (C library) for HTML parsing. Everything else is standalone C++20.
 5. **Testable in isolation** — each module (tokenizer, parser, selector, cascade, layout) can be tested independently with mock inputs.
+6. **The repeated work belongs to the library** — caching the shaper, projecting styles, scoping a restyle, and pruning hit tests are all things a consumer would otherwise rediscover. They live here, behind pass-scoped lifetimes that need no invalidation contract.
