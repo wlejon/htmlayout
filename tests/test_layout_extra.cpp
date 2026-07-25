@@ -437,6 +437,58 @@ static void testTableColspanExcessDistribution() {
           "colspan excess: unspanned column unchanged");
 }
 
+// CSS Sizing 3 §5.1: the min-content size of a text run is its widest WORD only
+// where a soft wrap is allowed. Under `white-space: nowrap` or `pre` there is no
+// break opportunity at a space, so min-content must equal the whole run.
+//
+// Regression: min-content ignored white-space entirely and always returned the
+// widest word, so a shrink-to-fit table column (`th { width: 1%; nowrap }`)
+// sized itself to the longest word in its label and the rest of the text spilled
+// across the next column. The failure got WORSE as labels got longer, because a
+// longer label is more likely to contain a short word.
+static void testNowrapMinContentIsWholeRun() {
+    printf("--- Intrinsic: white-space forbids wrap => min-content == max-content ---\n");
+    LxMetrics m;
+
+    LxNode wrap; wrap.initBase();
+    LxNode wrapText; wrapText.initBase(); wrapText.isText = true;
+    wrapText.text = "aa bb cc";              // 8 chars = 80; widest word = 20
+    wrap.addChild(&wrapText);
+    check(approx(computeMinContentWidth(&wrap, m), 20.0f, 0.5f),
+          "white-space: normal keeps the widest-word rule");
+    check(approx(computeMaxContentWidth(&wrap, m), 80.0f, 0.5f),
+          "white-space: normal max-content is the whole run");
+
+    LxNode nowrap; nowrap.initBase();
+    nowrap.style_["white-space"] = "nowrap";
+    LxNode nowrapText; nowrapText.initBase(); nowrapText.isText = true;
+    nowrapText.text = "aa bb cc";
+    nowrap.addChild(&nowrapText);
+    check(approx(computeMinContentWidth(&nowrap, m), 80.0f, 0.5f),
+          "nowrap min-content is the whole run, not the widest word");
+    check(approx(computeMinContentWidth(&nowrap, m),
+                 computeMaxContentWidth(&nowrap, m), 0.5f),
+          "nowrap min-content equals max-content");
+
+    // A longer label must never produce a NARROWER min-content.
+    LxNode longer; longer.initBase();
+    longer.style_["white-space"] = "nowrap";
+    LxNode longerText; longerText.initBase(); longerText.isText = true;
+    longerText.text = "a much longer label indeed";   // 26 chars = 260
+    longer.addChild(&longerText);
+    check(computeMinContentWidth(&longer, m) > computeMinContentWidth(&nowrap, m),
+          "min-content grows with the length of an unbreakable label");
+
+    // `pre` still breaks at a newline, so the widest LINE wins.
+    LxNode pre; pre.initBase();
+    pre.style_["white-space"] = "pre";
+    LxNode preText; preText.initBase(); preText.isText = true;
+    preText.text = "aa\nbbbb cc";             // lines: 20 and 70
+    pre.addChild(&preText);
+    check(approx(computeMinContentWidth(&pre, m), 70.0f, 0.5f),
+          "pre min-content is the widest newline-delimited line");
+}
+
 // computeMin/MaxContentWidth on a table run the real column algorithm:
 // column sums + border-spacing, not the widest descendant.
 static void testTableIntrinsicWidths() {
@@ -1795,4 +1847,5 @@ void testLayoutExtra() {
     testAbsNegativeOffsets();
     testFlexItemMarginContained();
     testNaturalHeightTextRects();
+    testNowrapMinContentIsWholeRun();
 }

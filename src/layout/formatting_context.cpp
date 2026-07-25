@@ -314,6 +314,58 @@ bool isIntrinsicSizingKeyword(const std::string& value) {
 static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics);
 static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics);
 
+/**
+ * Does this white-space value forbid a soft wrap inside a text run?
+ *
+ * CSS Sizing 3 §5.1: the min-content size of a string is the width of its
+ * widest word ONLY where line breaking is allowed. Under `nowrap` and `pre`
+ * there is no break opportunity at a space, so min-content equals max-content.
+ * `pre-wrap` and `pre-line` preserve or collapse whitespace differently but
+ * both still wrap, so they keep the widest-word rule.
+ */
+static bool whiteSpaceForbidsWrap(const std::string& ws) {
+    return ws == "nowrap" || ws == "pre";
+}
+
+/**
+ * Width of one unbreakable text run, measured as a single piece — the same
+ * measurement the max-content path makes for nowrap/pre, factored out so the
+ * two cannot drift.
+ *
+ * @param collapse  fold runs of whitespace to one space and trim the tail
+ *                  (true for `nowrap`, false for `pre`, which keeps them)
+ */
+static float measureUnbreakableRun(std::string_view text, bool collapse,
+                                   const std::string& fontFamily, float fontSize,
+                                   const std::string& fontWeight,
+                                   float letterSpacing, float wordSpacing,
+                                   const std::string& textTransform,
+                                   TextMetrics& metrics) {
+    std::string piece;
+    int spaceCount = 0;
+    if (collapse) {
+        bool lastSpace = false;
+        for (char c : text) {
+            if (std::isspace(static_cast<unsigned char>(c))) {
+                if (!lastSpace && !piece.empty()) { piece += ' '; lastSpace = true; ++spaceCount; }
+            } else {
+                piece += c; lastSpace = false;
+            }
+        }
+        if (!piece.empty() && piece.back() == ' ') { piece.pop_back(); --spaceCount; }
+    } else {
+        piece.assign(text);
+        for (char c : piece) if (c == ' ') ++spaceCount;
+    }
+    piece = applyTextTransform(piece, textTransform);
+    float w = metrics.measureWidth(piece, fontFamily, fontSize, fontWeight);
+    if (letterSpacing != 0 && piece.size() > 1)
+        w += letterSpacing * static_cast<float>(piece.size() - 1);
+    if (wordSpacing != 0 && spaceCount > 0)
+        w += wordSpacing * static_cast<float>(spaceCount);
+    return w;
+}
+
 float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
     if (!node) return 0.0f;
     if (node->cachedMinContentW >= 0.0f) return node->cachedMinContentW;
@@ -396,8 +448,45 @@ static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
                     if (!std::isspace(static_cast<unsigned char>(c))) { ws = false; break; }
                 if (ws) continue;
             }
-            // Min-content: each word on its own line, take the widest word
             std::string_view text = child->textContent();
+
+            // Where the containing element forbids wrapping, there is no
+            // "widest word" to fall back to — the run is indivisible, so its
+            // min-content size is its whole measured width. Without this a
+            // `white-space: nowrap` box reports a min-content narrower than
+            // the text it will actually paint, and anything sizing to
+            // min-content (a shrink-to-fit table column, a flex item's
+            // automatic minimum) comes out too small and the text spills.
+            {
+                const std::string& ws = styleVal(node, Prop::WhiteSpace);
+                if (whiteSpaceForbidsWrap(ws)) {
+                    float wordSpacing = resolveLength(
+                        styleVal(node, Prop::WordSpacing), 0, fontSize);
+                    const std::string& tt = styleVal(node, Prop::TextTransform);
+                    float w;
+                    if (ws == "pre") {
+                        // `pre` still breaks at a newline, so the widest line wins.
+                        w = 0.0f;
+                        size_t start = 0;
+                        for (size_t i = 0; i <= text.size(); i++) {
+                            if (i == text.size() || text[i] == '\n') {
+                                w = std::max(w, measureUnbreakableRun(
+                                    text.substr(start, i - start), false, fontFamily,
+                                    fontSize, fontWeight, letterSpacing, wordSpacing,
+                                    tt, metrics));
+                                start = i + 1;
+                            }
+                        }
+                    } else {
+                        w = measureUnbreakableRun(text, true, fontFamily, fontSize,
+                            fontWeight, letterSpacing, wordSpacing, tt, metrics);
+                    }
+                    maxChildMin = std::max(maxChildMin, w);
+                    continue;
+                }
+            }
+
+            // Min-content: each word on its own line, take the widest word
             std::string word;
             float widestWord = 0.0f;
             for (size_t i = 0; i <= text.size(); i++) {
@@ -607,31 +696,12 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
                 w = mx;
             } else {
                 // nowrap / pre*: the line is a single whole-string measurement,
-                // so measure the collapsed string as one piece.
-                std::string collapsed;
-                bool lastSpace = false;
-                int spaceCount = 0;
-                for (char c : text) {
-                    if (std::isspace(static_cast<unsigned char>(c))) {
-                        if (!lastSpace && !collapsed.empty()) {
-                            collapsed += ' '; lastSpace = true; ++spaceCount;
-                        }
-                    } else {
-                        collapsed += c; lastSpace = false;
-                    }
-                }
-                if (!collapsed.empty() && collapsed.back() == ' ') {
-                    collapsed.pop_back();
-                    --spaceCount;
-                }
-                // Match the painted glyphs: intrinsic width must use the
-                // text-transformed string, same as breakTextIntoRuns does.
-                collapsed = applyTextTransform(collapsed, styleVal(node, Prop::TextTransform));
-                w = metrics.measureWidth(collapsed, fontFamily, fontSize, fontWeight);
-                if (letterSpacing != 0 && collapsed.size() > 1)
-                    w += letterSpacing * static_cast<float>(collapsed.size() - 1);
-                if (wordSpacing != 0 && spaceCount > 0)
-                    w += wordSpacing * static_cast<float>(spaceCount);
+                // so measure the collapsed string as one piece. Shared with the
+                // min-content path, which needs the identical number whenever
+                // wrapping is forbidden.
+                w = measureUnbreakableRun(text, /*collapse=*/true, fontFamily,
+                    fontSize, fontWeight, letterSpacing, wordSpacing,
+                    styleVal(node, Prop::TextTransform), metrics);
             }
             sumChildMax += pendingSpace;
             pendingSpace = 0.0f;
