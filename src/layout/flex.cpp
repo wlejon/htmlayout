@@ -77,9 +77,27 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (containerMain < 0) containerMain = 0;
     }
 
-    // Apply min/max-width constraints
-    float minW = resolveDim(styleVal(node, Prop::MinWidth), availableWidth, fontSize);
-    float maxW = resolveDim(styleVal(node, Prop::MaxWidth), availableWidth, fontSize);
+    // Under `box-sizing: border-box` every specified box dimension — width,
+    // min-width, max-width, height — names the border box, while the sizes
+    // tracked from here on are content sizes. Converting once keeps the two from
+    // being silently compared to each other.
+    const bool borderBox = styleVal(node, Prop::BoxSizing) == "border-box";
+    auto toContent = [&](float v, float edges) {
+        return (borderBox && v >= 0) ? std::max(0.0f, v - edges) : v;
+    };
+
+    // Apply min/max-width constraints.
+    //
+    // These have to be de-border-boxed first. `min-width: 30px` on a button with
+    // 8px of padding means the *border* box is at least 30px, so the content box
+    // is at least 14px. Clamping the content box to 30 instead lays the items out
+    // across a main axis wider than the box holding them, and justify-content
+    // then centres them in that phantom width — a short label in a padded button
+    // ends up flush against the right border, or past it.
+    float minW = toContent(resolveDim(styleVal(node, Prop::MinWidth), availableWidth, fontSize),
+                           paddingH + borderH);
+    float maxW = toContent(resolveDim(styleVal(node, Prop::MaxWidth), availableWidth, fontSize),
+                           paddingH + borderH);
     if (minW >= 0 && containerMain < minW) containerMain = minW;
     if (maxW >= 0 && containerMain > maxW) containerMain = maxW;
 
@@ -102,7 +120,10 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (isRow && styleVal(node, Prop::Direction) == "rtl")
         isReverse = !isReverse;
 
-    float mainAvailable = isRow ? containerMain : resolveDim(styleVal(node, Prop::Height), node->availableHeight, fontSize);
+    float mainAvailable = isRow ? containerMain
+                                : toContent(resolveDim(styleVal(node, Prop::Height),
+                                                       node->availableHeight, fontSize),
+                                            paddingV + borderV);
     // Column flex: clamp the definite main size by min/max-height, mirroring the
     // min/max-width clamp applied to containerMain (the row main size) above.
     // Without this a `height:88vh; max-height:660px` column container distributes
@@ -117,8 +138,12 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         };
         const std::string& maxHVal = styleVal(node, Prop::MaxHeight);
         const std::string& minHVal = styleVal(node, Prop::MinHeight);
-        float maxH = pctIndefiniteH(maxHVal) ? -1.0f : resolveDim(maxHVal, node->availableHeight, fontSize);
-        float minH = pctIndefiniteH(minHVal) ? -1.0f : resolveDim(minHVal, node->availableHeight, fontSize);
+        float maxH = toContent(pctIndefiniteH(maxHVal) ? -1.0f
+                                   : resolveDim(maxHVal, node->availableHeight, fontSize),
+                               paddingV + borderV);
+        float minH = toContent(pctIndefiniteH(minHVal) ? -1.0f
+                                   : resolveDim(minHVal, node->availableHeight, fontSize),
+                               paddingV + borderV);
         if (maxH >= 0 && mainAvailable > maxH) mainAvailable = maxH;
         if (minH >= 0 && mainAvailable < minH) mainAvailable = minH;
     }

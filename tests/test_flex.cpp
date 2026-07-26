@@ -624,9 +624,74 @@ static void testFlexColumnMaxHeightClamp() {
           "column max-height: fixed footer stays inside the 400px box");
 }
 
+static void testFlexBorderBoxMinWidth() {
+    printf("--- Flex: min-width under box-sizing:border-box ---\n");
+    // The padded-button case. `min-width:30px` with border-box sizing and 8px
+    // of padding a side means the BORDER box is at least 30, so the content box
+    // is at least 14. Clamping the content box to 30 instead lays the single
+    // item out across a 30px main axis inside a 14px content box, and
+    // justify-content:center then centres it in that phantom width: the item
+    // lands ~8px right of where it belongs, flush against the right border.
+    //
+    // Here the content box is 40 (a 60px box less 2×10 padding) and the item is
+    // 20 wide, so centring must put it 10 from the content edge whatever the
+    // min-width says. Clamping to the raw 60 gives 20 — half the item hanging
+    // out past the padding.
+    FlexMockNode root; initFlexContainer(root);
+    root.style["box-sizing"] = "border-box";
+    root.style["width"] = "60px";
+    root.style["min-width"] = "60px";
+    root.style["padding-left"] = "10px";
+    root.style["padding-right"] = "10px";
+    root.style["justify-content"] = "center";
+
+    FlexMockNode item;
+    initFlexItem(item); item.style["width"] = "20px"; item.style["height"] = "10px";
+    item.style["flex-shrink"] = "0";
+    root.addChild(&item);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 600, m);
+
+    check(approx(root.box.contentRect.width, 40),
+          "border-box min-width: content box is the 60px box less its padding");
+    check(approx(item.box.contentRect.x, 10),
+          "border-box min-width: item centred in the content box, not in a phantom 60");
+    check(item.box.contentRect.x + item.box.contentRect.width
+              <= root.box.contentRect.width + 1,
+          "border-box min-width: and does not run out through the right padding");
+}
+
+static void testFlexBorderBoxColumnHeight() {
+    printf("--- Flex: column height under box-sizing:border-box ---\n");
+    // Same confusion on the block axis: `height:100px` with border-box sizing
+    // and 10px of padding top and bottom leaves 80px of content. A column
+    // container that distributes free space over 100 instead grows its flexible
+    // item 20px too tall, and the bottom of the last item falls outside the box.
+    FlexMockNode root; initFlexContainer(root);
+    root.style["flex-direction"] = "column";
+    root.style["box-sizing"] = "border-box";
+    root.style["width"] = "100px";
+    root.style["height"] = "100px";
+    root.style["padding-top"] = "10px";
+    root.style["padding-bottom"] = "10px";
+
+    FlexMockNode body;
+    initFlexItem(body); body.style["flex-grow"] = "1"; body.style["flex-basis"] = "0";
+    root.addChild(&body);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 600, m);
+
+    check(approx(body.box.contentRect.height, 80),
+          "border-box column: flexible item fills the content box, not the border box");
+}
+
 // ========== Entry point ==========
 
 void testFlexLayout() {
+    testFlexBorderBoxMinWidth();
+    testFlexBorderBoxColumnHeight();
     testFlexColumnMaxHeightClamp();
     testFlexBasicRow();
     testFlexGrow();
