@@ -857,6 +857,111 @@ static void testMaxContentKerningAcrossSpaces() {
 
 // ========== Entry point ==========
 
+// White space at the seam between two inline boxes belongs to neither of them.
+// Each box's intrinsic width is measured with its own edges trimmed — it has
+// to be, since a box cannot know what will sit beside it — so a container that
+// simply summed its children came out exactly one space too narrow and, when
+// something sized it to that width (a flex item is sized to its max-content),
+// wrapped content that was supposed to fit. Three spellings of the same seam,
+// all of which must measure alike:
+//
+//   <span>AAA</span><span> BBB</span>     space leads the second box
+//   <span>AAA </span><span>BBB</span>     space trails the first
+//   <span>AAA</span> <span>BBB</span>     space is a text node between them
+static void testMaxContentInlineSeamWhitespace() {
+    printf("--- Max-content: white space between inline boxes ---\n");
+    FixedTextMetrics metrics;   // 10px per character, 20px line height
+
+    // "AAA BBB" on one line: 7 characters.
+    const float expected = 70.0f;
+
+    struct Seam { const char* name; const char* first; const char* between; const char* second; };
+    const Seam seams[] = {
+        {"leading space in the second box",  "AAA",  nullptr, " BBB"},
+        {"trailing space in the first box",  "AAA ", nullptr, "BBB"},
+        {"space as a text node between",     "AAA",  " ",     "BBB"},
+    };
+
+    for (const auto& seam : seams) {
+        InlineMockNode root;      initBlock(root);
+        InlineMockNode first;     initInline(first);
+        InlineMockNode firstText; firstText.isText = true; firstText.text = seam.first;
+        InlineMockNode gap;       gap.isText = true;       gap.text = seam.between ? seam.between : "";
+        InlineMockNode second;    initInline(second);
+        InlineMockNode secondText;secondText.isText = true;secondText.text = seam.second;
+
+        first.addChild(&firstText);
+        second.addChild(&secondText);
+        root.addChild(&first);
+        if (seam.between) root.addChild(&gap);
+        root.addChild(&second);
+
+        float maxc = computeMaxContentWidth(&root, metrics);
+        check(approx(maxc, expected),
+              (std::string("max-content counts the seam space: ") + seam.name).c_str());
+
+        // And the width it reports really does hold the content: size the
+        // container to it and nothing may wrap.
+        root.style["width"] = std::to_string(maxc) + "px";
+        layoutTree(&root, 1000, metrics);
+        check(approx(root.box.contentRect.height, 20),
+              (std::string("...and the content stays on one line: ") + seam.name).c_str());
+    }
+
+    // No space at the seam means no space in the measurement — the fix must
+    // not hand out width that was never there.
+    {
+        InlineMockNode root;       initBlock(root);
+        InlineMockNode first;      initInline(first);
+        InlineMockNode firstText;  firstText.isText = true;  firstText.text = "AAA";
+        InlineMockNode second;     initInline(second);
+        InlineMockNode secondText; secondText.isText = true; secondText.text = "BBB";
+        first.addChild(&firstText);
+        second.addChild(&secondText);
+        root.addChild(&first);
+        root.addChild(&second);
+        check(approx(computeMaxContentWidth(&root, metrics), 60.0f),
+              "max-content: no seam space when the boxes touch");
+    }
+
+    // The seam space is one space however many collapse into it.
+    {
+        InlineMockNode root;       initBlock(root);
+        InlineMockNode first;      initInline(first);
+        InlineMockNode firstText;  firstText.isText = true;  firstText.text = "AAA ";
+        InlineMockNode gap;        gap.isText = true;        gap.text = "  ";
+        InlineMockNode second;     initInline(second);
+        InlineMockNode secondText; secondText.isText = true; secondText.text = " BBB";
+        first.addChild(&firstText);
+        second.addChild(&secondText);
+        root.addChild(&first);
+        root.addChild(&gap);
+        root.addChild(&second);
+        check(approx(computeMaxContentWidth(&root, metrics), expected),
+              "max-content: collapsible white space at a seam counts once");
+    }
+
+    // An atomic inline is a wall: its inner white space does not collapse with
+    // what is outside it, so a leading space inside an inline-block adds
+    // nothing to the seam.
+    {
+        InlineMockNode root;       initBlock(root);
+        InlineMockNode first;      initInline(first);
+        InlineMockNode firstText;  firstText.isText = true;  firstText.text = "AAA";
+        InlineMockNode second;     initInline(second);
+        second.style["display"] = "inline-block";
+        InlineMockNode secondText; secondText.isText = true; secondText.text = " BBB";
+        first.addChild(&firstText);
+        second.addChild(&secondText);
+        root.addChild(&first);
+        root.addChild(&second);
+        // The inline-block measures its own content (" BBB" collapses to
+        // "BBB" at its start), and no seam space is added outside it.
+        check(approx(computeMaxContentWidth(&root, metrics), 60.0f),
+              "max-content: white space does not collapse across an inline-block");
+    }
+}
+
 void testInlineLayout() {
     // Text breaking
     testTextBreakSingleLine();
@@ -895,4 +1000,5 @@ void testInlineLayout() {
     // Intrinsic-sizing ↔ layout consistency
     testMaxContentSingleLineConsistency();
     testMaxContentKerningAcrossSpaces();
+    testMaxContentInlineSeamWhitespace();
 }

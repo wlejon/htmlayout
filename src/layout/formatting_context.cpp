@@ -366,6 +366,51 @@ static float measureUnbreakableRun(std::string_view text, bool collapse,
     return w;
 }
 
+// Does the first (or last) text this inline subtree contributes begin (or end)
+// with collapsible white space?
+//
+// It matters because an inline box's intrinsic width is measured with its own
+// edge white space trimmed — the measurement cannot know whether that space
+// will survive — so `<span>AAA</span><span> BBB</span>` measures as two boxes
+// of "AAA" and "BBB" and loses the space between them, while layout keeps it
+// and needs a space more room than the measurement asked for. Under a parent
+// that is wider than its content nobody notices; a flex item is sized *to* its
+// max-content width, so it came out one space too narrow and wrapped its own
+// second half onto a second line.
+//
+// nullopt means this subtree contributes no text at that edge, so the walk
+// should keep looking at the next sibling.
+static std::optional<bool> subtreeEdgeSpace(LayoutNode* node, bool leading) {
+    if (!node) return std::nullopt;
+    if (node->isTextNode()) {
+        std::string_view text = node->textContent();
+        if (text.empty()) return std::nullopt;
+        char edge = leading ? text.front() : text.back();
+        return std::isspace(static_cast<unsigned char>(edge)) != 0;
+    }
+    const std::string& display = styleVal(node, Prop::Display);
+    if (display == "none") return std::nullopt;
+    const std::string& pos = styleVal(node, Prop::Position);
+    if (pos == "absolute" || pos == "fixed") return std::nullopt;
+    // Only a non-replaced inline box shares an inline formatting context with
+    // what surrounds it. An atomic inline (inline-block and friends) or a
+    // block-level child is a wall white space does not collapse across, so its
+    // edge is a hard edge whatever its text says.
+    if (!(display.empty() || display == "inline" || display == "contents"))
+        return false;
+    const std::string& ws = styleVal(node, Prop::WhiteSpace);
+    if (!(ws.empty() || ws == "normal" || ws == "nowrap" || ws == "pre-line"))
+        return false;                       // pre/pre-wrap: the space is kept, not collapsed
+
+    auto children = getLayoutChildren(node);
+    for (size_t i = 0; i < children.size(); ++i) {
+        LayoutNode* child = children[leading ? i : children.size() - 1 - i];
+        auto answer = subtreeEdgeSpace(child, leading);
+        if (answer.has_value()) return answer;
+    }
+    return std::nullopt;
+}
+
 float computeMinContentWidth(LayoutNode* node, TextMetrics& metrics) {
     if (!node) return 0.0f;
     if (node->cachedMinContentW >= 0.0f) return node->cachedMinContentW;
@@ -703,11 +748,23 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
                     fontSize, fontWeight, letterSpacing, wordSpacing,
                     styleVal(node, Prop::TextTransform), metrics);
             }
+            // Both measurements above trim this run's own edge white space —
+            // they have to, since a run cannot know what sits beside it. So a
+            // space where this run meets an inline sibling is counted here,
+            // exactly as it is for a whitespace-only text node between two
+            // siblings, and for the same reason: it is real width on the line.
+            const bool spaceBefore =
+                collapsingWs && std::isspace(static_cast<unsigned char>(text.front()));
+            const bool spaceAfter =
+                collapsingWs && std::isspace(static_cast<unsigned char>(text.back()));
+            if (spaceBefore && prevInlineContent) pendingSpace = spaceW;
+
             sumChildMax += pendingSpace;
             pendingSpace = 0.0f;
             prevInlineContent = true;
             maxChildMax = std::max(maxChildMax, w);
             sumChildMax += w;
+            if (spaceAfter) pendingSpace = spaceW;   // only if something follows
             ++inflowCount;   // text runs are inline-level
         } else {
             auto& cs = child->computedStyle();
@@ -715,14 +772,18 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
             // Out-of-flow children contribute nothing to intrinsic sizes.
             const std::string& cpos = styleVal(child, Prop::Position);
             if (cpos == "absolute" || cpos == "fixed") continue;
-            {
-                const std::string& cdisp = styleVal(child, Prop::Display);
-                bool inlineLevel = cdisp == "inline" || cdisp == "inline-block" ||
-                                   cdisp == "inline-flex" || cdisp == "inline-grid" ||
-                                   cdisp == "inline-table";
-                if (!inlineLevel) allInline = false;
-                ++inflowCount;
-            }
+            const std::string& cdisp = styleVal(child, Prop::Display);
+            const bool inlineLevel = cdisp == "inline" || cdisp == "inline-block" ||
+                                     cdisp == "inline-flex" || cdisp == "inline-grid" ||
+                                     cdisp == "inline-table";
+            if (!inlineLevel) allInline = false;
+            ++inflowCount;
+            // White space where this inline box meets the previous one. The
+            // box measures itself with its own edge trimmed, so the space
+            // between the two belongs to neither and has to be added here.
+            if (inlineLevel && collapsingWs && prevInlineContent &&
+                subtreeEdgeSpace(child, /*leading=*/true).value_or(false))
+                pendingSpace = spaceW;
             float childFontSize = resolveLength(styleVal(child, Prop::FontSize), fontSize, fontSize);
             if (childFontSize <= 0) childFontSize = fontSize;
             float ph = resolveLength(styleVal(child, Prop::PaddingLeft), 0, childFontSize) +
@@ -770,6 +831,14 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
             prevInlineContent = true;
             maxChildMax = std::max(maxChildMax, childMax);
             sumChildMax += childMax;
+            // And white space at this box's far edge, which counts only if
+            // inline content follows — the same pending buffer a whitespace-
+            // only text node between siblings uses, and deliberately the same
+            // variable: two collapsible spaces meeting at a boundary are one
+            // space, not two.
+            if (inlineLevel && collapsingWs &&
+                subtreeEdgeSpace(child, /*leading=*/false).value_or(false))
+                pendingSpace = spaceW;
         }
     }
     // Flex-row: children are side-by-side, so sum their widths.
