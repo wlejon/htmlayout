@@ -36,6 +36,13 @@ struct FlexItem {
     // (its block-axis content height depends on the definite cross size). Deferred
     // to the hypothetical-size loop where that layout happens.
     bool colAutoMinPending = false;
+    // Column flex with an indefinite main size only: the item's laid-out outer
+    // height, which is its max-content contribution to the container's own
+    // intrinsic height (§9.9.1). Kept beside the flex base rather than folded
+    // into it because they answer different questions — the base is where
+    // flexing *starts*, this is what the item is *worth* to a container being
+    // sized by what is in it. -1 = not measured (the two are the same).
+    float contentMain = -1.0f;
 };
 
 struct FlexLine {
@@ -372,10 +379,41 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     std::stable_sort(items.begin(), items.end(),
         [](const FlexItem& a, const FlexItem& b) { return a.order < b.order; });
 
+    // One item's laid-out outer main size at the container's inner width, cached
+    // per node so a clean item doesn't re-lay its subtree to re-derive it. Two
+    // callers want the same number for different reasons: an `auto` basis *is*
+    // this, and an indefinite-main-size column container needs it as the item's
+    // max-content contribution however the basis was written.
+    auto measureOuterMain = [&](FlexItem& item) -> float {
+        if (item.node->box.dirty || !(item.node->measuredAtW == containerMain)) {
+            layoutNode(item.node, containerMain, metrics);
+            item.node->measuredAtW = containerMain;
+            item.node->measuredOuterMain =
+                item.node->box.contentRect.height +
+                item.node->box.padding.top + item.node->box.padding.bottom +
+                item.node->box.border.top + item.node->box.border.bottom;
+        }
+        return item.node->measuredOuterMain;
+    };
+
     // Determine hypothetical main sizes
     for (auto& item : items) {
         if (item.flexBasis >= 0) {
             item.hypotheticalMain = item.flexBasis;
+            // A column container with an indefinite main size is sized by what
+            // is in it, and an item that can grow contributes its *content*
+            // height rather than its flex base (§9.9.1). Without this, the
+            // universal `flex: 1; min-height: 0` scroll pane has a base of 0, a
+            // hypothetical of 0 and would contribute nothing at all — the
+            // container would collapse to its other items and the pane to
+            // nothing. Measured only where the answer is used: an item that
+            // cannot grow is worth its base, and a container with a definite
+            // height is not asking this question.
+            if (columnAutoHeight && item.flexGrow > 0 && !item.node->isTextNode()) {
+                item.contentMain = measureOuterMain(item);
+                if (item.maxMain >= 0 && item.contentMain > item.maxMain)
+                    item.contentMain = item.maxMain;
+            }
             // For border-box items, a flex-basis of 0 must still reserve space for
             // padding+border so flex-grow distributes the content area proportionally.
             if (item.hypotheticalMain == 0 && !item.node->isTextNode()) {
@@ -429,17 +467,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     layoutNode(item.node, item.hypotheticalMain, metrics);
             } else {
                 // Column: the measure produces the item's laid-out outer height
-                // at the container's inner width. Cache that scalar per node so
-                // a clean item doesn't re-lay its subtree to re-derive it.
-                if (item.node->box.dirty || !(item.node->measuredAtW == containerMain)) {
-                    layoutNode(item.node, containerMain, metrics);
-                    item.node->measuredAtW = containerMain;
-                    item.node->measuredOuterMain =
-                        item.node->box.contentRect.height +
-                        item.node->box.padding.top + item.node->box.padding.bottom +
-                        item.node->box.border.top + item.node->box.border.bottom;
-                }
-                item.hypotheticalMain = item.node->measuredOuterMain;
+                // at the container's inner width.
+                item.hypotheticalMain = measureOuterMain(item);
                 // Resolve the deferred column auto-min: with the cross size definite
                 // (containerMain), the item's laid-out outer height is its block-axis
                 // content-min, so it must not be shrunk below it in a height-limited
@@ -508,16 +537,35 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         return a;
     };
 
-    // For column flex with auto height, ensure mainAvailable is at least the total
-    // hypothetical size so items are never shrunk (the container grows to fit).
+    // A column flex container with an auto height has an *indefinite* main size,
+    // so §9.7 measures free space against the sum of the items' contributions:
+    // it is zero, and the container is exactly the size of what is in it —
+    // nothing grows into it and nothing is shrunk to fit it.
+    //
+    // `mainAvailable` is the container's *width* here (the fallback at the top
+    // of this function, which is what percentage padding and flex-basis resolve
+    // against), so leaving it in place made that width the free space to grow
+    // into: a 400px-wide auto-height column with a `flex: 1` child came out
+    // 400px *tall*, and the same column under `max-height: 46vh` came out
+    // exactly 46vh whatever was in it, the end-of-function clamp being the only
+    // thing that stopped it. That is how it was found — a drawer that took
+    // nearly half the window to draw a hundred pixels of log.
+    //
+    // Single-line only. A wrapping column of auto height split its lines against
+    // that same width fallback, and the sum of every item across every line is
+    // not one line's free space; the old "never shrink" floor is left in place
+    // for it rather than replaced by a number that means something else.
     if (columnAutoHeight) {
-        float totalNeeded = 0;
-        float totalGapsAll = (items.size() > 1) ? gapMain * (items.size() - 1) : 0;
+        float totalNeeded = (items.size() > 1) ? gapMain * (items.size() - 1) : 0;
         for (auto& item : items) {
-            totalNeeded += item.hypotheticalMain + itemMarginMain(item);
+            // What the item is worth to a container being sized by its contents:
+            // its content height where that was measured (an item that can grow),
+            // its hypothetical size otherwise.
+            totalNeeded += std::max(item.hypotheticalMain, item.contentMain) +
+                           itemMarginMain(item);
         }
-        totalNeeded += totalGapsAll;
-        if (totalNeeded > mainAvailable) mainAvailable = totalNeeded;
+        if (lines.size() <= 1) mainAvailable = totalNeeded;
+        else if (totalNeeded > mainAvailable) mainAvailable = totalNeeded;
     }
 
     // Resolve flexible lengths per line

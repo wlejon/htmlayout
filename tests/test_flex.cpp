@@ -624,6 +624,50 @@ static void testFlexColumnMaxHeightClamp() {
           "column max-height: fixed footer stays inside the 400px box");
 }
 
+static void testFlexColumnAutoHeightGrow() {
+    printf("--- Flex: auto-height column is sized by its contents ---\n");
+    // A column flex container with no height has an INDEFINITE main size, so
+    // there is no free space and `flex-grow` has nothing to grow into: the
+    // container is the height of what is in it. The main size fell back to the
+    // container's *width* for want of anything better, which a growing item
+    // then filled — a 300px-wide column came out 300px tall, and one with a
+    // max-height came out exactly its max-height whatever was in it, the
+    // end-of-function clamp being all that stopped it.
+    //
+    // The item is `flex: 1; min-height: 0` — the universal scroll pane, whose
+    // flex base is 0 and whose automatic minimum is switched off, so it is also
+    // the case that says the contribution must be the item's *content* height:
+    // count the base and the container collapses to 20 instead.
+    FlexMockNode root; initFlexContainer(root);
+    root.style["flex-direction"] = "column";
+    root.style["width"] = "300px";
+
+    FlexMockNode head, body, text;
+    initFlexItem(head); head.style["height"] = "20px"; head.style["flex-shrink"] = "0";
+    initFlexItem(body);
+    body.style["flex-grow"] = "1"; body.style["flex-basis"] = "0";
+    body.style["min-height"] = "0";
+    text.tag = "#text"; text.isText = true; text.text = "log"; initFlexItem(text);
+    body.addChild(&text);
+    root.addChild(&head); root.addChild(&body);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 600, m);
+
+    // One 20px line of text in the body, under a 20px head.
+    check(approx(body.box.contentRect.height, 20),
+          "auto-height column: growing item is its content height, not the width");
+    check(approx(root.box.contentRect.height, 40),
+          "auto-height column: container is 40 (head + body), not its 300px width");
+
+    // And with a max-height on it: the cap is a cap, not the height.
+    root.style["max-height"] = "200px";
+    markSubtreeDirty(&root);
+    layoutTree(&root, 600, m);
+    check(approx(root.box.contentRect.height, 40),
+          "auto-height column: max-height caps, it does not become the height");
+}
+
 static void testFlexBorderBoxMinWidth() {
     printf("--- Flex: min-width under box-sizing:border-box ---\n");
     // The padded-button case. `min-width:30px` with border-box sizing and 8px
@@ -693,6 +737,7 @@ void testFlexLayout() {
     testFlexBorderBoxMinWidth();
     testFlexBorderBoxColumnHeight();
     testFlexColumnMaxHeightClamp();
+    testFlexColumnAutoHeightGrow();
     testFlexBasicRow();
     testFlexGrow();
     testFlexShrink();
