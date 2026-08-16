@@ -188,6 +188,77 @@ static void testHitWithPadding() {
     check(hitTest(&root, 100, 50) == &root, "hit root content area");
 }
 
+static void testHitBodyOverflowPropagation() {
+    printf("--- HitTest: body overflow propagates to the viewport ---\n");
+    // CSS 2.1 §11.1.1. `body { overflow: hidden }` with everything inside it
+    // out of flow — the layout the three.js editor and countless other apps
+    // use. body's own box is then zero-height, so treating it as a clipper
+    // rejects the whole document at the first step: the page paints and
+    // swallows every click.
+    HitMockNode html; initBlock(html, "html");
+    HitMockNode body; initBlock(body, "body");
+    body.style["overflow"] = "hidden";
+    HitMockNode bar; initBlock(bar, "div");
+    bar.style["position"] = "absolute";
+    bar.style["top"] = "0"; bar.style["left"] = "0";
+    bar.style["width"] = "200px"; bar.style["height"] = "32px";
+    body.addChild(&bar);
+    html.addChild(&body);
+
+    HitTextMetrics m;
+    layoutTree(&html, 200, m);
+
+    check(body.box.fullHeight() == 0.0f,
+          "body's own box is zero-height (all children out of flow)");
+    check(hitTest(&html, 100, 16) == &bar,
+          "absolutely positioned child of an overflow:hidden body is hittable");
+
+    // The donation only reaches <body> while the root is itself visible. Give
+    // the root a clip of its own and it keeps it — and a zero-height root then
+    // legitimately swallows the point.
+    html.style["overflow"] = "hidden";
+    layoutTree(&html, 200, m);
+    check(hitTest(&html, 100, 16) == nullptr,
+          "an overflow:hidden root still clips (it is the donor, not a donee)");
+}
+
+static void testHitBlockInInlineRegrow() {
+    printf("--- HitTest: a block inside an inline that grows ---\n");
+    // The inline formatting context lays block-in-inline children out itself,
+    // by calling the block engine directly rather than through layoutNode().
+    // Nothing claimed them for the pass, so the hit-bounds cache read them as
+    // "shape unchanged" and kept the bounds they had the first time — every
+    // descendant past those stale bounds vanished from hit testing while
+    // painting normally. (The three.js editor wraps its whole property sidebar
+    // in one <span>; its controls stopped responding as soon as a panel grew.)
+    HitMockNode root; initBlock(root);
+    root.style["width"] = "300px";
+    HitMockNode span; initBlock(span, "span");
+    span.style["display"] = "inline";
+    HitMockNode panel; initBlock(panel, "div");
+    panel.style["height"] = "40px";
+    HitMockNode inner; initBlock(inner, "div");
+    inner.style["height"] = "40px";
+    panel.addChild(&inner);
+    span.addChild(&panel);
+    root.addChild(&span);
+
+    HitTextMetrics m;
+    layoutTree(&root, 300, m);
+    check(hitTest(&root, 100, 20) == &inner, "the inner block is hittable to begin with");
+
+    // Grow it, the way a panel does when its contents are rebuilt.
+    inner.style["height"] = "400px";
+    panel.style["height"] = "400px";
+    markSubtreeDirty(&root);
+    layoutTree(&root, 300, m);
+
+    check(inner.box.fullHeight() == 400.0f, "the inner block really did grow");
+    check(hitTest(&root, 100, 20) == &inner, "still hittable near the top");
+    check(hitTest(&root, 100, 300) == &inner,
+          "and hittable in the part that only exists after the regrow");
+}
+
 static void testHitNull() {
     printf("--- HitTest: null ---\n");
     check(hitTest(nullptr, 50, 50) == nullptr, "null root returns null");
@@ -202,5 +273,7 @@ void testHitTest() {
     testHitPointerEventsNone();
     testHitPointerEventsNoneParent();
     testHitWithPadding();
+    testHitBodyOverflowPropagation();
+    testHitBlockInInlineRegrow();
     testHitNull();
 }

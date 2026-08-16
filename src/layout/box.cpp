@@ -6,6 +6,7 @@
 #include "layout/style_cache.h"
 #include "layout/measure_cache.h"
 #include <algorithm>
+#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <unordered_map>
@@ -202,9 +203,9 @@ bool createsStackingContext(const LayoutNode* node) {
     return false;
 }
 
-// Does this element clip descendants' hit testing to its border box?
-// Matches the overflow-clipping rules used at paint time.
-bool clipsHitTesting(const LayoutNode* node) {
+// Does this element's own `overflow` ask for clipping, ignoring who the clip
+// ultimately belongs to?
+bool overflowStyleClips(const LayoutNode* node) {
     auto check = [](const std::string& v) {
         return !v.empty() && v != "visible";
     };
@@ -212,6 +213,38 @@ bool clipsHitTesting(const LayoutNode* node) {
     if (check(styleVal(node, Prop::OverflowX))) return true;
     if (check(styleVal(node, Prop::OverflowY))) return true;
     return false;
+}
+
+// CSS 2.1 §11.1.1: the root element's `overflow` propagates to the viewport,
+// and when the root computes to `visible` the <body> donates in its place. The
+// donor is left behaving as `visible` itself — the viewport does that clipping,
+// not the element.
+//
+// Hit testing has to honour that, because paint does. A page whose body is
+// `overflow: hidden` with absolutely positioned children — the whole three.js
+// editor, and every other app laid out that way — gives body a zero-height box,
+// so treating body as a clipper rejects the entire document at the first step:
+// the UI paints perfectly and swallows every click.
+bool overflowBelongsToViewport(const LayoutNode* node) {
+    const LayoutNode* parent = node->parent();
+    if (!parent) return true;                   // the root element itself
+    if (parent->parent()) return false;         // deeper than <body>
+
+    std::string_view tag = node->tagName();
+    if (tag.size() != 4) return false;
+    for (size_t i = 0; i < 4; ++i) {
+        if (std::tolower(static_cast<unsigned char>(tag[i])) != "body"[i]) return false;
+    }
+
+    // The root donates first; <body> only gets to when the root is visible.
+    return !overflowStyleClips(parent);
+}
+
+// Does this element clip descendants' hit testing to its border box?
+// Matches the overflow-clipping rules used at paint time.
+bool clipsHitTesting(const LayoutNode* node) {
+    if (!overflowStyleClips(node)) return false;
+    return !overflowBelongsToViewport(node);
 }
 
 // Post-order pass computing box.hitBounds for every node: the union of the

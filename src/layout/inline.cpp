@@ -192,6 +192,22 @@ float justifyGap(const LineBox& line, float availableWidth, bool isLastLine) {
 
 } // anonymous namespace
 
+// A child the inline formatting context lays out itself, by calling the block
+// or inline engine directly instead of going through layoutNode(). Nothing has
+// claimed it for this pass, so record the visit here.
+//
+// It matters beyond bookkeeping: the hit-bounds cache reads lastLayoutPass as
+// "was this subtree's shape recomputed this pass", and skips the whole subtree
+// when it was not. A node that silently misses the mark keeps the bounds it had
+// the first time it was laid out, however far its box later grows — and every
+// descendant past those stale bounds is pruned out of hit testing for good. The
+// stock three.js editor puts its entire property sidebar inside one <span>, so
+// the panel's controls painted normally and ignored every click from the moment
+// the panel grew past its first size.
+static void claimInlineChild(LayoutNode* child) {
+    child->lastLayoutPass = currentLayoutPass();
+}
+
 void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     if (!node) return;
 
@@ -879,6 +895,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             } else if (childDisplay == "inline") {
                 // Recursive inline: layout the child inline
                 layoutInline(child, contentAvail, metrics);
+                claimInlineChild(child);
                 LineItem item;
                 item.width = child->box.fullWidth();
                 item.height = child->box.fullHeight();
@@ -912,6 +929,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             } else {
                 // Block-level child inside inline context — treat as block
                 layoutBlock(child, contentAvail, metrics);
+                claimInlineChild(child);
                 LineItem item;
                 item.width = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
                 item.height = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
