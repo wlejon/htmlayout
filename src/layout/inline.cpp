@@ -315,6 +315,33 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             node->box.contentRect.height = intrH;
         }
 
+        // CSS 2.1 §10.6.2: on a replaced element with an intrinsic ratio, an
+        // `auto` dimension is derived from the *used* value of the other one —
+        // not from the raw intrinsic size. So `img { width: 16px }` on a
+        // 512×512 icon is 16×16, where taking intrinsic height directly makes
+        // it 16×512: a sliver of the artwork stretched half a page down.
+        //
+        // The block path already does this (block.cpp, the auto-height branch);
+        // an atomic inline is the same element in a different formatting
+        // context and has to agree. Gated on hasIntrinsicRatio() so only
+        // ratio-locked media qualify — a form control reports an intrinsic size
+        // without a locked ratio, and must keep its own height when given a
+        // width.
+        const bool widthIsAuto  = (widthVal == "auto" || widthVal.empty());
+        const bool heightIsAuto = (heightVal == "auto" || heightVal.empty() ||
+                                   heightPctIndefinite);
+        const float intrinsicRatio =
+            (intrW > 0.0f && intrH > 0.0f) ? (intrW / intrH) : 0.0f;
+        if (hasIntrinsic && intrinsicRatio > 0.0f && node->hasIntrinsicRatio()) {
+            if (!widthIsAuto && heightIsAuto) {
+                node->box.contentRect.height =
+                    node->box.contentRect.width / intrinsicRatio;
+            } else if (widthIsAuto && !heightIsAuto) {
+                node->box.contentRect.width =
+                    node->box.contentRect.height * intrinsicRatio;
+            }
+        }
+
         // Replaced elements with intrinsic size don't need child layout
         if (hasIntrinsic) {
             return;
