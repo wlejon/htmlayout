@@ -480,6 +480,34 @@ static void testPseudoElements() {
     check(foundPh, "::placeholder: parses as PseudoElement simple selector");
     check(parseSelector("p::selection").chain.entries.size() == 1,
           "::selection: parses as single compound");
+
+    // The four CSS 2.1 pseudo-elements also exist in the one-colon spelling,
+    // which Selectors L3 §7 requires accepting. Real sheets still use it — the
+    // three.js editor draws its outliner type dots with `.type:after`.
+    for (const char* name : {"before", "after", "first-line", "first-letter"}) {
+        auto legacy = parseSelector(std::string("p:") + name);
+        auto& simples = legacy.chain.entries[0].compound.simples;
+        bool found = false;
+        for (auto& s : simples)
+            if (s.type == SimpleSelectorType::PseudoElement && s.value == name)
+                found = true;
+        std::string label = std::string(":") + name + ": one colon parses as a pseudo-element";
+        check(found, label.c_str());
+    }
+    // ...and a rule written that way must actually generate content.
+    Cascade cascade4;
+    cascade4.addStylesheet(parse(".type:after { content: '●'; color: #ddd; }\n"));
+    check(cascade4.hasPseudoElementRules("after"),
+          ":after: one-colon rule buckets as an ::after rule");
+    MockElement dot; dot.tag = "span"; dot.classes = "type";
+    auto dotStyle = cascade4.resolve(dot);
+    auto dotAfter = cascade4.resolvePseudo(dot, "after", dotStyle);
+    check(!dotAfter.empty(), ":after: one-colon rule resolves for a matching element");
+    check(dotAfter["color"] == "#ddd", ":after: one-colon rule carries its declarations");
+    // Specificity is a pseudo-*element*'s (a type, not a class), regardless of
+    // how many colons it was written with.
+    check(parseSelector("p:after").specificity == parseSelector("p::after").specificity,
+          ":after: one colon and two have the same specificity");
 }
 
 static void testUserAgentStylesheet() {

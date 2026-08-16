@@ -306,6 +306,17 @@ private:
         ss.type = SimpleSelectorType::PseudoClass;
         ss.value = consumeName();
 
+        // The four CSS 2.1 pseudo-elements predate the double-colon notation
+        // and are still written with one colon in the wild. Selectors L3 §7
+        // requires accepting that spelling, so retype them here rather than
+        // letting them fall through as pseudo-classes nothing ever matches —
+        // a sheet saying `.type:after { content: '●' }` expects a dot.
+        if (ss.value == "before" || ss.value == "after" ||
+            ss.value == "first-line" || ss.value == "first-letter") {
+            ss.type = SimpleSelectorType::PseudoElement;
+            return ss;
+        }
+
         // Handle functional pseudo-classes
         if (peek() == '(') {
             advance(); // skip '('
