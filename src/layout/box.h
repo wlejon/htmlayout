@@ -272,6 +272,17 @@ struct LayoutNode {
     float hitBoundsOriginX = 0.0f;
     float hitBoundsOriginY = 0.0f;
 
+    // Out-of-flow descendants that this node's own `overflow` does NOT clip,
+    // because their containing block is above it: absolutely positioned boxes
+    // when nothing between them and here is positioned, and fixed ones always
+    // (barring a transform). Both are unioned into hitBounds so the O(1)
+    // subtree prune cannot reject a point that lands on one — a submenu hanging
+    // outside its scrolling menu panel is the everyday case. Kept separate
+    // because they keep travelling up: an ancestor absorbs them only when it is
+    // the containing block they were looking for. Width < 0 means "none".
+    Rect escapeAbsBounds{0.0f, 0.0f, -1.0f, -1.0f};
+    Rect escapeFixedBounds{0.0f, 0.0f, -1.0f, -1.0f};
+
     // Cached intrinsic (content-based) widths — the result of
     // computeMin/MaxContentWidth over this subtree. Those walks are recursive
     // over every descendant, so without a cache one dirty flex/grid/shrink-to-fit

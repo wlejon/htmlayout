@@ -247,6 +247,44 @@ bool clipsHitTesting(const LayoutNode* node) {
     return !overflowBelongsToViewport(node);
 }
 
+// Does this element take over as the containing block for fixed-position
+// descendants? CSS Transforms §3 and CSS Containment: a transform, a filter, a
+// perspective, or paint containment all take the job away from the viewport.
+// Without one of these, a fixed box is positioned against the viewport and no
+// ancestor's `overflow` can clip it.
+bool establishesFixedContainingBlock(const LayoutNode* node) {
+    auto set = [node](Prop p) {
+        const std::string& v = styleVal(node, p);
+        return !v.empty() && v != "none";
+    };
+    if (set(Prop::Transform) || set(Prop::Filter)) return true;
+    const std::string& c = styleVal(node, Prop::Contain);
+    return c.find("paint") != std::string::npos ||
+           c.find("layout") != std::string::npos ||
+           c.find("strict") != std::string::npos ||
+           c.find("content") != std::string::npos;
+}
+
+bool isPositionedNode(const LayoutNode* node) {
+    const std::string& p = styleVal(node, Prop::Position);
+    return p == "relative" || p == "absolute" || p == "fixed" || p == "sticky";
+}
+
+// Union b into a, treating width < 0 as "empty".
+void unionInto(Rect& a, const Rect& b) {
+    if (b.width < 0.0f) return;
+    if (a.width < 0.0f) { a = b; return; }
+    float minX = std::min(a.x, b.x), minY = std::min(a.y, b.y);
+    float maxX = std::max(a.x + a.width, b.x + b.width);
+    float maxY = std::max(a.y + a.height, b.y + b.height);
+    a = {minX, minY, maxX - minX, maxY - minY};
+}
+
+Rect shifted(const Rect& r, float dx, float dy) {
+    if (r.width < 0.0f) return r;
+    return {r.x + dx, r.y + dy, r.width, r.height};
+}
+
 // Post-order pass computing box.hitBounds for every node: the union of the
 // node's border box and all descendant boxes, folding in each descendant's own
 // transform and clipping. Expressed in the SAME space as box.contentRect
@@ -273,6 +311,8 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
         if (dx != 0.0f || dy != 0.0f) {
             node->box.hitBounds.x += dx;
             node->box.hitBounds.y += dy;
+            node->escapeAbsBounds = shifted(node->escapeAbsBounds, dx, dy);
+            node->escapeFixedBounds = shifted(node->escapeFixedBounds, dx, dy);
             node->hitBoundsOriginX = node->box.contentRect.x;
             node->hitBoundsOriginY = node->box.contentRect.y;
         }
@@ -280,6 +320,8 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     }
 
     const auto& style = node->computedStyle();
+    node->escapeAbsBounds = {0.0f, 0.0f, -1.0f, -1.0f};
+    node->escapeFixedBounds = {0.0f, 0.0f, -1.0f, -1.0f};
     if (styleVal(node, Prop::Display) == "none") {
         node->box.hitBounds = {0, 0, 0, 0};
         node->hitBoundsOriginX = node->box.contentRect.x;
@@ -299,17 +341,57 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     float childOffX = node->box.contentRect.x - node->scrollLeftPx();
     float childOffY = node->box.contentRect.y - node->scrollTopPx();
     bool clips = clipsHitTesting(node);
+    // Which escaping descendants stop here: this node is the containing block
+    // an absolutely positioned box was looking for if it is positioned at all
+    // (or carries a transform), and the one a fixed box was looking for only
+    // with a transform-like property.
+    const bool absorbsFixed = establishesFixedContainingBlock(node);
+    const bool absorbsAbs = absorbsFixed || isPositionedNode(node);
+
+    Rect escAbs{0.0f, 0.0f, -1.0f, -1.0f};      // still travelling up, in our space
+    Rect escFixed{0.0f, 0.0f, -1.0f, -1.0f};
+
     for (auto* child : node->children()) {
         Rect cb = computeSubtreeHitBounds(child);   // in our content space
-        // A clipping node bounds descendants to its own border box, so their
-        // extent never enlarges ours (they still get their own hitBounds above,
-        // for pruning once the point is known to be inside us).
-        if (clips) continue;
-        if (cb.width <= 0 && cb.height <= 0) continue;   // display:none / empty
-        float cx = cb.x + childOffX, cy = cb.y + childOffY;
-        minX = std::min(minX, cx);            minY = std::min(minY, cy);
-        maxX = std::max(maxX, cx + cb.width); maxY = std::max(maxY, cy + cb.height);
+        if (!child) continue;
+
+        // What the child hands up, plus the child's own box when the child is
+        // itself the out-of-flow box doing the escaping.
+        Rect childAbs = child->escapeAbsBounds;
+        Rect childFixed = child->escapeFixedBounds;
+        const std::string& cpos = styleVal(child, Prop::Position);
+        if (cpos == "absolute")   unionInto(childAbs, cb);
+        else if (cpos == "fixed") unionInto(childFixed, cb);
+
+        // Absorbed escapers have found their containing block: from here they
+        // are ordinary content of this node, and this node's clip applies.
+        Rect absorbed{0.0f, 0.0f, -1.0f, -1.0f};
+        if (absorbsAbs)   { unionInto(absorbed, childAbs);   childAbs = {0, 0, -1, -1}; }
+        if (absorbsFixed) { unionInto(absorbed, childFixed); childFixed = {0, 0, -1, -1}; }
+
+        auto lift = [&](const Rect& r) { return shifted(r, childOffX, childOffY); };
+        auto grow = [&](const Rect& r) {
+            if (r.width < 0.0f) return;
+            minX = std::min(minX, r.x);           minY = std::min(minY, r.y);
+            maxX = std::max(maxX, r.x + r.width); maxY = std::max(maxY, r.y + r.height);
+        };
+
+        // Whatever this node clips never enlarges it (descendants still carry
+        // their own hitBounds for pruning once the point is known to be inside).
+        if (!clips) {
+            if (cb.width > 0 || cb.height > 0) grow(lift(cb));
+            grow(lift(absorbed));
+        }
+        // What escapes does enlarge it, clip or no clip — that is the whole
+        // point, and the prune above consults exactly this rect.
+        grow(lift(childAbs));
+        grow(lift(childFixed));
+        unionInto(escAbs, lift(childAbs));
+        unionInto(escFixed, lift(childFixed));
     }
+
+    node->escapeAbsBounds = escAbs;
+    node->escapeFixedBounds = escFixed;
 
     Rect bounds{minX, minY, maxX - minX, maxY - minY};
 
@@ -347,9 +429,34 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
 
 // Hit test with offset accumulation: positions are relative to parent content area,
 // so we track the accumulated offset from the root.
+// State carried down past a clipping ancestor the point fell outside of. While
+// `active`, only boxes that escape that clip may be hit; `sawPositioned` and
+// `sawFixedCB` record whether anything on the way down has since become the
+// containing block the escapers were looking for, which would put them back
+// inside the clip after all.
+struct ClipEscape {
+    bool active = false;
+    bool sawPositioned = false;
+    bool sawFixedCB = false;
+};
+
 LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
-                              float offsetX, float offsetY) {
+                              float offsetX, float offsetY,
+                              ClipEscape escape = {}) {
     if (!node) return nullptr;
+
+    // Descending past a clip the point is outside of: this box is reachable
+    // only if it is the out-of-flow box that escaped it.
+    if (escape.active) {
+        const std::string& pos = styleVal(node, Prop::Position);
+        if ((pos == "fixed" && !escape.sawFixedCB) ||
+            (pos == "absolute" && !escape.sawPositioned))
+            escape = {};                       // escaped — hittable from here down
+        else {
+            escape.sawPositioned |= isPositionedNode(node);
+            escape.sawFixedCB |= establishesFixedContainingBlock(node);
+        }
+    }
 
     auto& style = node->computedStyle();
 
@@ -414,11 +521,20 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
         (testX >= bx && testX < bx + bw && testY >= by && testY < by + bh);
 
     // If this element clips descendants and the point is outside its border
-    // box, reject entirely — neither it nor its children can be hit. With
+    // box, its own content is out of reach. Out-of-flow descendants whose
+    // containing block is above this node are NOT clipped by it, though — a
+    // `position: fixed` submenu hanging outside its `overflow: auto` panel is
+    // the everyday case — so descend for those and nothing else. With
     // overflow:visible, we still descend in case positioned children extend
     // past our bounds.
-    if (!insideBounds && clipsHitTesting(node))
-        return nullptr;
+    if (!insideBounds && clipsHitTesting(node)) {
+        const bool couldEscape = node->escapeAbsBounds.width >= 0.0f ||
+                                 node->escapeFixedBounds.width >= 0.0f;
+        if (!couldEscape) return nullptr;
+        escape.active = true;
+        escape.sawPositioned = isPositionedNode(node);
+        escape.sawFixedCB = establishesFixedContainingBlock(node);
+    }
 
     // Sort children by CSS stacking order for hit testing (topmost first).
     // Per CSS: positioned elements paint above non-positioned; within the same
@@ -452,7 +568,7 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     if (!needsSort) {
         for (size_t i = children.size(); i-- > 0; ) {
             LayoutNode* hit = hitTestRecursive(children[i], testX, testY,
-                                                childOffsetX, childOffsetY);
+                                                childOffsetX, childOffsetY, escape);
             if (hit) return hit;
         }
         // No child hit — fall through to the self-test below.
@@ -487,7 +603,7 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
 
     for (auto& zc : zChildren) {
         LayoutNode* hit = hitTestRecursive(zc.node, testX, testY,
-                                            childOffsetX, childOffsetY);
+                                            childOffsetX, childOffsetY, escape);
         if (hit) return hit;
     }
 
@@ -498,7 +614,7 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     // extended us past the border box, but the node itself is not hittable
     // there). pointer-events:none keeps this node out of the result even
     // when the point is inside.
-    if (insideBounds && !pointerEventsNone) return node;
+    if (insideBounds && !pointerEventsNone && !escape.active) return node;
     return nullptr;
 }
 

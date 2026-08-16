@@ -188,6 +188,70 @@ static void testHitWithPadding() {
     check(hitTest(&root, 100, 50) == &root, "hit root content area");
 }
 
+static void testHitFixedEscapesScrollingAncestor() {
+    printf("--- HitTest: position:fixed escapes an ancestor's overflow ---\n");
+    // The submenu pattern: a scrolling menu panel whose rows carry a
+    // `position: fixed` flyout positioned to hang beside the panel. A fixed
+    // box's containing block is the viewport, so the panel's overflow cannot
+    // clip it — and if it does, the flyout neither paints nor takes clicks,
+    // which is exactly how the three.js editor's Add > Mesh > Box stopped
+    // working.
+    HitMockNode root; initBlock(root, "div");
+    root.style["width"] = "600px"; root.style["height"] = "600px";
+
+    HitMockNode panel; initBlock(panel, "div");
+    panel.style["position"] = "absolute";
+    panel.style["left"] = "100px"; panel.style["top"] = "100px";
+    panel.style["width"] = "150px"; panel.style["height"] = "150px";
+    panel.style["overflow"] = "auto";
+
+    HitMockNode row; initBlock(row, "div");
+    row.style["height"] = "35px";
+
+    HitMockNode flyout; initBlock(flyout, "div");
+    flyout.style["position"] = "fixed";
+    flyout.style["left"] = "300px"; flyout.style["top"] = "100px";
+    flyout.style["width"] = "150px"; flyout.style["height"] = "35px";
+
+    row.addChild(&flyout);
+    panel.addChild(&row);
+    root.addChild(&panel);
+
+    HitTextMetrics m;
+    layoutTree(&root, 600, m);
+
+    check(hitTest(&root, 375, 117) == &flyout,
+          "a fixed flyout outside its scrolling ancestor is hittable");
+    check(hitTest(&root, 175, 117) == &row,
+          "and the panel's own content still hits normally");
+    // Inside the panel's horizontal span but below its box: still clipped.
+    check(hitTest(&root, 175, 400) == &root,
+          "content the panel really does clip is still rejected");
+
+    // A transform on the panel makes it the containing block for fixed
+    // descendants, so its clip applies after all.
+    panel.style["transform"] = "translateX(0px)";
+    layoutTree(&root, 600, m);
+    check(hitTest(&root, 375, 117) != &flyout,
+          "a transformed ancestor becomes the fixed containing block and clips");
+    panel.style["transform"] = "none";
+
+    // Same shape with position:absolute. It escapes only while nothing between
+    // it and the clipper is positioned — the clipper here is, so it does not.
+    flyout.style["position"] = "absolute";
+    layoutTree(&root, 600, m);
+    check(hitTest(&root, 375, 117) != &flyout,
+          "an abspos inside a positioned clipper is clipped by it");
+
+    // Make the clipper static and the abspos escapes, same as the fixed one.
+    panel.style["position"] = "static";
+    panel.style["margin-left"] = "100px";
+    panel.style["margin-top"] = "100px";
+    layoutTree(&root, 600, m);
+    check(hitTest(&root, 375, 117) == &flyout,
+          "an abspos escapes a static clipper, whose box is not its containing block");
+}
+
 static void testHitBodyOverflowPropagation() {
     printf("--- HitTest: body overflow propagates to the viewport ---\n");
     // CSS 2.1 §11.1.1. `body { overflow: hidden }` with everything inside it
@@ -213,13 +277,24 @@ static void testHitBodyOverflowPropagation() {
     check(hitTest(&html, 100, 16) == &bar,
           "absolutely positioned child of an overflow:hidden body is hittable");
 
-    // The donation only reaches <body> while the root is itself visible. Give
-    // the root a clip of its own and it keeps it — and a zero-height root then
-    // legitimately swallows the point.
+    // Giving the root a clip of its own stops the donation to <body> — but it
+    // changes nothing for `bar`, and that is the point. An ancestor's overflow
+    // only clips descendants whose containing block is that ancestor or inside
+    // it; `bar` has no positioned ancestor, so its containing block is the
+    // initial one, above both boxes. What clips it then is the viewport, which
+    // is the engine's window, not a layout box here.
     html.style["overflow"] = "hidden";
     layoutTree(&html, 200, m);
+    check(hitTest(&html, 100, 16) == &bar,
+          "an abspos with no positioned ancestor escapes both boxes' overflow");
+
+    // Make the clipper the containing block and the clip applies again — this
+    // is the half of the rule that still has to bite.
+    body.style["position"] = "relative";
+    layoutTree(&html, 200, m);
     check(hitTest(&html, 100, 16) == nullptr,
-          "an overflow:hidden root still clips (it is the donor, not a donee)");
+          "a positioned overflow:hidden ancestor IS the containing block, so it clips");
+    body.style["position"] = "static";
 }
 
 static void testHitBlockInInlineRegrow() {
@@ -274,6 +349,7 @@ void testHitTest() {
     testHitPointerEventsNoneParent();
     testHitWithPadding();
     testHitBodyOverflowPropagation();
+    testHitFixedEscapesScrollingAncestor();
     testHitBlockInInlineRegrow();
     testHitNull();
 }
