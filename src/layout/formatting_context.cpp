@@ -1320,9 +1320,26 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
         if (h > 0) child->box.contentRect.height = h;
     }
 
-    // Compute position in containing-block-relative space
-    float xInCB = child->box.margin.left + child->box.padding.left + child->box.border.left;
-    float yInCB = child->box.margin.top + child->box.padding.top + child->box.border.top;
+    // Compute position in containing-block-relative space.
+    //
+    // With both offsets on an axis `auto` the box goes at its static position
+    // (CSS 2.1 §10.3.7): where it would have started in the flow, which the
+    // in-flow pass recorded in the DOM parent's coordinates. Falling back to
+    // the containing block's origin — as this did before there was a static
+    // position to read — is what dropped every offset-less dropdown into the
+    // corner of its containing block instead of under the control that owns it.
+    // A pass that skipped the parent's flow wrote no fresh static position;
+    // the one from the pass that last laid that flow out still describes where
+    // the box belongs, and it is expressed in the parent's coordinates, which
+    // are re-derived below. Only a box the flow has never reached has none.
+    const bool haveStatic = child->staticPosPass != 0;
+    const float staticInCBX = child->staticPosX + domParentOffsetX - cbOriginOffsetX;
+    const float staticInCBY = child->staticPosY + domParentOffsetY - cbOriginOffsetY;
+
+    float xInCB = (haveStatic ? staticInCBX : 0.0f) +
+                  child->box.margin.left + child->box.padding.left + child->box.border.left;
+    float yInCB = (haveStatic ? staticInCBY : 0.0f) +
+                  child->box.margin.top + child->box.padding.top + child->box.border.top;
 
     if (left) {
         xInCB = *left + child->box.margin.left + child->box.padding.left + child->box.border.left;

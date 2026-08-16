@@ -222,6 +222,24 @@ struct LayoutNode {
     // Used as fallback for absolute elements whose containing block has no definite height.
     float viewportHeight = 0;
 
+    // ---- Static position (CSS 2.1 §10.3.7 / §10.6.4) ----
+    //
+    // Where this out-of-flow box *would* have started had it been `static`:
+    // the margin edge of its hypothetical in-flow box, in its DOM parent's
+    // content-area coordinates. An absolute or fixed box whose offsets on an
+    // axis are both `auto` is placed there — not at its containing block's
+    // origin, which is the mistake that puts every `position:fixed` dropdown
+    // with no `left` in the top-left corner of the window instead of under the
+    // menu that owns it.
+    //
+    // Written by the in-flow pass at the point it skips the box (block.cpp),
+    // read by layoutAbsoluteElements(). `staticPosPass` is the layout pass that
+    // wrote it: a box whose parent's flow did not run this pass has no fresh
+    // static position, and the previous one is used rather than nothing.
+    float staticPosX = 0.0f;
+    float staticPosY = 0.0f;
+    uint32_t staticPosPass = 0;
+
     // ---- Incremental layout ----
     //
     // The inputs of the pass that produced `box`. Everything layout learns

@@ -605,6 +605,13 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         };
         std::vector<IFCItem> items;
 
+        // Out-of-flow children of this inline formatting context, paired with
+        // the index of the item they preceded. Their static position (CSS 2.1
+        // §10.3.7) is the top of the line that item lands on, which is only
+        // known once the lines have been broken and placed.
+        struct PendingStatic { LayoutNode* node; size_t itemIndex; };
+        std::vector<PendingStatic> pendingStatic;
+
         // Letter/word-spacing for the block's own text (a collapsed space
         // between words carries letter-spacing after it plus word-spacing).
         float ls = resolveLength(styleVal(node, Prop::LetterSpacing), 0, fontSize);
@@ -746,7 +753,14 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 const std::string& d = styleVal(child, Prop::Display);
                 if (d == "none") { child->box = LayoutBox{}; continue; }
                 const std::string& cp = styleVal(child, Prop::Position);
-                if (cp == "absolute" || cp == "fixed") continue;
+                if (cp == "absolute" || cp == "fixed") {
+                    // Out of flow: no item, but remember where in the item
+                    // sequence it sat so its static position can be read off
+                    // the line that ends up carrying that item. See
+                    // LayoutNode::staticPosX.
+                    pendingStatic.push_back({child, items.size()});
+                    continue;
+                }
                 if ((child->tagName() == "br" || child->tagName() == "BR")) {
                     child->box = LayoutBox{};
                     // Record natural font line-height so getBoundingClientRect
@@ -1127,6 +1141,20 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // Position items per line with text-align offset
         for (size_t lineIdx = 0; lineIdx < lines.size(); lineIdx++) {
             auto& line = lines[lineIdx];
+
+            // Any out-of-flow child that sat before this line's last item
+            // starts here as far as the flow is concerned: a block-level
+            // hypothetical box would have broken the line, and an inline-level
+            // one keeps the line's left edge. Assign at the line's top, before
+            // cursorY advances past it.
+            for (auto& ps : pendingStatic) {
+                if (ps.node && ps.itemIndex < line.end) {
+                    ps.node->staticPosX = 0.0f;
+                    ps.node->staticPosY = cursorY;
+                    ps.node->staticPosPass = currentLayoutPass();
+                    ps.node = nullptr;
+                }
+            }
             bool isLastLine = (lineIdx == lines.size() - 1);
             float extraSpace = childAvailable - line.totalWidth;
             if (lineIdx == 0) extraSpace -= textIndent;
@@ -1268,6 +1296,15 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     cursorX += spaceExtra;
             }
             cursorY += line.maxHeight;
+        }
+
+        // Trailing out-of-flow children — nothing followed them, so they start
+        // below the last line.
+        for (auto& ps : pendingStatic) {
+            if (!ps.node) continue;
+            ps.node->staticPosX = 0.0f;
+            ps.node->staticPosY = cursorY;
+            ps.node->staticPosPass = currentLayoutPass();
         }
 
         // The block's own baseline: the last line box's baseline, measured
@@ -1432,8 +1469,20 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Helper: flush accumulated inline children as an anonymous line box
     std::vector<LayoutNode*> pendingInline;
+    // Out-of-flow children seen while an inline run was open. Their static
+    // position is only known once the run has been placed, so it is assigned
+    // at the end of the flush. See LayoutNode::staticPosX.
+    std::vector<LayoutNode*> pendingStatic;
     auto flushInlineRun = [&]() {
-        if (pendingInline.empty()) return;
+        if (pendingInline.empty()) {
+            for (LayoutNode* oof : pendingStatic) {
+                oof->staticPosX = 0.0f;
+                oof->staticPosY = cursorY;
+                oof->staticPosPass = currentLayoutPass();
+            }
+            pendingStatic.clear();
+            return;
+        }
 
         // First pass: measure all items and build line structure
         struct AnonItem {
@@ -1925,6 +1974,17 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             cursorY += line.maxHeight;
         }
         pendingInline.clear();
+        // Out-of-flow boxes that appeared inside this run take their static
+        // position from where the flow stands now — below the lines that
+        // preceded them. A block-level hypothetical box would have broken the
+        // line anyway; an inline-level one keeps the line's left edge rather
+        // than its inline cursor, which is the one simplification here.
+        for (LayoutNode* oof : pendingStatic) {
+            oof->staticPosX = 0.0f;
+            oof->staticPosY = cursorY;
+            oof->staticPosPass = currentLayoutPass();
+        }
+        pendingStatic.clear();
     };
 
     // Fieldset with a rendered legend (CSS rendering §fieldset): the first
@@ -1999,8 +2059,20 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         const std::string& childPos = styleVal(child, Prop::Position);
 
         // Absolutely and fixed positioned children are out of flow
-        // (positioned by the post-layout absolute positioning pass)
-        if (childPos == "absolute" || childPos == "fixed") continue;
+        // (positioned by the post-layout absolute positioning pass). Record
+        // the static position on the way past: with both offsets on an axis
+        // `auto`, that pass has nothing else to place the box against.
+        if (childPos == "absolute" || childPos == "fixed") {
+            if (pendingInline.empty()) {
+                child->staticPosX = 0.0f;
+                child->staticPosY = cursorY;
+                child->staticPosPass = currentLayoutPass();
+            } else {
+                // Mid-run: the lines above it have not been placed yet.
+                pendingStatic.push_back(child);
+            }
+            continue;
+        }
 
         bool childCollapsed =
             styleVal(child, Prop::XFlowCollapse) == "collapse";

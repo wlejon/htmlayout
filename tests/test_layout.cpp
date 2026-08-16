@@ -1028,6 +1028,172 @@ static void testNestedAbsolute() {
     check(approx(inner.box.contentRect.y, 10.0f), "nested abs: inner y = 10");
 }
 
+// CSS 2.1 §10.3.7 / §10.6.4: with both offsets on an axis `auto`, an
+// out-of-flow box goes at its static position — where its hypothetical in-flow
+// box would have started — not at the containing block's origin. Three flows
+// reach an out-of-flow child by three different code paths, so all three are
+// checked: a pure block run, an inline formatting context (the block's own IFC
+// branch), and an inline run inside a block formatting context.
+static void testStaticPositionAfterBlock() {
+    printf("--- Layout: static position after a block sibling ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.style["position"] = "relative";
+    root.setWidth("300px");
+    root.setHeight("100px");
+
+    MockLayoutNode spacer;
+    initBlock(spacer);
+    spacer.setHeight("20px");
+
+    MockLayoutNode abs;
+    initBlock(abs);
+    abs.style["position"] = "absolute";
+    abs.setWidth("50px");
+    abs.setHeight("10px");
+
+    root.addChild(&spacer);
+    root.addChild(&abs);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    check(approx(abs.box.contentRect.x, 0.0f), "static pos (block): x = 0");
+    check(approx(abs.box.contentRect.y, 20.0f),
+          "static pos (block): y below the 20px sibling");
+}
+
+static void testStaticPositionAfterInlineBlock() {
+    printf("--- Layout: static position after an inline-block sibling ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.style["position"] = "relative";
+    root.setWidth("300px");
+    root.setHeight("100px");
+
+    // An inline-block sibling makes the parent run its inline formatting
+    // context instead of the block one.
+    MockLayoutNode title;
+    initBlock(title, "span");
+    title.setDisplay("inline-block");
+    title.setHeight("30px");
+    title.setWidth("40px");
+
+    MockLayoutNode abs;
+    initBlock(abs);
+    abs.style["position"] = "absolute";
+    abs.setWidth("50px");
+    abs.setHeight("10px");
+
+    root.addChild(&title);
+    root.addChild(&abs);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    check(approx(abs.box.contentRect.x, 0.0f),
+          "static pos (inline-block): x = 0");
+    // The line box is the inline-block's height plus the strut's descent
+    // below the baseline it sits on, so the static position is just below the
+    // sibling — the point being that it is not 0.
+    check(abs.box.contentRect.y >= title.box.contentRect.height &&
+          abs.box.contentRect.y < title.box.contentRect.height + 8.0f,
+          "static pos (inline-block): y below the line the sibling made");
+}
+
+static void testStaticPositionAfterText() {
+    printf("--- Layout: static position after inline text ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.style["position"] = "relative";
+    root.setWidth("300px");
+    root.setHeight("100px");
+
+    MockLayoutNode text;
+    text.isText = true;
+    text.text = "hello";
+
+    MockLayoutNode abs;
+    initBlock(abs);
+    abs.style["position"] = "absolute";
+    abs.setWidth("50px");
+    abs.setHeight("10px");
+
+    root.addChild(&text);
+    root.addChild(&abs);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    // MockTextMetrics reports 16 * 1.2 = 19.2px for a line of 16px text.
+    check(approx(abs.box.contentRect.x, 0.0f), "static pos (text): x = 0");
+    check(abs.box.contentRect.y > 0.0f,
+          "static pos (text): y below the text line");
+}
+
+static void testStaticPositionFixedDropdown() {
+    printf("--- Layout: fixed dropdown lands under its trigger ---\n");
+    // The shape every menu bar has: a floated menu whose title is inline-block
+    // and whose options panel is position:fixed with no offsets. Both menus
+    // must get their own position, not the viewport corner.
+    MockLayoutNode bar;
+    initBlock(bar);
+    bar.setWidth("400px");
+    bar.setHeight("32px");
+
+    MockLayoutNode menu1, title1, opts1;
+    initBlock(menu1);
+    menu1.style["float"] = "left";
+    initBlock(title1);
+    title1.setDisplay("inline-block");
+    title1.setWidth("40px");
+    title1.setHeight("32px");
+    initBlock(opts1);
+    opts1.style["position"] = "fixed";
+    opts1.setWidth("150px");
+    opts1.setHeight("18px");
+    menu1.addChild(&title1);
+    menu1.addChild(&opts1);
+
+    MockLayoutNode menu2, title2, opts2;
+    initBlock(menu2);
+    menu2.style["float"] = "left";
+    initBlock(title2);
+    title2.setDisplay("inline-block");
+    title2.setWidth("60px");
+    title2.setHeight("32px");
+    initBlock(opts2);
+    opts2.style["position"] = "fixed";
+    opts2.setWidth("150px");
+    opts2.setHeight("18px");
+    menu2.addChild(&title2);
+    menu2.addChild(&opts2);
+
+    bar.addChild(&menu1);
+    bar.addChild(&menu2);
+
+    MockTextMetrics metrics;
+    Viewport vp{800.0f, 600.0f};
+    layoutTree(&bar, vp, metrics);
+
+    // Boxes are stored relative to their DOM parent, so "under my own title"
+    // is y past the title's line and x at the menu's own content edge. Before
+    // the static position existed both panels landed at (0, 0) — the viewport
+    // corner — on top of each other and of the menu bar.
+    check(opts1.box.contentRect.y >= 32.0f, "dropdown 1: y under its title");
+    check(opts2.box.contentRect.y >= 32.0f, "dropdown 2: y under its title");
+    check(approx(opts1.box.contentRect.y, opts2.box.contentRect.y),
+          "both dropdowns hang off the same menu-bar row");
+    check(approx(opts1.box.contentRect.x, 0.0f),
+          "dropdown 1: x at its own menu's content edge");
+    check(approx(opts2.box.contentRect.x, 0.0f),
+          "dropdown 2: x at its own menu's content edge");
+    // The second menu is floated past the first, so the same parent-relative x
+    // is a different place on screen: the panels do not stack.
+    check(menu2.box.contentRect.x > menu1.box.contentRect.x,
+          "the two menus (and so their panels) sit side by side");
+}
+
 // ========== Entry point ==========
 
 void testLayout() {
@@ -1081,4 +1247,10 @@ void testLayout() {
     testFixedStretchToViewport();
     testAbsoluteNoPositionedAncestor();
     testNestedAbsolute();
+
+    // Static position (offsets omitted)
+    testStaticPositionAfterBlock();
+    testStaticPositionAfterInlineBlock();
+    testStaticPositionAfterText();
+    testStaticPositionFixedDropdown();
 }

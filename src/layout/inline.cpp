@@ -568,7 +568,15 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     auto& cs = child->computedStyle();
                     if (styleVal(child, Prop::Display) == "none") { child->box = LayoutBox{}; continue; }
                     const std::string& childPos = styleVal(child, Prop::Position);
-                    if (childPos == "absolute" || childPos == "fixed") continue;
+                    if (childPos == "absolute" || childPos == "fixed") {
+                        // Out of flow: record the static position it would have
+                        // had (LayoutNode::staticPosX). A block-level box breaks
+                        // the line, so it starts below whatever is on this one.
+                        child->staticPosX = 0.0f;
+                        child->staticPosY = cursorY + (cursorX > 0 ? lineMaxH : 0.0f);
+                        child->staticPosPass = currentLayoutPass();
+                        continue;
+                    }
                     layoutNode(child, contentAvail, metrics);
                     float cw = child->box.fullWidth() + child->box.margin.left + child->box.margin.right;
                     float ch = child->box.fullHeight() + child->box.margin.top + child->box.margin.bottom;
@@ -743,7 +751,13 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 auto& cs = child->computedStyle();
                 if (styleVal(child, Prop::Display) == "none") { child->box = LayoutBox{}; continue; }
                 const std::string& childPos = styleVal(child, Prop::Position);
-                if (childPos == "absolute" || childPos == "fixed") continue;
+                if (childPos == "absolute" || childPos == "fixed") {
+                    // Out of flow: keep the position it would have stacked at.
+                    child->staticPosX = 0.0f;
+                    child->staticPosY = cursorY;
+                    child->staticPosPass = currentLayoutPass();
+                    continue;
+                }
                 layoutNode(child, contentAvail, metrics);
                 child->box.contentRect.x = child->box.margin.left + child->box.padding.left + child->box.border.left;
                 child->box.contentRect.y = cursorY + child->box.padding.top + child->box.border.top;
@@ -780,6 +794,10 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     // Pure inline element: collect all children into line items
     float contentAvail = availableWidth - paddingH - borderH;
     std::vector<LineItem> allItems;
+    // Out-of-flow children of this inline formatting context, each tagged with
+    // the number of line items that preceded it. See LayoutNode::staticPosX.
+    struct PendingStatic { LayoutNode* node; size_t itemIndex; };
+    std::vector<PendingStatic> pendingStatic;
 
     // Font ascent for this element's own text runs: their baseline within
     // the run box (natural font height) sits `ascent` below the run top.
@@ -858,7 +876,14 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             }
 
             const std::string& childPos = styleVal(child, Prop::Position);
-            if (childPos == "absolute" || childPos == "fixed") continue;
+            if (childPos == "absolute" || childPos == "fixed") {
+                // Out of flow, but remember where in the run it sat: with both
+                // offsets on an axis `auto` it is placed at its static position,
+                // and only this pass knows what that is. Resolved against the
+                // line boxes once they are placed (see pendingStatic below).
+                pendingStatic.push_back({child, allItems.size()});
+                continue;
+            }
 
             if ((child->tagName() == "br" || child->tagName() == "BR")) {
                 // Forced line break
@@ -1095,6 +1120,30 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         }
 
         cursorY += line.maxHeight;
+    }
+
+    // Static positions for the out-of-flow children seen along the way.
+    //
+    // The hypothetical box is block-level in the case that matters — a
+    // dropdown, a tooltip, a popover, all `position:absolute|fixed` with no
+    // offsets, sitting after some inline content inside their trigger — so it
+    // starts at the content-left edge, on the line after the content that
+    // preceded it. A child recorded past the last item lands below every line.
+    if (!pendingStatic.empty()) {
+        for (const auto& ps : pendingStatic) {
+            float y = 0.0f;
+            size_t seen = 0;
+            bool placed = false;
+            for (const auto& line : lineBoxes) {
+                if (ps.itemIndex <= seen) { placed = true; break; }
+                seen += line.items.size();
+                y += line.maxHeight;
+            }
+            if (!placed && ps.itemIndex >= seen) y = cursorY;
+            ps.node->staticPosX = 0.0f;
+            ps.node->staticPosY = y;
+            ps.node->staticPosPass = currentLayoutPass();
+        }
     }
 
     // Set node dimensions
