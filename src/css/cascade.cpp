@@ -862,24 +862,55 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
-    // 9. Blockification (CSS Display §2.7): a flex or grid item's computed
-    //    display is block-level. Inline-level display values on children of
-    //    flex/grid containers compute to their block-level equivalents
-    //    (inline → block, inline-flex → flex, ...). display:none and
-    //    display:contents are unaffected. This happens at computed-value time,
-    //    so getComputedStyle reports the blockified value (matches Chromium),
-    //    and layout routes the item through block/flex/grid/table layout —
-    //    which is what lets e.g. a percentage height on a <span> flex item
-    //    resolve instead of being ignored by inline layout.
-    if (parentStyle) {
-        auto pd = parentStyle->find("display");
-        if (pd != parentStyle->end() &&
-            (pd->second == "flex" || pd->second == "inline-flex" ||
-             pd->second == "grid" || pd->second == "inline-grid")) {
-            auto it = style.find("display");
-            // Absent key = initial value "inline" (non-inherited defaults are
-            // not stored in the map — see the note below).
-            const std::string d = (it != style.end()) ? it->second : "inline";
+    // 9. Blockification (CSS Display §2.7). Inline-level display values compute
+    //    to their block-level equivalents (inline → block, inline-flex → flex,
+    //    ...) whenever the box is required to be block-level. display:none and
+    //    display:contents are never transformed. This happens at computed-value
+    //    time, so getComputedStyle reports the blockified value (matches
+    //    Chromium), and layout routes the box through block/flex/grid/table
+    //    layout — which is what lets e.g. a percentage height on a <span> flex
+    //    item resolve instead of being ignored by inline layout.
+    //
+    //    Four triggers, per spec:
+    //      a. flex / grid items,
+    //      b. absolutely positioned boxes (position: absolute | fixed),
+    //      c. floats (float: left | right | inline-start | inline-end).
+    //    The root element is the fourth trigger in the spec; it is left to the
+    //    UA stylesheet (`html { display: block }`) because this function cannot
+    //    identify the root - a null parentStyle also means "resolve this
+    //    element standalone", which is how callers style detached subtrees.
+    //    (b) and (c) matter as much as (a): an out-of-flow <span> that stays
+    //    `display: inline` gets laid out by the inline path, where width/height
+    //    do not apply — it collapses to a zero-size box instead of honouring
+    //    its inset/size properties.
+    {
+        // Absent key = initial value (non-inherited defaults are not stored in
+        // the map — see the note below).
+        auto own = [&](const char* k, const char* dflt) -> std::string {
+            auto it = style.find(k);
+            return (it != style.end()) ? it->second : std::string(dflt);
+        };
+
+        bool blockify = false;
+
+        if (parentStyle) {
+            auto pd = parentStyle->find("display");
+            if (pd != parentStyle->end() &&
+                (pd->second == "flex" || pd->second == "inline-flex" ||
+                 pd->second == "grid" || pd->second == "inline-grid"))
+                blockify = true;  // (a)
+        }
+        if (!blockify) {
+            const std::string pos = own("position", "static");
+            if (pos == "absolute" || pos == "fixed") blockify = true;  // (b)
+        }
+        if (!blockify) {
+            const std::string fl = own("float", "none");
+            if (fl == "left" || fl == "right" || fl == "inline-start" ||
+                fl == "inline-end") blockify = true;  // (c)
+        }
+        if (blockify) {
+            const std::string d = own("display", "inline");
             if (d == "inline" || d == "inline-block") style["display"] = "block";
             else if (d == "inline-table") style["display"] = "table";
             else if (d == "inline-flex") style["display"] = "flex";

@@ -757,6 +757,90 @@ static void testTableSpanAttributes() {
           "cascade: colspan below 1 ignored");
 }
 
+static void testOutOfFlowBlockification() {
+    printf("--- Cascade: out-of-flow blockification ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse(
+        ".abs { position: absolute; }\n"
+        ".fixed { position: fixed; }\n"
+        ".rel { position: relative; }\n"
+        ".sticky { position: sticky; }\n"
+        ".fl { float: left; }\n"
+        ".fr { float: right; }\n"
+        ".fs { float: inline-start; }\n"
+        ".fnone { float: none; }\n"
+        ".absib { position: absolute; display: inline-block; }\n"
+        ".absif { position: absolute; display: inline-flex; }\n"
+        ".absit { position: absolute; display: inline-table; }\n"
+        ".absig { position: absolute; display: inline-grid; }\n"
+        ".absnone { position: absolute; display: none; }\n"
+        ".abscontents { position: absolute; display: contents; }\n"
+        ".absblock { position: absolute; display: block; }\n"
+    ));
+
+    // The bug this guards: an abspos <span> that kept display:inline was laid
+    // out by the inline path, where width/height do not apply, so every
+    // absolutely-positioned bar fill collapsed to a zero-size box.
+    MockElement abs; abs.tag = "span"; abs.classes = "abs";
+    check(sv(cascade.resolve(abs), "display") == "block",
+          "cascade: position:absolute span blockified to block");
+    MockElement fx; fx.tag = "span"; fx.classes = "fixed";
+    check(sv(cascade.resolve(fx), "display") == "block",
+          "cascade: position:fixed span blockified to block");
+
+    MockElement fl; fl.tag = "span"; fl.classes = "fl";
+    check(sv(cascade.resolve(fl), "display") == "block",
+          "cascade: float:left span blockified to block");
+    MockElement fr; fr.tag = "span"; fr.classes = "fr";
+    check(sv(cascade.resolve(fr), "display") == "block",
+          "cascade: float:right span blockified to block");
+    MockElement fs; fs.tag = "span"; fs.classes = "fs";
+    check(sv(cascade.resolve(fs), "display") == "block",
+          "cascade: float:inline-start span blockified to block");
+
+    // In-flow positioning schemes and float:none leave display alone.
+    MockElement rel; rel.tag = "span"; rel.classes = "rel";
+    check(sv(cascade.resolve(rel), "display") == "inline",
+          "cascade: position:relative span stays inline");
+    MockElement st; st.tag = "span"; st.classes = "sticky";
+    check(sv(cascade.resolve(st), "display") == "inline",
+          "cascade: position:sticky span stays inline");
+    MockElement fn; fn.tag = "span"; fn.classes = "fnone";
+    check(sv(cascade.resolve(fn), "display") == "inline",
+          "cascade: float:none span stays inline");
+
+    // Every inline-level value maps to its block-level equivalent.
+    MockElement aib; aib.tag = "span"; aib.classes = "absib";
+    check(sv(cascade.resolve(aib), "display") == "block",
+          "cascade: abspos inline-block blockified to block");
+    MockElement aif; aif.tag = "span"; aif.classes = "absif";
+    check(sv(cascade.resolve(aif), "display") == "flex",
+          "cascade: abspos inline-flex blockified to flex");
+    MockElement ait; ait.tag = "span"; ait.classes = "absit";
+    check(sv(cascade.resolve(ait), "display") == "table",
+          "cascade: abspos inline-table blockified to table");
+    MockElement aig; aig.tag = "span"; aig.classes = "absig";
+    check(sv(cascade.resolve(aig), "display") == "grid",
+          "cascade: abspos inline-grid blockified to grid");
+
+    // none/contents are never transformed; block-level values pass through.
+    MockElement an; an.tag = "span"; an.classes = "absnone";
+    check(sv(cascade.resolve(an), "display") == "none",
+          "cascade: abspos display:none not blockified");
+    MockElement ac; ac.tag = "span"; ac.classes = "abscontents";
+    check(sv(cascade.resolve(ac), "display") == "contents",
+          "cascade: abspos display:contents not blockified");
+    MockElement ab; ab.tag = "span"; ab.classes = "absblock";
+    check(sv(cascade.resolve(ab), "display") == "block",
+          "cascade: abspos display:block unchanged");
+
+    // A standalone element resolved with a null parentStyle must NOT be
+    // treated as the root: nullptr also means "style this detached subtree".
+    MockElement plain; plain.tag = "span";
+    check(sv(cascade.resolve(plain), "display") == "inline",
+          "cascade: null parentStyle alone does not blockify");
+}
+
 static void testBlockification() {
     printf("--- Cascade: flex/grid item blockification ---\n");
     Cascade cascade;
@@ -964,5 +1048,6 @@ void testCascade() {
     testImportWithLayer();
     testTableSpanAttributes();
     testBlockification();
+    testOutOfFlowBlockification();
     testMonospaceDefaultFontSize();
 }

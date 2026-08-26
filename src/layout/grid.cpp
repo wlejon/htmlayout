@@ -30,7 +30,7 @@ struct TrackSize {
     bool isMinmax = false;
     // The track's min sizing function is auto/min-content: a flexible track's
     // base size then floors at its items' min-content contributions (Grid
-    // §11.8 — the "automatic minimum"). Plain `1fr` means minmax(auto, 1fr).
+    // §11.8 - the "automatic minimum"). Plain `1fr` means minmax(auto, 1fr).
     bool minIsAuto = false;
 };
 
@@ -110,7 +110,7 @@ std::vector<std::string> tokenizeTrackList(const std::string& value) {
     for (size_t i = 0; i < value.size(); i++) {
         char c = value[i];
         if (c == '[' && parenDepth == 0) {
-            // Start of named line — collect until ']'
+            // Start of named line - collect until ']'
             if (!current.empty()) { tokens.push_back(current); current.clear(); }
             current += c;
             inBracket = true;
@@ -282,7 +282,7 @@ std::vector<TrackSize> parseTrackList(const std::string& value, float available,
 // Distributes fr units among remaining space after fixed tracks are resolved.
 // minContributions (parallel to tracks; may be empty) carries the items'
 // min-content contributions per track: a flexible track whose min sizing
-// function is auto cannot end up smaller than that (Grid §11.8/§12.7) —
+// function is auto cannot end up smaller than that (Grid §11.8/§12.7) -
 // even if that overflows the grid container, matching Chromium.
 std::vector<float> resolveTrackSizes(const std::vector<TrackSize>& tracks,
                                       float available, float gap,
@@ -323,8 +323,8 @@ std::vector<float> resolveTrackSizes(const std::vector<TrackSize>& tracks,
     if (freeSpace < 0) freeSpace = 0;
 
     if (totalFr > 0) {
-        // Each flexible track has a floor: an explicit minmax() minimum, or —
-        // when its min sizing function is auto — its items' min-content
+        // Each flexible track has a floor: an explicit minmax() minimum, or -
+        // when its min sizing function is auto - its items' min-content
         // contributions. Find the fr unit iteratively (Grid §12.7.1): any
         // track whose fr share falls below its floor is frozen at the floor
         // and removed from the distribution, then the unit is recomputed.
@@ -507,7 +507,7 @@ GridLineRef parseGridLineRef(const std::string& val) {
         rest = rest.substr(s);
         int n = 1;
         try { n = std::stoi(rest); } catch (...) {
-            // "span name" — span to a named line (not fully supported, treat as span 1)
+            // "span name" - span to a named line (not fully supported, treat as span 1)
             n = 1;
         }
         if (n < 1) n = 1;
@@ -581,7 +581,7 @@ GridPlacement parseGridPlacement(const LayoutNode* node,
         return gp;
     }
 
-    // Individual properties — resolve named lines
+    // Individual properties - resolve named lines
     auto resolveRow = [&](const std::string& val) {
         auto ref = parseGridLineRef(val);
         return resolveNamedLine(ref, rowLines);
@@ -641,7 +641,7 @@ float gridMaxContentWidth(LayoutNode* node, TextMetrics& metrics) {
     float fontSize = resolveLength(styleVal(node, Prop::FontSize), 16.0f, 16.0f);
     if (fontSize <= 0) fontSize = 16.0f;
 
-    // Widest in-flow item's outer max-content contribution — the stand-in
+    // Widest in-flow item's outer max-content contribution - the stand-in
     // for intrinsic (auto/fr/min-content/max-content) tracks. This is an
     // approximation: proper track sizing distributes items per column, but
     // for the common fit-content cases (fixed tracks, or a single intrinsic
@@ -801,15 +801,41 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     size_t numCols = colTracks.size();
     size_t numRows = rowTracks.size();
 
-    // If no explicit tracks, create implicit tracks based on item count
+    // No explicit column tracks: the explicit grid is zero columns wide and the
+    // implicit grid supplies the rest (CSS Grid section 8). Under the default
+    // `grid-auto-flow: row` that means ONE column - items stack downwards into
+    // implicit rows. It does NOT mean one column per item: sizing every item
+    // into its own column is what made a container with only
+    // `grid-template-rows` lay its children out side by side instead of in a
+    // single column. The count only grows past 1 for items that explicitly
+    // reach further (grid-column: 3, or a span).
+    //
+    // `grid-auto-flow: column` is the mirror image: there the implicit COLUMNS
+    // are the ones being generated, so the count has to stay open (the
+    // placement loop below uses numCols as its hard bound and would spin
+    // forever against a bound of 1).
     if (numCols == 0) {
-        // Auto-place: determine columns from sqrt of item count or explicit placements
-        size_t maxCol = 0;
+        const bool columnFlowEarly = (styleVal(node, Prop::GridAutoFlow) == "column");
+        size_t maxCol = 1;
         for (auto& item : items) {
-            if (item.placement.colStart > 0)
-                maxCol = std::max(maxCol, static_cast<size_t>(item.placement.colStart));
+            const auto& gp = item.placement;
+            // Explicit line: `grid-column-start: N` reaches column N.
+            if (gp.colStart > 0)
+                maxCol = std::max(maxCol, static_cast<size_t>(gp.colStart));
+            // Explicit end line: `grid-column-end: N` reaches column N-1.
+            if (gp.colEnd > 1)
+                maxCol = std::max(maxCol, static_cast<size_t>(gp.colEnd - 1));
+            // Span with a definite start, or a bare `span N` on an auto item.
+            if (gp.colStart > 0 && gp.colEnd < 0)
+                maxCol = std::max(maxCol, static_cast<size_t>(gp.colStart - gp.colEnd - 1));
+            else if (gp.colStart == 0 && gp.colEnd < 0)
+                maxCol = std::max(maxCol, static_cast<size_t>(-gp.colEnd));
+            if (gp.colStart < 0)
+                maxCol = std::max(maxCol, static_cast<size_t>(-gp.colStart));
         }
-        numCols = std::max(maxCol, items.empty() ? size_t(1) : std::max(size_t(1), items.size()));
+        numCols = columnFlowEarly
+            ? std::max(maxCol, items.empty() ? size_t(1) : items.size())
+            : maxCol;
     }
 
     // Resolve item placements
@@ -874,7 +900,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     size_t autoRow = 0, autoCol = 0;
     for (auto& item : items) {
         if (item.col >= 0 && item.row >= 0) {
-            // Already marked above — skip the marking that would re-do it.
+            // Already marked above - skip the marking that would re-do it.
             continue;
         }
         if (item.col < 0 && item.row < 0) {
@@ -950,7 +976,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         numRows = std::max(numRows, static_cast<size_t>(item.row + item.rowSpan));
     }
 
-    // Ensure we have enough track definitions — use grid-auto-columns/rows for implicit tracks
+    // Ensure we have enough track definitions - use grid-auto-columns/rows for implicit tracks
     while (colTracks.size() < numCols) {
         colTracks.push_back(autoColTrack);
     }
@@ -959,7 +985,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     // auto-fit: collapse empty repeated tracks (Grid §7.2.3.2). A collapsed
-    // track is fixed at 0 and its gutters collapse — equivalent, for sizing
+    // track is fixed at 0 and its gutters collapse - equivalent, for sizing
     // and positioning, to removing the track entirely, which also lets the
     // remaining flexible tracks absorb the freed space like Chromium does.
     auto collapseEmptyTracks = [&](std::vector<TrackSize>& tracks, size_t& count,
@@ -1004,7 +1030,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     for (auto& item : items) {
         float itemAvail = containerWidth / numCols; // rough estimate
         // The measure exists only to produce the two contributions read back
-        // below, and it is a pure function of (subtree, style, itemAvail) — the
+        // below, and it is a pure function of (subtree, style, itemAvail) - the
         // track sizes it feeds are computed after this loop, so nothing it sees
         // depends on them. Cache the two scalars per item, keyed by the width
         // they were taken at, so a clean item doesn't re-lay its whole subtree
@@ -1032,7 +1058,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Min-content contributions of items in flexible columns: a 1fr track
     // cannot shrink below its items' min-content contributions (Grid §11.8),
-    // even when that overflows the container — matching Chromium.
+    // even when that overflows the container - matching Chromium.
     std::vector<float> colMinSizes(numCols, 0);
     for (auto& item : items) {
         if (item.colSpan != 1 || item.col < 0 || item.col >= static_cast<int>(numCols))
@@ -1089,7 +1115,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         // Claim the item so we know whether the box below is one this pass
         // computed or one handed back from the last. beginLayoutNode returns
-        // false when the cached subtree is still valid for this width — then
+        // false when the cached subtree is still valid for this width - then
         // the box already holds the geometry this loop would have produced.
         bool laidNow = beginLayoutNode(item.node, itemWidth);
         if (laidNow) layoutNode(item.node, itemWidth, metrics);
@@ -1133,7 +1159,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // and there is leftover free space (no fr tracks consumed it), distribute
     // it equally across all Auto tracks. Default align-content is "normal"
     // which behaves as "stretch" for auto tracks. This matches Chromium for
-    // cases like a 200px grid with 1 implicit auto row — the row stretches
+    // cases like a 200px grid with 1 implicit auto row - the row stretches
     // to 200px instead of collapsing to content height.
     auto stretchAuto = [](std::vector<float>& sizes,
                           const std::vector<TrackSize>& tracks,
@@ -1196,7 +1222,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (rr > item.row) areaH += rowGap;
         }
 
-        // Stretch item to fill grid area (default behavior) — only when align-self resolves to stretch
+        // Stretch item to fill grid area (default behavior) - only when align-self resolves to stretch
         auto& cs = item.node->computedStyle();
         const std::string& h = styleVal(item.node, Prop::Height);
         std::string alignSelf = resolveAlign(styleVal(item.node, Prop::AlignSelf), containerAlignItems);
@@ -1209,7 +1235,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (ch > 0) {
                 // Judge "did the area stretch me past my content?" against the
                 // content height from the item's last real layout, not against
-                // the box — on a reused item the box already holds the stretched
+                // the box - on a reused item the box already holds the stretched
                 // height this same step wrote last pass, which would read as
                 // "didn't grow" and skip the re-layout that produced it.
                 float naturalH = item.node->gridNaturalContentH;
@@ -1294,7 +1320,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Natural (unconstrained) content height = sum of tracks plus inter-track gaps.
     // rowPositions[numRows] already excludes any trailing gap (the loop only adds
     // a gap when r+1 < numRows). Computed first so it survives any explicit height
-    // or parent-imposed clamp — consumers use this for scroll extent / overflow
+    // or parent-imposed clamp - consumers use this for scroll extent / overflow
     // detection.
     float naturalH = 0;
     if (numRows > 0) {

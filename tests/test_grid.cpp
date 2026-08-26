@@ -639,6 +639,75 @@ static void testGridSpanNRowSpan() {
     check(approx(a.box.contentRect.height, 120, 2), "grid row span 3: item spans 3 rows");
 }
 
+static void testGridRowsOnlySingleColumn() {
+    printf("--- Grid: grid-template-rows with no columns ---\n");
+    // The bug this guards: with no grid-template-columns the implicit column
+    // count was set to the ITEM COUNT, so a container declaring only
+    // grid-template-rows laid its children out side by side across one row
+    // instead of stacking them down a single full-width column.
+    GridNode grid; grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-rows"] = "30px 30px";
+    grid.style_["width"] = "200px";
+    grid.style_["gap"] = "0"; grid.style_["row-gap"] = "0"; grid.style_["column-gap"] = "0";
+
+    GridNode a; a.initBlock();
+    GridNode b; b.initBlock();
+    grid.addChild(&a); grid.addChild(&b);
+
+    GridMetrics m;
+    layoutTree(&grid, 400, m);
+
+    check(approx(a.box.contentRect.x, 0, 2), "rows-only: a at column start");
+    check(approx(b.box.contentRect.x, 0, 2), "rows-only: b in the same column as a");
+    check(approx(a.box.contentRect.width, 200, 2), "rows-only: a spans the full width");
+    check(approx(b.box.contentRect.width, 200, 2), "rows-only: b spans the full width");
+    check(approx(a.box.contentRect.y, 0, 2), "rows-only: a in row 1");
+    check(approx(b.box.contentRect.y, 30, 2), "rows-only: b in row 2");
+}
+
+static void testGridNoTemplateSingleColumn() {
+    printf("--- Grid: bare display:grid stacks in one column ---\n");
+    GridNode grid; grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["width"] = "180px";
+    grid.style_["gap"] = "0"; grid.style_["row-gap"] = "0"; grid.style_["column-gap"] = "0";
+
+    GridNode a; a.initBlock(); a.style_["height"] = "20px";
+    GridNode b; b.initBlock(); b.style_["height"] = "20px";
+    GridNode c; c.initBlock(); c.style_["height"] = "20px";
+    grid.addChild(&a); grid.addChild(&b); grid.addChild(&c);
+
+    GridMetrics m;
+    layoutTree(&grid, 400, m);
+
+    check(approx(a.box.contentRect.width, 180, 2), "no-template: a full width");
+    check(approx(c.box.contentRect.width, 180, 2), "no-template: c full width");
+    check(approx(b.box.contentRect.y, 20, 2), "no-template: b below a");
+    check(approx(c.box.contentRect.y, 40, 2), "no-template: c below b");
+}
+
+static void testGridRowsOnlyExplicitColumnExtends() {
+    printf("--- Grid: explicit column placement widens the implicit grid ---\n");
+    // An item that names a further column still gets one: the implicit column
+    // count floors at 1 but grows to cover explicit placements.
+    GridNode grid; grid.initBlock();
+    grid.style_["display"] = "grid";
+    grid.style_["grid-template-rows"] = "30px";
+    grid.style_["width"] = "200px";
+    grid.style_["gap"] = "0"; grid.style_["row-gap"] = "0"; grid.style_["column-gap"] = "0";
+
+    GridNode a; a.initBlock();
+    GridNode b; b.initBlock(); b.style_["grid-column-start"] = "2";
+    grid.addChild(&a); grid.addChild(&b);
+
+    GridMetrics m;
+    layoutTree(&grid, 400, m);
+
+    check(b.box.contentRect.x > a.box.contentRect.x,
+          "rows-only + explicit col: b sits right of a");
+}
+
 static void testGridAutoFlowColumn() {
     printf("--- Grid: auto-flow column ---\n");
     GridNode grid; grid.initBlock();
@@ -703,4 +772,7 @@ void testGridLayout() {
     testGridSpanN();
     testGridSpanNRowSpan();
     testGridAutoFlowColumn();
+    testGridRowsOnlySingleColumn();
+    testGridNoTemplateSingleColumn();
+    testGridRowsOnlyExplicitColumnExtends();
 }
