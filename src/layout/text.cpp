@@ -348,8 +348,31 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
             collapsed += words[i].text;
         }
         float w = measureWithSpacing(collapsed);
-        runs.push_back({collapsed, w, lineH,
-                        words.front().srcStart, words.back().srcEnd});
+        TextRun run{collapsed, w, lineH,
+                    words.front().srcStart, words.back().srcEnd};
+        // Edge white space collapses to ONE space, not to none — exactly as
+        // the wrapping path below keeps it. `nowrap` forbids the line break,
+        // not the space: "RNG " + <b>7/14</b> + " T" painted as RNG7/14T
+        // because the node's own trailing and leading spaces were scanned
+        // away here, while the intrinsic-width path (which reads the source
+        // edges) still counted them — a box one space wider than its text.
+        // The line builder trims a kept edge space that lands at a line edge.
+        bool hasLeading  = std::isspace(static_cast<unsigned char>(text.front()));
+        bool hasTrailing = std::isspace(static_cast<unsigned char>(text.back()));
+        if (hasLeading || hasTrailing) {
+            float spaceW = measureSpace();
+            if (hasLeading) {
+                run.text.insert(run.text.begin(), ' ');
+                run.width += spaceW;
+                run.srcStart = 0;
+            }
+            if (hasTrailing) {
+                run.text.push_back(' ');
+                run.width += spaceW;
+                run.srcEnd = static_cast<int>(text.size());
+            }
+        }
+        runs.push_back(std::move(run));
         return runs;
     }
 

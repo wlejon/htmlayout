@@ -716,7 +716,18 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                         // 0. This is independent of stretch — any item needs a
                         // definite CB height to resolve percentage heights.
                         item->node->availableHeight = containerCrossH;
-                        if (willStretch) {
+                        // Single-line only. An item stretches to its LINE, and
+                        // only in a single-line container is the line the
+                        // container. Pre-setting a wrapping container's items
+                        // to the container height made every line that tall —
+                        // and the auto-height case feeds the container's own
+                        // previous pass back in as "definite", so a wrapping
+                        // row inside a column flex grew fivefold per pass
+                        // (82 → 402 → 2002 → … 944,786px). Multi-line items
+                        // are stretched to their line's measured cross size
+                        // once the lines are known (the stretch branch of the
+                        // alignment loop below).
+                        if (willStretch && lines.size() == 1) {
                             // Auto-height stretch item: also pre-set contentRect
                             // height to the stretch height so the inner layout
                             // (e.g. a CSS Grid with 1fr rows or a nested flex
@@ -1091,26 +1102,41 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 }
                 crossPos = crossCursor;
             } else if (align == "baseline" && isRow) {
-                // Baseline alignment: compute item baseline as distance from
-                // outer top edge to the first text baseline (font-size from content top)
-                float childFontSize = resolveLength(styleVal(item->node, Prop::FontSize), fontSize, fontSize);
-                if (childFontSize <= 0) childFontSize = fontSize;
-                float itemBaseline = item->node->box.margin.top +
-                    item->node->box.border.top + item->node->box.padding.top + childFontSize;
+                // Baseline alignment: the distance from an item's outer top
+                // edge to its first text baseline. The item has been laid out
+                // by now, so when its inline content recorded a baseline
+                // (box.baselineOffset — a block's last line, which for the
+                // one-line labels this serves is also its first) that is the
+                // answer. Otherwise synthesize the first line's baseline from
+                // the item's own font the way the line builder places a run:
+                // half-leading, then the ascent. The old arithmetic used the
+                // font-size as the ascent and ignored line-height entirely,
+                // which sank a 10px key ~2px under a 15px value's baseline —
+                // by the whole font-size difference rather than by the
+                // difference in ascents.
+                auto itemBaselineOf = [&](auto* it) -> float {
+                    LayoutNode* n = it->node;
+                    float top = n->box.margin.top + n->box.border.top + n->box.padding.top;
+                    if (n->box.baselineOffset >= 0) return top + n->box.baselineOffset;
+                    LayoutNode* sn = n->isTextNode() ? node : n;
+                    float fs = resolveLength(styleVal(sn, Prop::FontSize), fontSize, fontSize);
+                    if (fs <= 0) fs = fontSize;
+                    const std::string& fam = styleVal(sn, Prop::FontFamily);
+                    const std::string& wt  = styleVal(sn, Prop::FontWeight);
+                    float lh  = resolveLineHeight(styleVal(sn, Prop::LineHeight), fs, fam, wt, metrics);
+                    float nat = metrics.naturalHeight(fam, fs, wt);
+                    float asc = metrics.ascent(fam, fs, wt);
+                    return top + std::floor((lh - nat) * 0.5f) + asc;
+                };
+                float itemBaseline = itemBaselineOf(item);
 
                 // Find max baseline in this line for baseline-aligned items
                 float maxBaseline = 0;
                 for (auto* li : line.items) {
-                    auto& lis = li->node->computedStyle();
                     const std::string& liSelf = styleVal(li->node, Prop::AlignSelf);
                     const std::string& liAlign = (liSelf == "auto" || liSelf.empty()) ? alignItems : liSelf;
-                    if (liAlign == "baseline") {
-                        float lfs = resolveLength(styleVal(li->node, Prop::FontSize), fontSize, fontSize);
-                        if (lfs <= 0) lfs = fontSize;
-                        float lb = li->node->box.margin.top +
-                            li->node->box.border.top + li->node->box.padding.top + lfs;
-                        maxBaseline = std::max(maxBaseline, lb);
-                    }
+                    if (liAlign == "baseline")
+                        maxBaseline = std::max(maxBaseline, itemBaselineOf(li));
                 }
                 crossPos = crossCursor + (maxBaseline - itemBaseline);
             } else if (align == "center") {

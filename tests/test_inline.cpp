@@ -868,6 +868,39 @@ static void testMaxContentKerningAcrossSpaces() {
 //   <span>AAA</span><span> BBB</span>     space leads the second box
 //   <span>AAA </span><span>BBB</span>     space trails the first
 //   <span>AAA</span> <span>BBB</span>     space is a text node between them
+static void testNowrapSeamWhitespace() {
+    printf("--- Inline: nowrap keeps the space at an inline seam ---\n");
+    // `white-space: nowrap` scanned a text node's edge spaces away where the
+    // wrapping path keeps them as one space, so "RNG " + <b>7/14</b> + " T"
+    // painted as RNG7/14T — while max-content (which reads the source edges)
+    // still counted both spaces. nowrap forbids the break, not the space.
+    FixedTextMetrics metrics;   // 10px per character
+    InlineMockNode root; initBlock(root);
+    root.style["white-space"] = "nowrap";
+    InlineMockNode t1; t1.isText = true; t1.text = "AAA ";
+    InlineMockNode b;  initInline(b);
+    InlineMockNode tb; tb.isText = true; tb.text = "BB";
+    InlineMockNode t2; t2.isText = true; t2.text = " C";
+    b.addChild(&tb);
+    root.addChild(&t1); root.addChild(&b); root.addChild(&t2);
+
+    layoutTree(&root, 500, metrics);
+    check(approx(b.box.contentRect.x, 40),
+          "nowrap: the trailing space before <b> is kept (<b> at x=40)");
+    check(t2.box.textRuns.size() == 1 && approx(t2.box.textRuns[0].x, 60) &&
+          approx(t2.box.textRuns[0].width, 20),
+          "nowrap: the leading space after <b> is kept (' C' at x=60, 20 wide)");
+    // A text node that is all edge: one space, not two, and not none.
+    InlineMockNode root2; initBlock(root2);
+    root2.style["white-space"] = "nowrap";
+    InlineMockNode u1; u1.isText = true; u1.text = "AAA ";
+    InlineMockNode u2; u2.isText = true; u2.text = " C";
+    root2.addChild(&u1); root2.addChild(&u2);
+    layoutTree(&root2, 500, metrics);
+    check(u2.box.textRuns.size() == 1 && approx(u2.box.textRuns[0].x, 40),
+          "nowrap: two edge spaces at one seam collapse to one");
+}
+
 static void testMaxContentInlineSeamWhitespace() {
     printf("--- Max-content: white space between inline boxes ---\n");
     FixedTextMetrics metrics;   // 10px per character, 20px line height
@@ -1000,5 +1033,6 @@ void testInlineLayout() {
     // Intrinsic-sizing ↔ layout consistency
     testMaxContentSingleLineConsistency();
     testMaxContentKerningAcrossSpaces();
+    testNowrapSeamWhitespace();
     testMaxContentInlineSeamWhitespace();
 }

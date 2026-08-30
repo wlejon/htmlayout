@@ -250,6 +250,87 @@ static void testFlexWrap() {
     check(approx(root.box.contentRect.height, 80), "wrap: container height = 2 lines × 40px");
 }
 
+static void testFlexWrapInsideColumn() {
+    printf("--- Flex: wrap inside a column flex ---\n");
+    // A wrapping row measured by a column-flex parent had its own previous
+    // height handed back to it as a definite cross size, and every
+    // default-stretch item was pre-set to that height before its layout: each
+    // line came out as tall as the whole row had been, and the row grew
+    // fivefold per pass (82 → 402 → 2002 → … 944,786px in a real sheet).
+    // Items must be auto-height for the pre-stretch to bite, so each holds
+    // one line of text (20px in this mock).
+    FlexMockNode col; initFlexContainer(col);
+    col.style["flex-direction"] = "column";
+    col.style["width"] = "100px";
+    FlexMockNode row; initFlexItem(row);
+    row.style["display"] = "flex";
+    row.style["flex-direction"] = "row";
+    row.style["flex-wrap"] = "wrap";
+    FlexMockNode c[5], t[5];
+    for (int i = 0; i < 5; i++) {
+        initFlexItem(c[i]);
+        c[i].style["width"] = "30px";
+        t[i].isText = true; t[i].text = "A";
+        c[i].addChild(&t[i]);
+        row.addChild(&c[i]);
+    }
+    col.addChild(&row);
+
+    FlexTextMetrics m;
+    layoutTree(&col, 100, m);
+    // Three 30px items to a 100px line: two lines of one 20px text line each.
+    check(approx(c[0].box.contentRect.y, c[2].box.contentRect.y), "wrap in column: first three share a line");
+    check(approx(c[3].box.contentRect.y - c[0].box.contentRect.y, 20), "wrap in column: the second line is one line down");
+    check(approx(row.box.contentRect.height, 40), "wrap in column: the row is exactly its two lines");
+    check(approx(col.box.contentRect.height, 40), "wrap in column: and the column is the row");
+    // The feedback needed a second pass to show; the incremental path re-lays
+    // the same tree every frame.
+    layoutTree(&col, 100, m);
+    check(approx(row.box.contentRect.height, 40), "wrap in column: and it stays so on the next pass");
+}
+
+static void testFlexBaselineAlignment() {
+    printf("--- Flex: baseline alignment ---\n");
+    // Two one-line text items, 10px and 20px type, aligned on their
+    // baselines. The mock's line box is 20px whatever the size, with a 16px
+    // ascent, so both baselines sit 16px below their item's top and the
+    // items must share a top edge. The old arithmetic took the font-size as
+    // the ascent and dropped the smaller item by the 10px difference.
+    FlexMockNode root; initFlexContainer(root);
+    root.style["align-items"] = "baseline";
+    FlexMockNode a, b, ta, tb;
+    initFlexItem(a); initFlexItem(b);
+    a.style["font-size"] = "10px";
+    b.style["font-size"] = "20px";
+    ta.isText = true; ta.text = "A";
+    tb.isText = true; tb.text = "B";
+    a.addChild(&ta); b.addChild(&tb);
+    root.addChild(&a); root.addChild(&b);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 400, m);
+    check(approx(a.box.contentRect.y, b.box.contentRect.y),
+          "baseline: same line box, same ascent → same top edge whatever the font-size");
+
+    // A taller line box moves the baseline down by its half-leading, and
+    // the other item follows it. (A fresh tree: an unmarked style change is
+    // invisible to the incremental path, which keeps the clean item's box.)
+    FlexMockNode root2; initFlexContainer(root2);
+    root2.style["align-items"] = "baseline";
+    FlexMockNode a2, b2, ta2, tb2;
+    initFlexItem(a2); initFlexItem(b2);
+    a2.style["font-size"] = "10px";
+    b2.style["font-size"] = "20px";
+    b2.style["line-height"] = "30px";
+    ta2.isText = true; ta2.text = "A";
+    tb2.isText = true; tb2.text = "B";
+    a2.addChild(&ta2); b2.addChild(&tb2);
+    root2.addChild(&a2); root2.addChild(&b2);
+    layoutTree(&root2, 400, m);
+    check(approx(a2.box.contentRect.y - b2.box.contentRect.y, 5),
+          "baseline: a 30px line box puts 5px of half-leading above the baseline");
+}
+
 static void testFlexGap() {
     printf("--- Flex: gap ---\n");
     FlexMockNode root; initFlexContainer(root);
@@ -546,18 +627,22 @@ static void testFlexAlignBaseline() {
     FlexTextMetrics m;
     layoutTree(&container, 400, m);
 
-    // Item b has larger font, so its baseline is lower.
-    // Item a should be pushed down so baselines align.
-    // a baseline = margin(0) + border(0) + padding(10) + font(16) = 26
-    // b baseline = margin(0) + border(0) + padding(5) + font(32) = 37
-    // a should be offset by 37 - 26 = 11
-    check(a.box.contentRect.y > b.box.contentRect.y,
-          "flex baseline: smaller font item pushed down");
-    // contentRect.y already includes margin+padding+border from container top
-    // baseline = contentRect.y + fontSize (baseline is fontSize below content top)
-    float aBaseline = a.box.contentRect.y + 16.0f;
-    float bBaseline = b.box.contentRect.y + 32.0f;
-    check(approx(aBaseline, bBaseline, 2), "flex baseline: baselines aligned");
+    // Neither item has inline content, so each baseline is synthesized from
+    // its font: half-leading, then the ascent. This mock's line box is 20px
+    // and its ascent 16px at every size, so the font-size does not move the
+    // baseline at all — only the padding does:
+    //   a baseline = padding(10) + 16 = 26
+    //   b baseline = padding(5)  + 16 = 21
+    // so b is pushed down by 5 to meet a. (The arithmetic this replaced took
+    // the font-size itself as the ascent, which put b's baseline at 37 and
+    // pushed a down instead — every smaller label sank under its neighbour.)
+    check(approx(b.box.contentRect.y - b.box.padding.top,
+                 a.box.contentRect.y - a.box.padding.top + 5.0f),
+          "flex baseline: the item with less padding above its baseline is pushed down");
+    // contentRect.y already includes margin+padding+border from the container
+    // top; the baseline is the ascent (16) below the content top for both.
+    check(approx(a.box.contentRect.y + 16.0f, b.box.contentRect.y + 16.0f),
+          "flex baseline: baselines aligned");
 }
 
 static void testFlexShrunkItemChildWidth() {
@@ -748,6 +833,8 @@ void testFlexLayout() {
     testFlexAlignCenter();
     testFlexAlignFlexEnd();
     testFlexWrap();
+    testFlexWrapInsideColumn();
+    testFlexBaselineAlignment();
     testFlexGap();
     testFlexOrder();
     testFlexDisplayNone();
