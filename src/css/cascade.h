@@ -2,7 +2,9 @@
 #include "css/parser.h"
 #include "css/selector.h"
 #include "css/properties.h"
+#include <algorithm>
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -17,7 +19,85 @@ namespace htmlayout::css {
 // hundreds of thousands of times per pass, almost always with a string literal,
 // and a plain std::string-keyed map would build — and for any name longer than
 // the 15-char small-string limit, heap-allocate — a key on every single read.
-using ComputedStyle = std::unordered_map<std::string, std::string, SvHash, SvEq>;
+using StyleMap = std::unordered_map<std::string, std::string, SvHash, SvEq>;
+
+// The map holds what the element itself computed: the properties its rules set
+// and the ordinary inherited values copied from its parent. Custom properties
+// (`--*`) are the exception. A design-token sheet declares a hundred of them on
+// :root and every element inherits all of them, and copying that set into every
+// element's map was the single largest cost of resolving a style — a hundred
+// string insertions, and a hundred destructions when the style was replaced,
+// per element, for values that are identical down the whole tree. So inherited
+// custom properties are not in the map. They are a flat set shared by pointer
+// (`inheritedVars`): an element that declares none hands its children the very
+// pointer it was handed, and only an element that declares some builds a new
+// set (its inherited set plus its own) — once, for all of its children.
+//
+// Two consequences for readers. `find("--x")` on the map answers only for an
+// element's OWN declarations; the value an element actually sees is
+// `customProperty("--x")`. And a change to an ancestor's custom properties
+// shows up on a descendant as a different `inheritedVars` pointer, which is
+// what a consumer's restyle scoping compares (the pointer is kept stable when
+// the set's contents do not change — see stableChildVarsFrom).
+class ComputedStyle : public StyleMap {
+public:
+    using StyleMap::StyleMap;
+    ComputedStyle() = default;
+    ComputedStyle(const StyleMap& m) : StyleMap(m) {}
+    ComputedStyle(StyleMap&& m) : StyleMap(std::move(m)) {}
+
+    // Custom properties inherited from ancestors (never this element's own).
+    std::shared_ptr<const StyleMap> inheritedVars;
+
+    static bool isCustom(std::string_view name) {
+        return name.size() >= 2 && name[0] == '-' && name[1] == '-';
+    }
+
+    // The custom property `name` as this element sees it: its own declaration
+    // first, then the inherited set. Null when neither defines it.
+    const std::string* customProperty(std::string_view name) const {
+        auto it = find(name);
+        if (it != end()) return &it->second;
+        if (inheritedVars) {
+            auto vit = inheritedVars->find(name);
+            if (vit != inheritedVars->end()) return &vit->second;
+        }
+        return nullptr;
+    }
+
+    // The set this element's children inherit: its own custom properties laid
+    // over the set it inherited. Built on first use and cached, so a parent
+    // with a hundred tokens builds the set once rather than per child; a parent
+    // with no custom properties of its own passes its inherited pointer through.
+    std::shared_ptr<const StyleMap> varsForChildren() const {
+        if (childVarsBuilt_) return childVars_;
+        childVarsBuilt_ = true;
+        bool own = false;
+        for (auto& kv : *this) if (isCustom(kv.first)) { own = true; break; }
+        if (!own) { childVars_ = inheritedVars; return childVars_; }
+        auto m = std::make_shared<StyleMap>();
+        if (inheritedVars) *m = *inheritedVars;
+        for (auto& kv : *this) if (isCustom(kv.first)) (*m)[kv.first] = kv.second;
+        childVars_ = m;
+        return childVars_;
+    }
+
+    // Keep the children's pointer stable across a re-resolve: if the set this
+    // style would hand down equals the one `previous` (the style it replaces)
+    // handed down, adopt that pointer, so descendants comparing pointers see
+    // no change when nothing changed.
+    void stableChildVarsFrom(const ComputedStyle& previous) {
+        if (!previous.childVarsBuilt_) return;
+        auto mine = varsForChildren();
+        auto theirs = previous.childVars_;
+        if (mine == theirs) return;
+        if (mine && theirs && *mine == *theirs) childVars_ = theirs;
+    }
+
+private:
+    mutable std::shared_ptr<const StyleMap> childVars_;
+    mutable bool childVarsBuilt_ = false;
+};
 
 // Stylesheet origin for the cascade
 enum class Origin { UserAgent, Author };
@@ -196,6 +276,13 @@ private:
         bool isHostSelector = false;
         bool isSlottedSelector = false;
         bool isPartSelector = false;
+        // For a rule targeting ::before/::after: the selector with the
+        // pseudo-element stripped from its subject, built once here so that
+        // resolvePseudo() matches it directly instead of rebuilding it per
+        // element, and whether the rule sets `content` — the one property that
+        // decides if the pseudo generates a box at all.
+        Selector pseudoSelector;
+        bool declaresContent = false;
     };
     // Does this simple selector (or anything nested in its :not()/:is()/
     // :where()/:has()/:host() args) use the :hover pseudo-class?
@@ -290,6 +377,7 @@ private:
         if (rule.selector.chain.entries.empty()) return;
         size_t idx = rules_.size() - 1;
         const auto& subject = rule.selector.chain.entries[0].compound;
+        bool isPseudoElementRule = false;
         for (auto& s : subject.simples) {
             if (s.type == SimpleSelectorType::PseudoClass &&
                 (s.value == "host" || s.value == "host-context")) {
@@ -303,7 +391,23 @@ private:
                 // the handful of rules that could target it, rather than rescanning
                 // every rule in the sheet (UA sheet included) once per element.
                 pseudoRules_[s.value].push_back(idx);
+                isPseudoElementRule = true;
             }
+        }
+        if (isPseudoElementRule) {
+            // The originating element is what the rest of the selector describes:
+            // `.brackets::before` is `.brackets`, `*::after` is `*`. Strip the
+            // pseudo-element from the subject once; an empty subject compound
+            // matches everything, which is what `::before` alone means.
+            rule.pseudoSelector = rule.selector;
+            auto& simples = rule.pseudoSelector.chain.entries[0].compound.simples;
+            simples.erase(std::remove_if(simples.begin(), simples.end(),
+                                         [](const SimpleSelector& s) {
+                                             return s.type == SimpleSelectorType::PseudoElement;
+                                         }),
+                          simples.end());
+            for (auto& d : rule.declarations)
+                if (d.property == "content") { rule.declaresContent = true; break; }
         }
         const SimpleSelector *idSimple, *classSimple, *tagSimple;
         compoundKey(subject, idSimple, classSimple, tagSimple);

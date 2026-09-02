@@ -1014,6 +1014,8 @@ static void claimLayoutNode(LayoutNode* node, float availableWidth) {
     node->cachedAvailWidth = availableWidth;
     node->cachedAvailHeight = node->availableHeight;
     node->cachedOverrideWidth = node->overrideContentWidth;
+    node->visitPresetW = std::numeric_limits<float>::quiet_NaN();
+    node->visitPresetH = std::numeric_limits<float>::quiet_NaN();
 
     node->box = LayoutBox{};
     node->box.dirty = false;
@@ -1086,11 +1088,30 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // sequence writes other inputs straight into the box (grid's track
         // stretch, multicol balancing, flex auto-margin distribution) poison
         // the cache at their call site to keep their always-relay semantics.
+        //
+        // And when the repeat visit IS the same question — same keyed inputs,
+        // and the same preset content size the container wrote into the box —
+        // the box already holds the answer, and the subtree with it. This is
+        // the same trust beginLayoutNode() places in a clean subtree across
+        // passes, with the preset added because the container writes it after
+        // claiming the node and before this call. Without it a node at depth d
+        // under nested flex containers was laid out 2^d times per pass.
+        if (!node->box.dirty &&
+            node->cachedAvailWidth == availableWidth &&
+            node->cachedAvailHeight == node->availableHeight &&
+            node->cachedOverrideWidth == node->overrideContentWidth &&
+            node->visitPresetW == node->box.contentRect.width &&
+            node->visitPresetH == node->box.contentRect.height) {
+            layoutStatsMut().revisitsSkipped++;
+            return;
+        }
         node->cachedAvailWidth = availableWidth;
         node->cachedAvailHeight = node->availableHeight;
         node->cachedOverrideWidth = node->overrideContentWidth;
         node->box.dirty = false;
     }
+    node->visitPresetW = node->box.contentRect.width;
+    node->visitPresetH = node->box.contentRect.height;
 
     layoutStatsMut().visits++;
     layoutNodeInner(node, availableWidth, metrics);

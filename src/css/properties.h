@@ -51,5 +51,10 @@ struct ExpandedDecl {
 };
 std::vector<ExpandedDecl> expandShorthand(const std::string& property,
                                            const std::string& value);
+// True if expandShorthand() would split this property into longhands. A
+// longhand can be applied straight from the declaration, which is what the
+// cascade does for the great majority of declarations rather than paying for
+// the expander's vector and string copies to be handed its own input back.
+bool isShorthandProperty(std::string_view property);
 
 } // namespace htmlayout::css

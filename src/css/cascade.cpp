@@ -30,7 +30,7 @@ std::string resolveVarReferences(const std::string& value,
     size_t i = 0;
     while (i < value.size()) {
         // Look for "var("
-        if (i + 3 < value.size() && value.substr(i, 4) == "var(") {
+        if (i + 3 < value.size() && value.compare(i, 4, "var(") == 0) {
             i += 4; // skip "var("
             // Find the matching closing paren, respecting nesting
             int parenDepth = 1;
@@ -79,16 +79,16 @@ std::string resolveVarReferences(const std::string& value,
                 continue;
             }
 
-            // Look up the variable
+            // Look up the variable: the element's own declaration, then the
+            // inherited set it was handed (see ComputedStyle::customProperty),
+            // then — for a caller that supplied a parent style without wiring
+            // the inherited set — the parent's view of it.
             std::string resolved;
-            auto it = style.find(varName);
-            if (it != style.end() && !it->second.empty()) {
-                resolved = it->second;
+            if (const std::string* own = style.customProperty(varName); own && !own->empty()) {
+                resolved = *own;
             } else if (parentStyle) {
-                auto pit = parentStyle->find(varName);
-                if (pit != parentStyle->end() && !pit->second.empty()) {
-                    resolved = pit->second;
-                }
+                if (const std::string* pv = parentStyle->customProperty(varName); pv && !pv->empty())
+                    resolved = *pv;
             }
 
             if (resolved.empty() && !fallback.empty()) {
@@ -636,6 +636,10 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     //    Build uaStyle in the same pass to avoid double expandShorthand.
     ComputedStyle style;
     ComputedStyle uaStyle;
+    // The custom properties this element inherits are the set its parent hands
+    // down, by pointer (see ComputedStyle). Wired before any declaration is
+    // applied because shorthand substitution in 4b already resolves var().
+    if (parentStyle) style.inheritedVars = parentStyle->varsForChildren();
     // 4a. Custom properties first — they never expand, and shorthand
     //     substitution in 4b needs their final values.
     for (auto& m : matched) {
@@ -650,7 +654,27 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     //     substitution value; the shorthand splits into longhands only after
     //     substitution) — expanding "border: var(--bw, 6px) solid" raw would
     //     mis-tokenize and drop the width.
-    std::unordered_set<std::string> substitutedProps;
+    //     The UA-origin map exists only for `revert`, so it is built only when
+    //     some matched value says so; a longhand is written straight from the
+    //     declaration rather than round-tripped through the expander's vector.
+    //     substitutedProps holds views of the map's own keys — node-stable in an
+    //     unordered_map — so noting a substitution allocates nothing.
+    bool anyRevert = false;
+    for (auto& m : matched) if (*m.value == "revert") { anyRevert = true; break; }
+    std::vector<std::string_view> substitutedProps;
+    auto noteSubstituted = [&](const std::string& key, bool was) {
+        auto it = std::find(substitutedProps.begin(), substitutedProps.end(),
+                            std::string_view(key));
+        if (was) { if (it == substitutedProps.end()) substitutedProps.push_back(key); }
+        else if (it != substitutedProps.end()) substitutedProps.erase(it);
+    };
+    auto put = [&](const std::string& prop, const std::string& value, bool was,
+                   Origin origin) {
+        auto [it, inserted] = style.try_emplace(prop, value);
+        if (!inserted) it->second = value;
+        noteSubstituted(it->first, was);
+        if (anyRevert && origin == Origin::UserAgent) uaStyle[prop] = value;
+    };
     for (auto& m : matched) {
         if (isCustomProperty(*m.property)) continue;
         const std::string* valPtr = m.value;
@@ -661,15 +685,12 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             valPtr = &substituted;
             wasSubstituted = true;
         }
-        auto expanded = expandShorthand(*m.property, *valPtr);
-        for (auto& e : expanded) {
-            style[e.property] = e.value;
-            if (wasSubstituted) substitutedProps.insert(e.property);
-            else substitutedProps.erase(e.property);
-            if (m.origin == Origin::UserAgent) {
-                uaStyle[e.property] = e.value;
-            }
+        if (!isShorthandProperty(*m.property)) {
+            put(*m.property, *valPtr, wasSubstituted, m.origin);
+            continue;
         }
+        for (auto& e : expandShorthand(*m.property, *valPtr))
+            put(e.property, e.value, wasSubstituted, m.origin);
     }
 
     // 5. Resolve inherit/initial/unset/revert keywords
@@ -718,14 +739,9 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         }
     }
 
-    // 6. Inherit custom properties (--*) from parent if not explicitly set
-    if (parentStyle) {
-        for (auto& [prop, val] : *parentStyle) {
-            if (isCustomProperty(prop) && style.find(prop) == style.end()) {
-                style[prop] = val;
-            }
-        }
-    }
+    // 6. Custom properties (--*) are NOT copied down from the parent. The
+    //    element sees them through `inheritedVars`, wired above; only its own
+    //    declarations live in the map.
 
     // 7. Resolve var() references in all property values. A value substituted
     //    from a custom property that is invalid for its property is
@@ -739,7 +755,8 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         if (hadVar) val = resolveVarReferences(val, style, parentStyle);
         // Values substituted during shorthand application (4b) already lost
         // their var() marker but still need IACVT validation below.
-        else if (substitutedProps.count(prop) == 0) continue;
+        else if (std::find(substitutedProps.begin(), substitutedProps.end(),
+                           std::string_view(prop)) == substitutedProps.end()) continue;
 
         if (isCustomProperty(prop)) continue;
         // Is the substituted value a bare non-zero number (no unit / percent)?
@@ -972,16 +989,15 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
 ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
                                       const std::string& pseudoName,
                                       const ComputedStyle& elemStyle) const {
-    // Collect rules whose selector targets ::pseudoName on this element
+    // Collect rules whose selector targets ::pseudoName on this element.
+    // Pointers into the rules: nothing here is copied per element.
     struct MatchedDecl {
-        std::string property;
-        std::string value;
+        const std::string* property;
+        const std::string* value;
         bool important;
         uint32_t specificity;
         size_t order;
     };
-
-    std::vector<MatchedDecl> matched;
 
     // Only rules whose subject targets ::pseudoName can contribute. They were
     // bucketed at insertion time, so a page with no ::before rule pays nothing
@@ -990,55 +1006,38 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
     auto bucket = pseudoRules_.find(pseudoName);
     if (bucket == pseudoRules_.end()) return {};
 
+    auto applies = [&](const ScopedRule& rule) {
+        if (rule.scope != nullptr && rule.scope != elem.scope()) return false;
+        // The selector with the pseudo-element already stripped from its
+        // subject (classifyLastRule); an empty subject matches everything.
+        return rule.pseudoSelector.matches(elem);
+    };
+
+    // ::before and ::after generate a box only if some rule gives them
+    // `content`. Ask that first, of the few rules that set it: a reset sheet's
+    // `*, *::before, *::after { box-sizing: border-box }` matches every element
+    // in the document twice, and without this gate every one of them computed
+    // a full pseudo style — several hundred properties — for a box that does
+    // not exist. This is where half of a large document's restyle went. The
+    // other pseudo-elements (::placeholder, ::selection, ::marker, …) style a
+    // box that exists regardless, so they are not gated.
+    if (pseudoName == "before" || pseudoName == "after") {
+        bool generatesBox = false;
+        for (size_t ruleIdx : bucket->second) {
+            const auto& rule = rules_[ruleIdx];
+            if (!rule.declaresContent) continue;
+            if (applies(rule)) { generatesBox = true; break; }
+        }
+        if (!generatesBox) return {};
+    }
+
+    std::vector<MatchedDecl> matched;
     for (size_t ruleIdx : bucket->second) {
-        auto& rule = rules_[ruleIdx];
-        if (rule.scope != nullptr && rule.scope != elem.scope()) continue;
-
-        auto& chain = rule.selector.chain;
-        auto& subject = chain.entries[0].compound;
-
-        // Now match the selector against the element, ignoring the pseudo-element part.
-        // Build a temporary compound without the pseudo-element.
-        CompoundSelector filtered;
-        for (auto& s : subject.simples) {
-            if (s.type != SimpleSelectorType::PseudoElement) {
-                filtered.simples.push_back(s);
-            }
-        }
-
-        // If the filtered compound is empty (just ::before), treat as universal
-        bool subjectMatches = true;
-        if (!filtered.simples.empty()) {
-            // Match the filtered compound against elem
-            for (auto& s : filtered.simples) {
-                if (!matchSimple(s, elem)) {
-                    subjectMatches = false;
-                    break;
-                }
-            }
-        }
-
-        // Also match ancestor/sibling parts of the chain
-        if (subjectMatches && chain.entries.size() > 1) {
-            // Build a chain without the pseudo-element for matching
-            SelectorChain testChain;
-            SelectorChain::Entry subjectEntry;
-            subjectEntry.compound = filtered;
-            subjectEntry.combinator = Combinator::None;
-            testChain.entries.push_back(subjectEntry);
-            for (size_t i = 1; i < chain.entries.size(); i++) {
-                testChain.entries.push_back(chain.entries[i]);
-            }
-            Selector testSel;
-            testSel.chain = testChain;
-            subjectMatches = testSel.matches(elem);
-        }
-
-        if (!subjectMatches) continue;
-
+        const auto& rule = rules_[ruleIdx];
+        if (!applies(rule)) continue;
         for (auto& decl : rule.declarations) {
             matched.push_back({
-                decl.property, decl.value, decl.important,
+                &decl.property, &decl.value, decl.important,
                 rule.selector.specificity, rule.order
             });
         }
@@ -1054,10 +1053,12 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
             return a.order < b.order;
         });
 
-    // Apply declarations
+    // Apply declarations. The pseudo inherits the originating element's custom
+    // properties the way a child would: by sharing its set.
     ComputedStyle style;
+    style.inheritedVars = elemStyle.varsForChildren();
     for (auto& m : matched) {
-        auto expanded = expandShorthand(m.property, m.value);
+        auto expanded = expandShorthand(*m.property, *m.value);
         for (auto& e : expanded) {
             style[e.property] = e.value;
         }

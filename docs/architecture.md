@@ -149,6 +149,10 @@ Resolves the final computed style for each element. This is the "C" in CSS.
 
 **Output**: `ComputedStyle` — maps longhand property names to their resolved values. The map is heterogeneously keyed (`SvHash`/`SvEq`), because layout reads it hundreds of thousands of times per pass with string literals and a `std::string`-keyed map would construct — and often heap-allocate — a key on every read.
 
+Inherited custom properties (`--*`) are **not** in the map. A design-token sheet declares a hundred of them on `:root`, every element inherits all of them, and copying that set into every element's map was the single largest cost of resolving a style. They are instead a flat set shared by pointer (`ComputedStyle::inheritedVars`): an element that declares none hands its children the pointer it was handed, and only an element that declares some builds a new set — once, for all of its children (`varsForChildren()`). Read a custom property through `customProperty("--x")`, which checks the element's own declarations and then the inherited set; `find("--x")` answers only for the element's own. A consumer scoping its restyle by an inherited-value diff compares the pointer (kept stable across a re-resolve when the set's contents did not change — `stableChildVarsFrom`).
+
+`::before`/`::after` are gated on `content`: `resolvePseudo()` first matches only the rules that declare it, and returns empty when none applies, so a reset sheet's `*::before, *::after { box-sizing: border-box }` no longer computes a full pseudo style for every element in the document. The other pseudo-elements (`::placeholder`, `::selection`, `::marker`, …) style a box that exists regardless and are not gated.
+
 SVG presentation attributes (`fill`, `stroke-width`, …) enter the cascade at step 0 as specificity-0 declarations: they beat inheritance but lose to any author rule or inline style. `direction` and `unicode-bidi` are seeded only on SVG text content elements, since HTML spells the same idea `dir`.
 
 **Rule indexing**: rules are bucketed by subject key (id / class / tag), and pseudo-element rules are indexed by name, so matching probes a handful of candidates instead of scanning the sheet.
@@ -191,6 +195,8 @@ void layoutTree(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics
 Walks the tree, resolves CSS lengths, and dispatches each node to the appropriate formatting context based on its `display` property. The `Viewport` overload supplies a height, which `vh`/`vmin`/`vmax` need.
 
 `layoutTree()` runs three passes: in-flow layout, absolute/fixed positioning, and per-node subtree hit-bounds caching. Only the first is incremental, which is why `LayoutStats` times them separately — a pass whose cost does not move with `laidOut` is being spent in one of the other two.
+
+Within a pass, `layoutNode()` is deliberately re-entrant: a flex or grid container lays an item out to measure it, resolves its tracks, writes the item's used size into its box, and lays it out again to push that size through — and it is itself visited that way by its own parent, so a node at depth *d* under nested containers was asked 2^*d* times. A repeat visit that is the same question is now answered from the box: same available width and height, same `overrideContentWidth`, and the same preset content size the container wrote into the box before the call (`visitPresetW/H`, recorded at every visit). That preset is the input the keyed channels do not carry — a nested `flex: 1` distributes exactly that height — so a visit with a different preset still re-runs. It is the same trust `beginLayoutNode()` places in a clean subtree across passes, extended into the pass; `LayoutStats::revisitsSkipped` counts it. On a 725-node screen of nested flex it took the pass from 5,544 visits to 2,100 and halved its time.
 
 ### Formatting Context Dispatch (`formatting_context.h`)
 

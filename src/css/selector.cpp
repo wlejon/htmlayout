@@ -41,9 +41,36 @@ std::vector<std::string> splitWhitespace(std::string_view s) {
     return parts;
 }
 
+// Scans the class attribute in place. This runs for every class simple of
+// every candidate rule, for every ancestor a descendant combinator walks —
+// splitting the attribute into a vector of strings per call was most of the
+// cost of matching.
 bool hasClass(const ElementRef& elem, const std::string& cls) {
-    auto classes = splitWhitespace(elem.className());
-    return std::find(classes.begin(), classes.end(), cls) != classes.end();
+    if (cls.empty()) return false;
+    std::string_view classes = elem.className();
+    size_t pos = 0;
+    while (pos < classes.size()) {
+        size_t start = classes.find_first_not_of(" \t\n\r\f", pos);
+        if (start == std::string_view::npos) return false;
+        size_t end = classes.find_first_of(" \t\n\r\f", start);
+        if (end == std::string_view::npos) end = classes.size();
+        if (end - start == cls.size() &&
+            classes.compare(start, cls.size(), cls) == 0)
+            return true;
+        pos = end;
+    }
+    return false;
+}
+
+// ASCII case-insensitive equality against an already-lowercase name, without
+// building a lowercased copy of the tag per comparison.
+static bool equalsLowered(std::string_view tag, const std::string& lowered) {
+    if (tag.size() != lowered.size()) return false;
+    for (size_t i = 0; i < tag.size(); i++) {
+        if (static_cast<char>(std::tolower(static_cast<unsigned char>(tag[i]))) != lowered[i])
+            return false;
+    }
+    return true;
 }
 
 // ---- Selector Parser ----
@@ -654,7 +681,7 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
         case SimpleSelectorType::Universal:
             return true;
         case SimpleSelectorType::Tag:
-            return toLower(elem.tagName()) == ss.value;
+            return equalsLowered(elem.tagName(), ss.value);
         case SimpleSelectorType::Class:
             return hasClass(elem, ss.value);
         case SimpleSelectorType::Id:

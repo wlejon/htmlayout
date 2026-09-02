@@ -256,6 +256,13 @@ struct LayoutNode {
     float cachedAvailWidth    = std::numeric_limits<float>::quiet_NaN();
     float cachedAvailHeight   = std::numeric_limits<float>::quiet_NaN();
     float cachedOverrideWidth = std::numeric_limits<float>::quiet_NaN();
+    // The content size the box held when this pass last laid the node out —
+    // the height a flex or grid parent writes in before the final layout is an
+    // input to it (a nested `flex: 1` distributes that space), so a re-visit
+    // is the same question only if it comes in with the same preset. See
+    // layoutNode(): a same-pass re-visit with every input equal is skipped.
+    float visitPresetW = std::numeric_limits<float>::quiet_NaN();
+    float visitPresetH = std::numeric_limits<float>::quiet_NaN();
 
     // The pass in which layoutNode() last cleared this box. Layout is allowed
     // to call layoutNode() on the same node more than once per pass — a flex or
@@ -744,6 +751,11 @@ struct LayoutStats {
     // size through. `visits` far above `laidOut` means the pass is dominated by
     // that re-measurement, not by the nodes that actually changed.
     uint32_t visits  = 0;
+    // Same-pass re-visits answered from the box because every input — width,
+    // height, override, and the preset the parent wrote in — equalled the last
+    // visit's. A flex tree visits each level from every visit of its parent,
+    // so without this the count doubles per level of nesting.
+    uint32_t revisitsSkipped = 0;
     // The three passes layoutTree() runs, separately: only the first is
     // incremental, so a pass whose cost doesn't move with `laidOut` is being
     // spent in one of the other two.

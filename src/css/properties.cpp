@@ -629,14 +629,14 @@ bool isFontStyle(const std::string& v) {
 
 } // anonymous namespace
 
-std::vector<ExpandedDecl> expandShorthand(const std::string& property,
-                                           const std::string& value) {
-    // Fast path: the overwhelming majority of declarations name a longhand that
-    // has no branch below and falls straight through to the identity return —
-    // but only after splitValue() has tokenised the value and the whole ladder
-    // of name comparisons has been walked and missed. Skip all of it for any
-    // property this function does not actually expand. The set is exactly the
-    // properties with a `property == "..."` branch below; keep the two in sync.
+bool isShorthandProperty(std::string_view property) {
+    // The overwhelming majority of declarations name a longhand that has no
+    // branch in expandShorthand() and falls straight through to the identity
+    // return — but only after splitValue() has tokenised the value and the
+    // whole ladder of name comparisons has been walked and missed. This set
+    // lets the expander (and the cascade, which then never calls it) skip all
+    // of that. It is exactly the properties with a `property == "..."` branch
+    // in expandShorthand(); keep the two in sync.
     static const std::unordered_set<std::string_view> kExpandable = {
         "margin", "padding", "inset", "border-width", "border-style",
         "border-color", "border", "border-top", "border-right",
@@ -667,7 +667,12 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         "border-inline-end-color", "border-inline-end-style",
         "border-inline-end-width",
     };
-    if (kExpandable.find(property) == kExpandable.end())
+    return kExpandable.find(property) != kExpandable.end();
+}
+
+std::vector<ExpandedDecl> expandShorthand(const std::string& property,
+                                           const std::string& value) {
+    if (!isShorthandProperty(property))
         return {{property, value}};
 
     auto parts = splitValue(value);
