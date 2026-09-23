@@ -163,6 +163,14 @@ const std::vector<PropertyDef>& knownProperties() {
 
         // Text overflow & wrapping
         {"text-overflow",     "clip",       false},
+
+        // Line clamping (CSS Overflow 4). `line-clamp` is kept whole —
+        // `none | <integer> <block-ellipsis>?` — and read by block layout; the
+        // legacy `-webkit-line-clamp` only applies on a
+        // `display: -webkit-box; -webkit-box-orient: vertical` box.
+        {"line-clamp",        "none",       false},
+        {"-webkit-line-clamp","none",       false},
+        {"-webkit-box-orient","horizontal", false},
         {"overflow-wrap",     "normal",     true},
         {"word-break",        "normal",     true},
 

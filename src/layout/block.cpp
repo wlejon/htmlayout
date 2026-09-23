@@ -5,6 +5,7 @@
 #include "layout/style_cache.h"
 #include "layout/text.h"
 #include "layout/bidi_line.h"
+#include "layout/line_clamp.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -55,6 +56,8 @@ float parseAspectRatio(const std::string& value) {
     return static_cast<float>(w / h);
 }
 
+} // anonymous namespace
+
 // Does this box establish a new block formatting context (CSS2 §9.4.1)?
 // BFC roots contain their floats, don't collapse margins with their
 // children, and — when sitting beside a float — narrow to the space
@@ -72,7 +75,8 @@ bool nodeEstablishesBFC(LayoutNode* node) {
     const std::string& disp = styleVal(node, Prop::Display);
     if (disp == "inline-block" || disp == "flex" || disp == "inline-flex" ||
         disp == "grid" || disp == "inline-grid" || disp == "flow-root" ||
-        disp == "table-cell" || disp == "table-caption")
+        disp == "table-cell" || disp == "table-caption" ||
+        disp == "-webkit-box" || disp == "-webkit-inline-box")
         return true;
     const std::string& position = styleVal(node, Prop::Position);
     if (position == "absolute" || position == "fixed")
@@ -106,6 +110,8 @@ bool nodeEstablishesBFC(LayoutNode* node) {
         return true;
     return false;
 }
+
+namespace {
 
 // CSS2 §10.8 strut for a block's inline formatting context: a zero-width
 // inline box with the block's own font and line-height. The font's natural
@@ -342,6 +348,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // and any floats handed up to the parent last time.
     node->box.baselineOffset = -1.0f;
     node->box.escapedFloats.clear();
+
+    // line-clamp / -webkit-line-clamp: resolved (and last pass's clamp undone)
+    // before the children are laid out; applied once they are placed.
+    LineClampSpec lineClamp;
+    const bool clampPass = beginLineClamp(node, lineClamp);
 
     // Resolve margin, padding, border
     node->box.margin = resolveEdges(node, kMarginProps, availableWidth, fontSize);
@@ -1295,6 +1306,11 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     item.text == " ")
                     cursorX += spaceExtra;
             }
+            {
+                float lineLeft = lineIdx == 0 ? textIndent : 0.0f;
+                node->box.lineBoxes.push_back(
+                    {cursorY, line.maxHeight, lineLeft, childAvailable - lineLeft});
+            }
             cursorY += line.maxHeight;
         }
 
@@ -1971,6 +1987,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 }
                 cx += ai.width;
             }
+            node->box.lineBoxes.push_back(
+                {cursorY, line.maxHeight, line.xStart, line.availWidth});
             cursorY += line.maxHeight;
         }
         pendingInline.clear();
@@ -2342,6 +2360,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             for (auto* child : getLayoutChildren(node)) {
                 child->box.contentRect.y -= firstBlockChildMarginTop;
             }
+            for (auto& lb : node->box.lineBoxes) lb.top -= firstBlockChildMarginTop;
             for (auto& ef : node->box.escapedFloats) {
                 ef.y -= firstBlockChildMarginTop;
                 if (ef.shapeR >= 0) ef.shapeCy -= firstBlockChildMarginTop;
@@ -2362,6 +2381,8 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     }
 
     } // end BFC else block
+
+    if (clampPass) cursorY = applyLineClamp(node, lineClamp, cursorY, metrics);
 
     // Resolve height using available height from containing block
     float heightRef = node->availableHeight;

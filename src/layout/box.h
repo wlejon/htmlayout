@@ -63,8 +63,29 @@ struct LayoutBox {
     // layout paths).
     float flowHeight = -1.0f;
 
-    // Whether text content was truncated by overflow (for text-overflow: ellipsis)
+    // Whether text content was truncated: by overflow (text-overflow: ellipsis,
+    // on inline boxes), or — on a block container — by line-clamp cutting
+    // lines off after the clamp point.
     bool textTruncated = false;
+
+    // This box lies after a line-clamp container's clamp point (see
+    // `line-clamp` / `-webkit-line-clamp` in block.cpp): it keeps its laid-out
+    // geometry but is not rendered and not hit-testable, and a consumer
+    // painting the tree should skip it together with its subtree. Text inside
+    // needs no flag — clamping edits the placed runs directly (lines after the
+    // clamp point lose their runs, the last kept line carries the ellipsis), so
+    // a consumer that paints textRuns already gets the clamped text.
+    bool clampHidden = false;
+
+    // The line boxes this block container placed for its own inline content
+    // (anonymous or not), in content coordinates: top/height of each line box
+    // and the inline extent available to it (left edge + width, narrowed by
+    // floats and text-indent). Line-clamp counts lines through these. Empty
+    // for non-block layout paths.
+    struct LineBoxRecord {
+        float top = 0, height = 0, left = 0, width = 0;
+    };
+    std::vector<LineBoxRecord> lineBoxes;
 
     // Needs re-layout. Set by markDirty()/markSubtreeDirty() when the node's
     // style, content or structure changed; cleared by layoutNode() once the

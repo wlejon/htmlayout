@@ -19,6 +19,8 @@ namespace htmlayout::layout {
 // by hand, so this list cannot quietly fall behind the code that uses it.
 #define HTMLAYOUT_LAYOUT_PROPS(X) \
     X(XFlowCollapse,       "-x-flow-collapse")      \
+    X(WebkitBoxOrient,     "-webkit-box-orient")    \
+    X(WebkitLineClamp,     "-webkit-line-clamp")    \
     X(AlignContent,        "align-content")         \
     X(AlignItems,          "align-items")           \
     X(AlignSelf,           "align-self")            \
@@ -79,6 +81,7 @@ namespace htmlayout::layout {
     X(JustifySelf,         "justify-self")          \
     X(Left,                "left")                  \
     X(LetterSpacing,       "letter-spacing")        \
+    X(LineClamp,           "line-clamp")            \
     X(LineHeight,          "line-height")           \
     X(ListStylePosition,   "list-style-position")   \
     X(ListStyleType,       "list-style-type")       \

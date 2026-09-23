@@ -467,6 +467,9 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     // Flow-collapsed content (closed <details> body) has real geometry but
     // is never rendered or interactive — see -x-flow-collapse in block.cpp.
     if (styleVal(node, Prop::XFlowCollapse) == "collapse") return nullptr;
+    // Content past a line-clamp container's clamp point: likewise laid out
+    // but neither painted nor interactive.
+    if (node->box.clampHidden) return nullptr;
     // pointer-events:none makes *this node* non-hittable, but descendants
     // with pointer-events:auto must still be reachable. Track it and skip
     // returning `node` below — children are still traversed normally.
