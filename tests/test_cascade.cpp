@@ -668,6 +668,38 @@ static void testImportSourceOrder() {
     check(cascade.resolve(div)["color"] == "red", "import source order: main sheet wins over import");
 }
 
+static void testImportLayers() {
+    printf("--- Cascade: @import layer / layer(name) ---\n");
+    MockElement div; div.tag = "div"; div.elemId = "d";
+    // A bare `layer` puts the import in an anonymous layer, which loses to
+    // unlayered rules even with higher specificity (it was imported unlayered).
+    Cascade anon;
+    anon.setImportResolver([](const std::string& url) -> std::string {
+        return url == "a.css" ? "div#d { color: red; }" : "";
+    });
+    anon.addStylesheet(parse("@import \"a.css\" layer;\ndiv { color: blue; }"));
+    check(anon.resolve(div)["color"] == "blue", "import layer: anonymous layer loses to unlayered");
+    check(parse("@import \"a.css\" layer;").imports.at(0).layered, "import layer: parsed as layered");
+    check(!parse("@import \"a.css\";").imports.at(0).layered, "plain import: not layered");
+
+    // The imported sheet's own layers nest under the import's: `@layer b`
+    // inside layer(a) is a.b, which a later top-level layer outranks and
+    // which the import's unlayered rules (layer a proper) beat.
+    Cascade nested;
+    nested.setImportResolver([](const std::string& url) -> std::string {
+        if (url == "a.css") return "@layer b { div#d { color: red; width: 1px; } }\n"
+                                   "div { width: 2px; }";
+        return "";
+    });
+    nested.addStylesheet(parse(
+        "@layer a, top;\n"
+        "@import \"a.css\" layer(a);\n"
+        "@layer top { div { color: green; } }"));
+    auto s = nested.resolve(div);
+    check(s["color"] == "green", "import layer(a): nested @layer b ranks as a.b, below top");
+    check(s["width"] == "2px", "import layer(a): rules directly in a beat a.b");
+}
+
 static void testImportWithMediaCondition() {
     printf("--- Cascade: @import with media condition ---\n");
     Cascade cascade;
@@ -1045,6 +1077,7 @@ void testCascade() {
     testImportNestedImports();
     testImportSourceOrder();
     testImportWithMediaCondition();
+    testImportLayers();
     testImportWithLayer();
     testTableSpanAttributes();
     testBlockification();

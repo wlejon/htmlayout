@@ -674,6 +674,7 @@ private:
         if (!atEnd() && peek().type != TokenType::Semicolon) {
             if (peek().type == TokenType::Ident && peek().value == "layer") {
                 advance(); // skip "layer"
+                rule.layered = true;
                 skipWhitespace();
                 if (!atEnd() && peek().type == TokenType::Function && peek().value == "layer") {
                     // Shouldn't happen after ident, but handle gracefully
@@ -696,6 +697,7 @@ private:
                 skipWhitespace();
             } else if (peek().type == TokenType::Function && peek().value == "layer") {
                 advance(); // skip layer(
+                rule.layered = true;
                 skipWhitespace();
                 std::string layerName;
                 while (!atEnd() && peek().type != TokenType::RightParen) {

@@ -70,7 +70,8 @@ struct ContainerBlock {
 struct ImportRule {
     std::string url;
     std::string mediaCondition;  // e.g. "print", "(max-width: 600px)", or empty
-    std::string layer;           // e.g. "reset", or empty; "\" means anonymous layer
+    std::string layer;           // e.g. "reset"; empty with `layered` = anonymous layer
+    bool layered = false;        // `layer` or `layer(name)` was given
 };
 
 // A @keyframes rule: a single keyframe stop (e.g. "0%", "50%", "from", "to")
