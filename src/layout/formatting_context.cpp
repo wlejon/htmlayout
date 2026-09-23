@@ -248,8 +248,18 @@ static float evalCalc(const std::string& expr, float referenceSize, float fontSi
             return left;
         }
 
-        // Parse additive: mul (+ or - mul)*
+        // Parse additive: mul (+ or - mul)*. Every nesting level (parens,
+        // calc/min/max/clamp) comes back through here, so the depth bound
+        // keeps a hostile `((((…` from running the stack out.
+        int depth = 0;
         float parseExpr() {
+            if (depth >= 64) { pos = s.size(); return 0.0f; }
+            ++depth;
+            float left = parseExprBody();
+            --depth;
+            return left;
+        }
+        float parseExprBody() {
             float left = parseMul();
             while (true) {
                 skipSpaces();

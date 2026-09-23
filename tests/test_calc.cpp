@@ -4,6 +4,7 @@
 #include "layout/box.h"
 #include "css/properties.h"
 #include <cmath>
+#include <string>
 #include <unordered_map>
 
 using namespace htmlayout::layout;
@@ -34,6 +35,14 @@ static void testCalcNested() {
     printf("--- calc() nested/parenthesized ---\n");
     check(approx(resolveLength("calc((100px + 50px) * 2)", 800, 16), 300.0f), "calc((100+50)*2) = 300");
     check(approx(resolveLength("calc(100% - (20px + 20px))", 400, 16), 360.0f), "calc(100% - (20+20)) at 400 = 360");
+    // Hostile nesting is bounded rather than a stack overflow.
+    std::string deep = "calc(";
+    for (int i = 0; i < 100000; i++) deep += "(";
+    deep += "10px";
+    for (int i = 0; i < 100000; i++) deep += ")";
+    deep += ")";
+    float v = resolveLength(deep, 800, 16);
+    check(v == v, "calc() with 100000 nested parens resolves to a number");
 }
 
 static void testMinMaxClamp() {

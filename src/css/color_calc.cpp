@@ -220,7 +220,11 @@ struct Parser {
         switch (k.kind) {
             case Tok::Num: return k.val;
             case Tok::LParen: {
+                // Bare parentheses nest like functions do; both share the
+                // bound so a hostile `((((…` cannot run the stack out.
+                if (++depth > 32) return std::nullopt;
                 auto v = sum();
+                --depth;
                 if (!v || !at(Tok::RParen)) return std::nullopt;
                 p++;
                 return v;

@@ -248,11 +248,21 @@ std::vector<std::string> resolve(std::string_view nestedList,
         if (i) parentList += ", ";
         parentList += parents[i];
     }
+    // The cross product (and `& &`, which doubles the text) grows
+    // geometrically with depth; a rule past these bounds is dropped, as
+    // nothing but a hostile sheet reaches them.
+    constexpr size_t kMaxSelectors = 4096;
+    constexpr size_t kMaxBytes = 1 << 20;
+    if (parentList.size() > kMaxBytes) return {};
     std::vector<std::string> out;
+    size_t bytes = 0;
     for (auto& alt : alts) {
         for (auto& p : parents) {
             std::string r = expandOne(alt, p, parentList);
-            if (!r.empty()) out.push_back(std::move(r));
+            if (r.empty()) continue;
+            bytes += r.size();
+            if (out.size() >= kMaxSelectors || bytes > kMaxBytes) return {};
+            out.push_back(std::move(r));
         }
     }
     return out;

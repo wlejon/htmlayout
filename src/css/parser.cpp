@@ -131,6 +131,8 @@ private:
 
     Stylesheet* m_sheet = nullptr;
     size_t m_nextSourcePos = 1;
+    static constexpr int kMaxBodyDepth = 128;
+    int m_bodyDepth = 0;
 
     void emit(Scope& s, Rule rule) {
         rule.sourcePos = m_nextSourcePos++;
@@ -202,6 +204,14 @@ private:
     // to `selText`. Null means a plain rule list.
     void parseBody(Scope& s, const std::vector<std::string>* parents,
                    const std::string& selText, bool emitEmptySelf = false) {
+        // Blocks nest by recursion; past a depth no real sheet reaches, the
+        // block is dropped whole rather than running the stack out.
+        if (m_bodyDepth >= kMaxBodyDepth) { skipBlockBody(); return; }
+        struct DepthGuard {
+            int& d;
+            explicit DepthGuard(int& x) : d(x) { ++d; }
+            ~DepthGuard() { --d; }
+        } guard(m_bodyDepth);
         Rule pending;
         pending.selector = selText;
         bool sawNested = false;

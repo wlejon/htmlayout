@@ -215,6 +215,16 @@ void testColorCalc() {
     checkInvalid("rgb(r g b)");                 // channel keywords need `from`
     checkInvalid("rgb(foo(1) 0 0)");
     checkInvalid("color-mix(in srgb, red calc(20), blue)");
+    // Bare parentheses nest under the same bound as functions.
+    checkColor("rgb(calc(((((255)))))  0 0)", 255, 0, 0);
+    {
+        std::string deep = "rgb(calc(";
+        for (int i = 0; i < 100000; i++) deep += "(";
+        deep += "1";
+        for (int i = 0; i < 100000; i++) deep += ")";
+        deep += ") 0 0)";
+        checkInvalid(deep.c_str());
+    }
 }
 
 void testRelativeColor() {
