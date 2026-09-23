@@ -42,7 +42,9 @@ src/
     cascade.h/cpp      — Style cascade with scope support (shadow DOM),
                          rule indexing, and restyle-scoping hints
     properties.h/cpp   — CSS property registry (defaults, inheritance, shorthands)
-    color.h/cpp        — Color parsing (named, hex, rgb, hsl)
+    color.h/cpp        — Color parsing (named, hex, rgb, hsl, hwb, lab, lch,
+                         oklab, oklch, color(), color-mix())
+    color_space.h/cpp  — Colour-space conversion and color-mix() interpolation
     transform.h/cpp    — transform / transform-origin → 2D affine or 4x4 matrix
     ua_stylesheet.h/cpp — Built-in default styles
   layout/
@@ -337,7 +339,7 @@ Outside a pass, reads go to the live map.
 - **At-rules**: `@font-face` and `@keyframes` are parsed and exposed on `Cascade` (`fontFaces()` / `keyframes()`) for the consumer to act on; the engine loads no fonts and runs no animations. `@scope` is not implemented.
 - **Animations & transitions**: parsed, never advanced — no time-varying values.
 - **Bidirectional text**: the engine reorders lines and honors isolates, but does not implement the UAX #9 W/N rules that assign character levels; supply those via `TextMetrics::bidiLevels()`.
-- **Color**: legacy formats only (named, hex, `rgb`/`rgba`, `hsl`/`hsla`). No `lab()`, `lch()`, `oklab()`, `oklch()`, `color()`, or `color-mix()`.
+- **Color**: resolved to 8-bit sRGB with per-channel clipping, not CSS gamut mapping. No `calc()` in colour components, relative colour syntax, `light-dark()`, system colours, or `a98-rgb` / `prophoto-rgb` / `rec2020`.
 - **Generated content**: `::before` / `::after` boxes lay out via consumer-supplied pseudo nodes; the engine synthesizes no `content:` strings, counters, or list markers.
 - **Logical properties**: Map to physical properties assuming `writing-mode: horizontal-tb` and `direction: ltr`. Vertical writing modes are not supported.
 - **Grid subgrid**: `subgrid` keyword is not implemented.
