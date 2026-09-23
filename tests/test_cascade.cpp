@@ -700,6 +700,49 @@ static void testImportLayers() {
     check(s["width"] == "2px", "import layer(a): rules directly in a beat a.b");
 }
 
+static void testAnonymousLayers() {
+    printf("--- Cascade: each anonymous @layer is its own layer ---\n");
+    MockElement div; div.tag = "div"; div.elemId = "d";
+    // Two anonymous layers: the later one outranks the earlier whatever the
+    // specificity. (Shared as one layer, the id selector would win.)
+    auto color = [&](const char* css) {
+        Cascade c;
+        c.addStylesheet(parse(css));
+        return c.resolve(div)["color"];
+    };
+    check(color("@layer { div#d { color: red; } }\n@layer { div { color: blue; } }") == "blue",
+          "anonymous layers: the later block is a later layer");
+    check(color("@layer { div#d { color: red; } }\n@layer x { div { color: blue; } }") == "blue",
+          "anonymous layer: ranks by declaration among named layers");
+    check(color("@layer x { div#d { color: red; } }\n@layer { div { color: blue; } }") == "blue",
+          "anonymous layer after a named one outranks it");
+    check(color("@layer { @layer b { div#d { color: red; } } }\n"
+                "@layer { @layer b { div { color: blue; } } }") == "blue",
+          "anonymous layers: same-named sublayers stay distinct");
+    check(color("@layer { div { color: blue; } }\ndiv { color: green; }") == "green",
+          "anonymous layer loses to unlayered");
+
+    // Across sheets: each sheet's anonymous layer is its own.
+    Cascade two;
+    two.addStylesheet(parse("@layer { div#d { color: red; } }"));
+    two.addStylesheet(parse("@layer { div { color: blue; } }"));
+    check(two.resolve(div)["color"] == "blue", "anonymous layers in two sheets are distinct");
+
+    // Two anonymous import layers.
+    Cascade imp;
+    imp.setImportResolver([](const std::string& url) -> std::string {
+        if (url == "a.css") return "div#d { color: red; }";
+        if (url == "b.css") return "div { color: blue; }";
+        return "";
+    });
+    imp.addStylesheet(parse("@import \"a.css\" layer;\n@import \"b.css\" layer;"));
+    check(imp.resolve(div)["color"] == "blue", "anonymous import layers are distinct");
+
+    Stylesheet s = parse("@layer { a { color: red; } }\n@layer { b { color: red; } }");
+    check(s.layerBlocks.size() == 2 && s.layerBlocks[0].name != s.layerBlocks[1].name,
+          "anonymous layers: distinct names in the parsed sheet");
+}
+
 static void testImportWithMediaCondition() {
     printf("--- Cascade: @import with media condition ---\n");
     Cascade cascade;
@@ -1078,6 +1121,7 @@ void testCascade() {
     testImportSourceOrder();
     testImportWithMediaCondition();
     testImportLayers();
+    testAnonymousLayers();
     testImportWithLayer();
     testTableSpanAttributes();
     testBlockification();

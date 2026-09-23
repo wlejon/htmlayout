@@ -239,13 +239,12 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
             Stylesheet imported = parse(css);
 
             // If import specifies a layer, wrap all imported rules in that
-            // layer; a bare `layer` is an anonymous one ("" here, as for
-            // anonymous @layer blocks).
+            // layer; a bare `layer` is an anonymous one, which the parser
+            // named uniquely, as it does anonymous @layer blocks.
             if (imp.layered) {
-                // The sheet's own layers become sublayers of the import's:
-                // `@layer b` inside `@import ... layer(a)` is `a.b`. (Under an
-                // anonymous import layer, and for anonymous nested layers,
-                // names stay as they are: anonymous layers share "".)
+                // The sheet's own layers, anonymous ones included, become
+                // sublayers of the import's: `@layer b` inside
+                // `@import ... layer(a)` is `a.b`.
                 auto qualify = [&](std::string& name) {
                     if (!imp.layer.empty() && !name.empty()) name = imp.layer + "." + name;
                 };

@@ -4,7 +4,9 @@
 #include "css/nesting.h"
 #include "../from_chars_compat.h"
 #include <algorithm>
+#include <atomic>
 #include <charconv>
+#include <cstdint>
 #include <cctype>
 #include <cstring>
 #include <unordered_set>
@@ -341,21 +343,23 @@ private:
 
     // `@layer a, b;` (order declaration) or `@layer [name] { ... }` at the
     // cursor. Nested layers qualify their names by the parent's (`a.b`);
-    // anonymous layers share the name "" as they always have here.
+    // each anonymous block is its own layer, named by newAnonymousLayerName().
     void parseLayerAtRule(Scope& s, const std::vector<std::string>* parents,
                           const std::string& selText) {
         auto qualify = [&](const std::string& n) {
-            if (!s.inLayer || s.layer.empty()) return n;
-            return n.empty() ? s.layer : s.layer + "." + n;
+            if (!s.inLayer) return n;
+            return s.layer + "." + n;
         };
         std::string prelude;
         if (!collectPrelude(prelude)) {
-            // Statement form: record the declared order.
+            // Statement form: record the declared order. (A name is required
+            // here; an empty one is invalid and declares nothing.)
             for (auto& n : nesting::splitSelectorList(prelude))
-                m_sheet->layerOrder.push_back(qualify(n));
+                if (!n.empty()) m_sheet->layerOrder.push_back(qualify(n));
             return;
         }
         if (prelude.find(',') != std::string::npos) { skipBlockBody(); return; }
+        if (prelude.empty()) prelude = newAnonymousLayerName();
         if (!s.containers.empty()) {
             // @layer inside @container: the container block carries the layer.
             parseContainerBody(s, s.containers, s.mediaConds, /*inLayer=*/true,
@@ -692,7 +696,7 @@ private:
                     if (!atEnd()) advance(); // skip )
                     rule.layer = trim(layerName);
                 } else {
-                    rule.layer = "";  // anonymous layer import
+                    rule.layer = newAnonymousLayerName();  // anonymous layer import
                 }
                 skipWhitespace();
             } else if (peek().type == TokenType::Function && peek().value == "layer") {
@@ -1044,6 +1048,14 @@ private:
 };
 
 } // anonymous namespace
+
+std::string newAnonymousLayerName() {
+    static std::atomic<uint64_t> next{0};
+    std::string name(1, '\0');
+    name += "anon";
+    name += std::to_string(next.fetch_add(1, std::memory_order_relaxed));
+    return name;
+}
 
 Stylesheet parse(const std::string& css) {
     auto tokens = tokenize(css);

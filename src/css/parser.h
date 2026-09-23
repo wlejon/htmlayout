@@ -35,7 +35,11 @@ struct MediaBlock {
     std::vector<std::string> andConditions;
 };
 
-// A @layer block: named cascade layer with contained rules
+// A @layer block: named cascade layer with contained rules. Every anonymous
+// layer (`@layer { }`, `@import ... layer`) is a distinct layer (css-cascade-5
+// §6.4.2), so the parser names each one with a fresh segment from
+// newAnonymousLayerName(): unique across every sheet parsed in the process,
+// and never equal to an author name.
 struct LayerBlock {
     std::string name;               // e.g. "reset", "base.utilities"
     std::vector<Rule> rules;
@@ -61,7 +65,8 @@ struct ContainerBlock {
     // (css-contain-3 §2.2).
     std::vector<ContainerQuery> enclosing;
     // The cascade layer the rules belong to: the block sits inside @layer,
-    // or holds an @layer. `layer` is the qualified name ("" = anonymous).
+    // or holds an @layer. `layer` is the qualified name (an anonymous
+    // layer's segment comes from newAnonymousLayerName()).
     bool layered = false;
     std::string layer;
 };
@@ -70,7 +75,7 @@ struct ContainerBlock {
 struct ImportRule {
     std::string url;
     std::string mediaCondition;  // e.g. "print", "(max-width: 600px)", or empty
-    std::string layer;           // e.g. "reset"; empty with `layered` = anonymous layer
+    std::string layer;           // e.g. "reset"; an anonymous layer's generated name
     bool layered = false;        // `layer` or `layer(name)` was given
 };
 
@@ -119,6 +124,11 @@ bool evaluateMediaQuery(const std::string& condition, const MediaContext& ctx);
 
 // Parse a CSS string into a Stylesheet
 Stylesheet parse(const std::string& css);
+
+// A fresh name segment for an anonymous cascade layer. It starts with a NUL
+// byte, which no author layer name can hold (the tokenizer maps U+0000 and
+// `\0` to U+FFFD), and holds no '.', so it qualifies like any other segment.
+std::string newAnonymousLayerName();
 
 // Parse an inline style string into declarations
 std::vector<Declaration> parseInlineStyle(const std::string& style);
