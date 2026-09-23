@@ -33,7 +33,11 @@ struct ClampNode : public LayoutNode {
     std::string_view textContent() const override { return text; }
     LayoutNode* parent() const override { return parentNode; }
     std::span<LayoutNode* const> children() const override { return childNodes; }
-    const ComputedStyle& computedStyle() const override { return style_; }
+    // A text node's style is its parent's, as in a real DOM (the cascade
+    // gives text the inherited values), so `direction` reaches bidi.
+    const ComputedStyle& computedStyle() const override {
+        return isText && parentNode ? parentNode->style_ : style_;
+    }
 };
 
 // Fixed-advance font: every byte is 0.6em wide, lines are 1.2em tall. At
@@ -490,6 +494,167 @@ void testMixedContent() {
     }
 }
 
+// The run that draws the ellipsis (its text ends with it), or null.
+const PlacedTextRun* ellipsisRun(const ClampNode* t, const std::string& e = kEllipsis) {
+    for (const auto& r : t->box.textRuns)
+        if (endsWith(r.text, e)) return &r;
+    return nullptr;
+}
+
+// Uppercase ASCII letters are right-to-left, everything else takes the
+// paragraph's direction except lowercase letters and digits, which are
+// left-to-right (enough of UAX #9 for a mixed line).
+struct BidiClampMetrics : ClampMetrics {
+    bool bidiAware() const override { return true; }
+    void bidiLevels(std::string_view text, bool rtlBase, std::vector<uint8_t>& out) override {
+        out.resize(text.size());
+        for (size_t i = 0; i < text.size(); i++) {
+            char c = text[i];
+            bool r = c >= 'A' && c <= 'Z';
+            bool l = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+            out[i] = r ? 1 : l ? (rtlBase ? 2 : 0) : (rtlBase ? 1 : 0);
+        }
+    }
+};
+
+void testEllipsisPlacement() {
+    printf("--- line-clamp: ellipsis placement ---\n");
+    ClampMetrics m;
+    // RTL: the line's inline end is its left edge. Line 2 is right-aligned
+    // over [6, 120]; the ellipsis goes at the left edge, and text is cut from
+    // the logical end of the line, which is its visual left.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        box->style_["direction"] = "rtl";
+        box->style_["line-clamp"] = "2";
+        ClampNode* txt = t.textNode(box, words(16));
+        layout(root, 120.0f, m);
+        check(approxEq(box->box.contentRect.height, 24.0f), "rtl: clamped to 2 lines");
+        // Reordered right to left: w04a at the right edge, w07a at the left.
+        const PlacedTextRun* e = ellipsisRun(txt);
+        check(e != nullptr, "rtl: an ellipsis is placed");
+        if (e) {
+            check(approxEq(e->x, 0.0f), "rtl: the ellipsis sits at the left (inline-end) edge");
+            check(e->text == "w0" + kEllipsis && approxEq(e->x + e->width, 30.0f),
+                  "rtl: the logically last word is cut from its end, in place");
+        }
+        bool startKept = false;
+        for (const auto& r : txt->box.textRuns)
+            if (r.text == "w04a" && approxEq(r.y, 12.0f)) startKept = approxEq(r.x + r.width, 120.0f);
+        check(startKept, "rtl: the line's logical start stays at the right edge");
+    }
+    // LTR line ending in an RTL run (bidi-aware metrics): that run is cut from
+    // its logical start, the side facing the line's right edge, and the
+    // ellipsis is a run of its own right after what is kept.
+    {
+        BidiClampMetrics bm;
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        box->style_["line-clamp"] = "1";
+        ClampNode* a = t.textNode(box, "w00a w01a ");
+        ClampNode* span = t.block(box, "inline");
+        span->style_["direction"] = "rtl";
+        span->style_["unicode-bidi"] = "isolate";
+        ClampNode* b = t.textNode(span, "ABCDEFGHIJ");
+        t.textNode(box, " w02a w03a w04a");
+        layout(root, 130.0f, bm);   // line 1: "w00a w01a " (60) + 10 caps (60) = 120
+        const PlacedTextRun* e = ellipsisRun(b);
+        const PlacedTextRun* kept = nullptr;
+        for (const auto& r : b->box.textRuns)
+            if (!r.text.empty() && r.text != kEllipsis) kept = &r;
+        check(e && e->text == kEllipsis, "mixed: the ellipsis is its own run beside the rtl run");
+        check(kept && kept->text.size() < 10 && kept->text.back() == 'J',
+              "mixed: the rtl run keeps its logical end (its visual left side)");
+        if (e && kept) {
+            check(approxEq(kept->x + kept->width, e->x) && e->x + e->width <= 130.0f + 0.01f,
+                  "mixed: the ellipsis follows the kept text and fits the line");
+        }
+        check(drawn(a) == "w00a w01a ", "mixed: the ltr text before it is untouched");
+    }
+    // A line ending in an atomic inline that leaves room: the ellipsis goes
+    // after it (carried by a text run on the line), and it stays.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        box->style_["line-clamp"] = "1";
+        ClampNode* txt = t.textNode(box, "w00a w01a ");
+        ClampNode* ib = t.block(box, "inline-block");
+        ib->style_["width"] = "20px";
+        ib->style_["height"] = "10px";
+        t.textNode(box, " w02a w03a");
+        layout(root, 100.0f, m);   // line 1: text to 60, the box to 80
+        check(approxEq(box->box.contentRect.height, 12.0f), "atomic end: clamped to 1 line");
+        check(!ib->box.clampHidden, "atomic end: the inline-block stays");
+        const PlacedTextRun* e = ellipsisRun(txt);
+        check(e && e->text == kEllipsis && approxEq(e->x, 80.0f),
+              "atomic end: the ellipsis follows the inline-block");
+        check(drawn(txt) == "w00a w01a " + kEllipsis, "atomic end: the text itself is not cut");
+    }
+    // ... and one that leaves no room is removed, the ellipsis following the
+    // text before it.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        box->style_["line-clamp"] = "1";
+        ClampNode* txt = t.textNode(box, "w00a w01a ");
+        ClampNode* ib = t.block(box, "inline-block");
+        ib->style_["width"] = "20px";
+        ib->style_["height"] = "10px";
+        t.textNode(box, " w02a w03a");
+        layout(root, 90.0f, m);    // the box ends at 80; 80 + 18 > 90
+        check(ib->box.clampHidden, "atomic end, no room: the inline-block is removed");
+        check(drawn(txt) == "w00a w01a" + kEllipsis, "atomic end, no room: ellipsis after the text");
+    }
+    // A last line holding only an atomic inline: the ellipsis is drawn by the
+    // last text kept before it, on that line.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        box->style_["line-clamp"] = "2";
+        ClampNode* txt = t.textNode(box, "w00a w01a w02a ");
+        ClampNode* ib = t.block(box, "inline-block");
+        ib->style_["width"] = "75px";
+        ib->style_["height"] = "10px";
+        ClampNode* after = t.textNode(box, " w03a w04a");
+        layout(root, 100.0f, m);   // line 2 is the box alone, 0..75 (" w03a" wraps)
+        check(!ib->box.clampHidden, "atomic-only line: the inline-block stays");
+        // Whichever kept text node carries it (here the collapsible space
+        // after the box, which is still on line 2).
+        const PlacedTextRun* e = ellipsisRun(after);
+        if (!e) e = ellipsisRun(txt);
+        check(e && e->text == kEllipsis && approxEq(e->x, 75.0f),
+              "atomic-only line: the ellipsis follows it");
+        if (e) {
+            const float line2Bottom = box->box.lineBoxes.size() >= 2
+                ? box->box.lineBoxes[1].top + box->box.lineBoxes[1].height : -1.0f;
+            check(approxEq(e->y + e->height, line2Bottom), "atomic-only line: on the second line");
+        }
+    }
+    // RTL line ending (at its left) in an atomic inline with room.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        box->style_["direction"] = "rtl";
+        box->style_["line-clamp"] = "1";
+        ClampNode* txt = t.textNode(box, "w00a w01a ");
+        ClampNode* ib = t.block(box, "inline-block");
+        ib->style_["width"] = "20px";
+        ib->style_["height"] = "10px";
+        t.textNode(box, " w02a w03a");
+        layout(root, 100.0f, m);   // right-aligned: the box at 20..40, text 40..100
+        const PlacedTextRun* e = ellipsisRun(txt);
+        check(!ib->box.clampHidden && e && e->text == kEllipsis && approxEq(e->x + e->width, 20.0f),
+              "rtl atomic end: the ellipsis sits left of the inline-block");
+    }
+}
+
 void testRelayout() {
     printf("--- line-clamp: relayout ---\n");
     ClampMetrics m;
@@ -559,5 +724,6 @@ void testLineClamp() {
     testWebkitClamp();
     testNestedBlocks();
     testMixedContent();
+    testEllipsisPlacement();
     testRelayout();
 }

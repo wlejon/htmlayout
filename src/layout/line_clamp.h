@@ -21,9 +21,16 @@ namespace htmlayout::layout {
 //    falls back to drawing textContent() when textRuns is empty draws nothing
 //    either), and element boxes past it are flagged LayoutBox::clampHidden —
 //    kept laid out, skipped by hitTest(), and to be skipped by the painter;
-//  - the last text run of the Nth line is trimmed so the ellipsis fits in the
-//    line and then carries it (U+2026, or the <string> from block-ellipsis),
-//    and the container's LayoutBox::textTruncated is set.
+//  - the ellipsis (U+2026, or the <string> from block-ellipsis) goes at the
+//    inline end of the Nth line — its right edge in an ltr block, its left
+//    in an rtl one — with the line truncated from that edge in visual order
+//    until it fits: text runs are cut short from the side facing the edge,
+//    atomic inlines kept or flagged clampHidden whole. It is drawn by a text
+//    run: appended to the cut run when that runs in the line's direction,
+//    otherwise (after an atomic inline, or beside an opposite-direction run)
+//    a run of its own holding just the ellipsis, added to a text node on the
+//    line or, failing that, to the last text node kept before it. The
+//    container's LayoutBox::textTruncated is set.
 // Nothing happens when the content has N lines or fewer.
 struct LineClampSpec {
     int maxLines = 0;            // 0: no clamp

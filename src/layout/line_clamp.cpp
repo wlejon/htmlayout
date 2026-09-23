@@ -97,12 +97,13 @@ bool countsLinesOf(LayoutNode* c) {
 
 struct ClampLine {
     float top, bottom, left, right;
+    LayoutNode* owner;      // the block container whose line box this is
 };
 
 void collectLines(LayoutNode* n, float ox, float oy, std::vector<ClampLine>& out) {
     for (const auto& lb : n->box.lineBoxes)
         out.push_back({oy + lb.top, oy + lb.top + lb.height,
-                       ox + lb.left, ox + lb.left + lb.width});
+                       ox + lb.left, ox + lb.left + lb.width, n});
     for (auto* c : getLayoutChildren(n))
         if (countsLinesOf(c))
             collectLines(c, ox + c->box.contentRect.x, oy + c->box.contentRect.y, out);
@@ -147,15 +148,15 @@ void hideSubtree(LayoutNode* n) {
 }
 
 struct RunRef {
-    LayoutNode* text;
-    size_t index;
-    LayoutNode* fontNode;   // the box whose font the run was shaped in
-    float ox;               // the run's coordinate origin in container space
+    LayoutNode* text = nullptr;
+    size_t index = 0;
+    LayoutNode* fontNode = nullptr;  // the box whose font the run was shaped in
+    float ox = 0, oy = 0;            // the run's coordinate origin in container space
 };
 
 struct ElemRef {
     LayoutNode* node;
-    float left;             // margin-box left, container space
+    float left, right;      // margin box, container space
 };
 
 struct ClampWalk {
@@ -163,7 +164,7 @@ struct ClampWalk {
     float lineTop = 0;      // top of the last kept line
     std::vector<RunRef> lastLineRuns;
     std::vector<ElemRef> lastLineElems;
-    float lastLineElemRight = -std::numeric_limits<float>::infinity();
+    RunRef lastKeptText;    // any kept run, for a last line with no text of its own
 };
 
 void walk(LayoutNode* n, float ox, float oy, ClampWalk& w) {
@@ -185,7 +186,8 @@ void walk(LayoutNode* n, float ox, float oy, ClampWalk& w) {
             bool cut = kept.size() != runs.size();
             runs = std::move(kept);
             if (cut) refreshTextRect(c);
-            for (size_t k : onLastLine) w.lastLineRuns.push_back({c, k, n, ox});
+            for (size_t k : onLastLine) w.lastLineRuns.push_back({c, k, n, ox, oy});
+            w.lastKeptText = {c, runs.size() - 1, n, ox, oy};
             continue;
         }
         const std::string& d = styleVal(c, Prop::Display);
@@ -224,9 +226,8 @@ void walk(LayoutNode* n, float ox, float oy, ClampWalk& w) {
         }
         if (mid >= w.lineTop) {
             float left = cx - b.padding.left - b.border.left - b.margin.left;
-            w.lastLineElems.push_back({c, left});
-            w.lastLineElemRight = std::max(w.lastLineElemRight,
-                left + b.fullWidth() + b.margin.left + b.margin.right);
+            w.lastLineElems.push_back(
+                {c, left, left + b.fullWidth() + b.margin.left + b.margin.right});
         }
     }
 }
@@ -239,49 +240,160 @@ void popCodePoint(std::string& s) {
     s.resize(k);
 }
 
-// Put the ellipsis at the end of the last kept line: after its last text run,
-// trimming that run (and, when nothing of it fits, dropping it for the one
-// before) until the ellipsis fits inside the line's available width.
+// UTF-8: drop the first code point.
+void popFrontCodePoint(std::string& s) {
+    size_t k = 1;
+    while (k < s.size() && (static_cast<unsigned char>(s[k]) & 0xC0) == 0x80) ++k;
+    s.erase(0, std::min(k, s.size()));
+}
+
+struct Font {
+    const std::string* family;
+    const std::string* weight;
+    float size;
+};
+
+Font fontOf(LayoutNode* n) {
+    float fs = resolveLength(styleVal(n, Prop::FontSize), 16.0f, 16.0f);
+    if (fs <= 0.0f) fs = 16.0f;
+    return {&styleVal(n, Prop::FontFamily), &styleVal(n, Prop::FontWeight), fs};
+}
+
+float measure(TextMetrics& m, const std::string& s, const Font& f) {
+    return s.empty() ? 0.0f : m.measureWidth(s, *f.family, f.size, *f.weight);
+}
+
+// Put the ellipsis at the inline-end of the last kept line (css-overflow-4
+// block-ellipsis), truncating the line the way Chromium's line truncator does:
+// items are visited in visual order from the line's end edge (right in an
+// ltr block, left in an rtl one); the first that leaves room for the ellipsis
+// before that edge keeps it right after itself, and the ones visited before
+// it are removed. A text run is first cut short from its end-edge side; an
+// atomic inline (inline-block, image, ...) is kept or removed whole. The
+// ellipsis is drawn by a text run: appended to the cut run when that run
+// runs in the line's direction (so it is its logical end), otherwise a run of
+// its own in a text node on the line (or, for a line with no text, in the
+// last text node kept before it).
 void placeEllipsis(ClampWalk& w, const ClampLine& line, const LineClampSpec& spec,
                    TextMetrics& metrics) {
-    auto& refs = w.lastLineRuns;
-    if (refs.empty()) return;
+    const bool rtl = styleVal(line.owner, Prop::Direction) == "rtl";
     auto runOf = [](const RunRef& r) -> PlacedTextRun& {
         return r.text->box.textRuns[r.index];
     };
-    std::stable_sort(refs.begin(), refs.end(), [&](const RunRef& a, const RunRef& b) {
-        return a.ox + runOf(a).x < b.ox + runOf(b).x;
-    });
-    {
-        const PlacedTextRun& last = runOf(refs.back());
-        // The line ends in an atomic inline, which has no run to carry the
-        // ellipsis; leave the line as it is.
-        if (w.lastLineElemRight > refs.back().ox + last.x + last.width + kFitSlack)
-            return;
-    }
 
-    float ellipsisStart = std::numeric_limits<float>::infinity();
-    for (size_t i = refs.size(); i-- > 0;) {
-        const RunRef& ref = refs[i];
+    struct Item {
+        float l, r;
+        int run = -1, elem = -1;
+    };
+    std::vector<Item> items;
+    const RunRef* lineCarrier = nullptr;  // a text run on this line
+    for (size_t i = 0; i < w.lastLineRuns.size(); i++) {
+        const RunRef& ref = w.lastLineRuns[i];
+        const PlacedTextRun& run = runOf(ref);
+        if (run.text.empty()) continue;  // e.g. a line-end space trimmed away
+        if (!lineCarrier) lineCarrier = &ref;
+        float l = ref.ox + run.x;
+        items.push_back({l, l + run.width, static_cast<int>(i), -1});
+    }
+    for (size_t i = 0; i < w.lastLineElems.size(); i++) {
+        const ElemRef& e = w.lastLineElems[i];
+        items.push_back({e.left, e.right, -1, static_cast<int>(i)});
+    }
+    if (items.empty()) return;
+    // End edge first.
+    std::stable_sort(items.begin(), items.end(), [&](const Item& a, const Item& b) {
+        return rtl ? a.l < b.l : a.r > b.r;
+    });
+
+    // The run that will carry a stand-alone ellipsis, and its geometry.
+    RunRef carrier;
+    float carrierY = 0, carrierH = 0;  // container space
+    if (lineCarrier) {
+        carrier = *lineCarrier;
+        const PlacedTextRun& run = runOf(carrier);
+        carrierY = carrier.oy + run.y;
+        carrierH = run.height;
+    } else if (w.lastKeptText.text) {
+        carrier = w.lastKeptText;
+        Font f = fontOf(carrier.fontNode);
+        carrierH = metrics.lineHeight(*f.family, f.size, *f.weight);
+        if (carrierH <= 0.0f) carrierH = f.size * 1.2f;
+        carrierY = line.bottom - carrierH;
+    }
+    const float limit = rtl ? line.left : line.right;
+    auto fitsAt = [&](float edge, float ew) {
+        return rtl ? edge - ew >= limit - kFitSlack : edge + ew <= limit + kFitSlack;
+    };
+    // A stand-alone ellipsis run whose end-edge-facing side is at `edge`.
+    auto standAlone = [&](float edge, int srcAt) {
+        if (!carrier.text) return;  // no text anywhere to draw it with
+        Font f = fontOf(carrier.fontNode);
+        float ew = measure(metrics, spec.ellipsisText, f);
+        PlacedTextRun e;
+        e.srcStart = e.srcEnd = srcAt;
+        e.text = spec.ellipsisText;
+        e.width = ew;
+        e.x = (rtl ? edge - ew : edge) - carrier.ox;
+        e.y = carrierY - carrier.oy;
+        e.height = carrierH;
+        carrier.text->box.textRuns.push_back(std::move(e));
+        refreshTextRect(carrier.text);
+    };
+    auto carrierSrc = [&]() {
+        if (!carrier.text) return 0;
+        const PlacedTextRun& run = runOf(carrier);
+        return run.srcEnd;
+    };
+
+    for (size_t i = 0; i < items.size(); i++) {
+        const Item& it = items[i];
+        const bool lastChance = i + 1 == items.size();
+        if (it.elem >= 0) {
+            float ew = carrier.text ? measure(metrics, spec.ellipsisText, fontOf(carrier.fontNode))
+                                    : 0.0f;
+            float edge = rtl ? it.l : it.r;
+            if (fitsAt(edge, ew)) {
+                standAlone(edge, carrierSrc());
+                return;
+            }
+            hideSubtree(w.lastLineElems[static_cast<size_t>(it.elem)].node);
+            continue;
+        }
+
+        const RunRef& ref = w.lastLineRuns[static_cast<size_t>(it.run)];
         PlacedTextRun& run = runOf(ref);
-        LayoutNode* fn = ref.fontNode;
-        float fs = resolveLength(styleVal(fn, Prop::FontSize), 16.0f, 16.0f);
-        if (fs <= 0.0f) fs = 16.0f;
-        const std::string& fam = styleVal(fn, Prop::FontFamily);
-        const std::string& wt = styleVal(fn, Prop::FontWeight);
-        float ew = metrics.measureWidth(spec.ellipsisText, fam, fs, wt);
-        float x0 = ref.ox + run.x;
+        Font f = fontOf(ref.fontNode);
+        const float ew = measure(metrics, spec.ellipsisText, f);
+        // The run's own direction: a run against the line's (an English word
+        // at the end of an Arabic line) is cut from its logical start, since
+        // that is the side facing the line's end edge.
+        bool runRtl = rtl;
+        if (metrics.bidiAware()) {
+            std::vector<uint8_t> levels;
+            metrics.bidiLevels(run.text, rtl, levels);
+            if (!levels.empty()) runRtl = (levels.front() & 1) != 0;
+        }
+        const bool keepPrefix = runRtl == rtl;
+        const float L = ref.ox + run.x, R = L + run.width;
 
         std::string t = run.text;
-        while (!t.empty() && t.back() == ' ') t.pop_back();
-        float tw = t.size() == run.text.size() ? run.width
-                 : (t.empty() ? 0.0f : metrics.measureWidth(t, fam, fs, wt));
-        while (!t.empty() && x0 + tw + ew > line.right + kFitSlack) {
-            popCodePoint(t);
-            while (!t.empty() && t.back() == ' ') t.pop_back();
-            tw = t.empty() ? 0.0f : metrics.measureWidth(t, fam, fs, wt);
+        auto trimSpaces = [&]() {
+            if (keepPrefix) {
+                while (!t.empty() && t.back() == ' ') t.pop_back();
+            } else {
+                size_t k = t.find_first_not_of(' ');
+                t.erase(0, k == std::string::npos ? t.size() : k);
+            }
+        };
+        trimSpaces();
+        float tw = t.size() == run.text.size() ? run.width : measure(metrics, t, f);
+        while (!t.empty() && !fitsAt(rtl ? R - tw : L + tw, ew)) {
+            if (keepPrefix) popCodePoint(t);
+            else popFrontCodePoint(t);
+            trimSpaces();
+            tw = measure(metrics, t, f);
         }
-        if (t.empty() && i > 0) {
+        if (t.empty() && !lastChance) {
             // Nothing of this run survives: it goes, and the ellipsis follows
             // whatever precedes it on the line.
             run.text.clear();
@@ -290,17 +402,32 @@ void placeEllipsis(ClampWalk& w, const ClampLine& line, const LineClampSpec& spe
             refreshTextRect(ref.text);
             continue;
         }
-        if (run.srcEnd - run.srcStart == static_cast<int>(run.text.size()))
-            run.srcEnd = run.srcStart + static_cast<int>(t.size());
-        run.text = t + spec.ellipsisText;
-        run.width = tw + ew;
-        refreshTextRect(ref.text);
-        ellipsisStart = x0 + tw;
-        break;
+        const bool srcMatches = run.srcEnd - run.srcStart == static_cast<int>(run.text.size());
+        if (srcMatches) {
+            if (keepPrefix) run.srcEnd = run.srcStart + static_cast<int>(t.size());
+            else run.srcStart = run.srcEnd - static_cast<int>(t.size());
+        }
+        const float keptL = rtl ? R - tw : L;
+        if (keepPrefix) {
+            run.text = t + spec.ellipsisText;
+            run.width = tw + ew;
+            run.x = (rtl ? keptL - ew : keptL) - ref.ox;
+            refreshTextRect(ref.text);
+        } else {
+            run.text = t;
+            run.width = tw;
+            run.x = keptL - ref.ox;
+            refreshTextRect(ref.text);
+            carrier = ref;
+            carrierY = ref.oy + run.y;
+            carrierH = run.height;
+            standAlone(rtl ? keptL : keptL + tw, run.srcStart);
+        }
+        return;
     }
-    // Atomic inlines the trimming went back past are cut with the text.
-    for (const ElemRef& e : w.lastLineElems)
-        if (e.left >= ellipsisStart) hideSubtree(e.node);
+    // Everything on the line went (or it had nothing): the ellipsis alone, at
+    // the line's start edge.
+    standAlone(rtl ? line.right : line.left, carrierSrc());
 }
 
 } // namespace
