@@ -961,6 +961,96 @@ static void testFixedStretchToViewport() {
           "fixed stretch: height = viewport height");
 }
 
+// CSS 2.1 §10.3.7 / §10.6.4: offsets pinned on both sides, a definite size,
+// and auto margins — the leftover space is split between the margins, which
+// centres the box (the modal-dialog UA style).
+static void testFixedAutoMarginsCentre() {
+    printf("--- Layout: fixed inset:0 + margin:auto centres ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.setWidth("400px");
+    root.setHeight("300px");
+
+    MockLayoutNode box;
+    initBlock(box);
+    box.style["position"] = "fixed";
+    box.style["top"] = "0px";
+    box.style["bottom"] = "0px";
+    box.style["left"] = "0px";
+    box.style["right"] = "0px";
+    box.setWidth("200px");
+    box.setHeight("100px");
+    box.style["margin-top"] = "auto";
+    box.style["margin-bottom"] = "auto";
+    box.style["margin-left"] = "auto";
+    box.style["margin-right"] = "auto";
+
+    // Only the start margin auto: the box goes to the end edge.
+    MockLayoutNode end;
+    initBlock(end);
+    end.style["position"] = "fixed";
+    end.style["left"] = "0px";
+    end.style["right"] = "10px";
+    end.style["top"] = "0px";
+    end.setWidth("100px");
+    end.setHeight("20px");
+    end.style["margin-left"] = "auto";
+
+    root.addChild(&box);
+    root.addChild(&end);
+
+    MockTextMetrics metrics;
+    Viewport vp{1000.0f, 800.0f};
+    layoutTree(&root, vp, metrics);
+
+    const float ax = root.box.contentRect.x + box.box.contentRect.x;
+    const float ay = root.box.contentRect.y + box.box.contentRect.y;
+    check(approx(box.box.contentRect.width, 200.0f), "auto margins: width kept");
+    check(approx(box.box.contentRect.height, 100.0f), "auto margins: height kept");
+    check(approx(ax, 400.0f), "auto margins: centred horizontally in the viewport (x = 400)");
+    check(approx(ay, 350.0f), "auto margins: centred vertically in the viewport (y = 350)");
+    check(approx(box.box.margin.left, 400.0f) && approx(box.box.margin.bottom, 350.0f),
+          "auto margins: used values are the split leftover");
+    const float ex = root.box.contentRect.x + end.box.contentRect.x;
+    check(approx(ex, 890.0f), "one auto margin takes all the leftover (x = 1000-10-100)");
+}
+
+// width/height: fit-content between two pinned offsets is content-sized, not
+// stretched (the dialog UA style).
+static void testAbsoluteFitContentNotStretched() {
+    printf("--- Layout: fit-content absolute box is not stretched ---\n");
+    MockLayoutNode root;
+    initBlock(root);
+    root.style["position"] = "relative";
+    root.setWidth("600px");
+    root.setHeight("400px");
+
+    MockLayoutNode box;
+    initBlock(box);
+    box.style["position"] = "absolute";
+    box.style["top"] = "0px";
+    box.style["bottom"] = "0px";
+    box.style["left"] = "0px";
+    box.style["right"] = "0px";
+    box.setWidth("fit-content");
+    box.setHeight("fit-content");
+
+    MockLayoutNode inner;
+    initBlock(inner);
+    inner.setWidth("120px");
+    inner.setHeight("30px");
+    box.addChild(&inner);
+    root.addChild(&box);
+
+    MockTextMetrics metrics;
+    layoutTree(&root, 800.0f, metrics);
+
+    check(approx(box.box.contentRect.width, 120.0f),
+          "fit-content: width is the content's, not 600");
+    check(approx(box.box.contentRect.height, 30.0f),
+          "fit-content: height is the content's, not 400");
+}
+
 static void testAbsoluteNoPositionedAncestor() {
     printf("--- Layout: absolute with no positioned ancestor uses viewport ---\n");
     MockLayoutNode root;
@@ -1238,6 +1328,8 @@ void testLayout() {
     testPositionAbsolute();
     testPositionAbsoluteBottomRight();
     testPositionAbsoluteStretch();
+    testFixedAutoMarginsCentre();
+    testAbsoluteFitContentNotStretched();
     testPositionAbsoluteInTable();
     testPositionAbsoluteInTableBottomRight();
 

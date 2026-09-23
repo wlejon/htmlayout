@@ -1251,17 +1251,27 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
     // Resolve offsets and explicit dimensions
     std::optional<float> left = resolveDimAbs(styleVal(child, Prop::Left), cbWidth, fontSize);
     std::optional<float> right = resolveDimAbs(styleVal(child, Prop::Right), cbWidth, fontSize);
-    std::optional<float> specW = resolveDimAbs(styleVal(child, Prop::Width), cbWidth, fontSize);
     std::optional<float> top = resolveDimAbs(styleVal(child, Prop::Top), cbHeight, fontSize);
     std::optional<float> bottom = resolveDimAbs(styleVal(child, Prop::Bottom), cbHeight, fontSize);
-    std::optional<float> specH = resolveDimAbs(styleVal(child, Prop::Height), cbHeight, fontSize);
+    // An intrinsic size keyword (fit-content / min-content / max-content) is
+    // content-sized: never a length, and never stretched between two pinned
+    // offsets. Block layout sizes the width itself against the space the
+    // offsets leave; the height is the content height.
+    const std::string& wVal = styleVal(child, Prop::Width);
+    const std::string& hVal = styleVal(child, Prop::Height);
+    const bool intrinsicW = isIntrinsicSizingKeyword(wVal);
+    const bool intrinsicH = isIntrinsicSizingKeyword(hVal);
+    std::optional<float> specW =
+        intrinsicW ? std::nullopt : resolveDimAbs(wVal, cbWidth, fontSize);
+    std::optional<float> specH =
+        intrinsicH ? std::nullopt : resolveDimAbs(hVal, cbHeight, fontSize);
 
     // Determine available width for layout
     // Shrink-wrap if width:auto and not both left+right set
-    bool shrinkWrap = (!specW && !(left && right));
-    bool stretchW = (!specW && left && right);
+    bool shrinkWrap = (!specW && !intrinsicW && !(left && right));
+    bool stretchW = (!specW && !intrinsicW && left && right);
 
-    bool stretchH = (!specH && top && bottom);
+    bool stretchH = (!specH && !intrinsicH && top && bottom);
 
     // The width the inner layout runs at. Margins, padding and border all
     // resolve from the child's own style here rather than from child->box: the
@@ -1291,6 +1301,11 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
         float mh = resolveLength(styleVal(child, Prop::MarginLeft), cbWidth, fontSize) +
                    resolveLength(styleVal(child, Prop::MarginRight), cbWidth, fontSize);
         layoutW = maxCW + ph + bh + mh;
+    } else if (intrinsicW) {
+        // fit-content's available space: the containing block less the
+        // offsets pinned on this axis.
+        float w = cbWidth - (left ? *left : 0.0f) - (right ? *right : 0.0f);
+        if (w > 0) layoutW = w;
     }
 
     // Claim the node for this layout pass — which clears the geometry the
@@ -1339,6 +1354,41 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
                   child->box.padding.top - child->box.padding.bottom -
                   child->box.border.top - child->box.border.bottom;
         if (h > 0) child->box.contentRect.height = h;
+    }
+
+    // Auto margins with both offsets pinned and the size not stretched
+    // (CSS 2.1 §10.3.7 / §10.6.4): the space left over goes to the auto
+    // margins — split evenly when both are auto, which is what centres
+    // `inset: 0; margin: auto` boxes such as a modal dialog. When the box
+    // overflows, the start margin stays at zero and the end one goes negative.
+    auto resolveAutoMargins = [&](float cbSize, float startOff, float endOff,
+                                  Prop startProp, Prop endProp,
+                                  float& mStart, float& mEnd, float boxSize) {
+        const bool aStart = styleVal(child, startProp) == "auto";
+        const bool aEnd = styleVal(child, endProp) == "auto";
+        if (!aStart && !aEnd) return;
+        const float used = boxSize + (aStart ? 0.0f : mStart) + (aEnd ? 0.0f : mEnd);
+        const float free = cbSize - startOff - endOff - used;
+        if (aStart && aEnd) {
+            if (free < 0) { mStart = 0.0f; mEnd = free; }
+            else { mStart = free / 2; mEnd = free / 2; }
+        } else if (aStart) {
+            mStart = free;
+        } else {
+            mEnd = free;
+        }
+    };
+    if (left && right && !stretchW) {
+        const float bw = child->box.contentRect.width + child->box.padding.left +
+                         child->box.padding.right + child->box.border.left + child->box.border.right;
+        resolveAutoMargins(cbWidth, *left, *right, Prop::MarginLeft, Prop::MarginRight,
+                           child->box.margin.left, child->box.margin.right, bw);
+    }
+    if (top && bottom && !stretchH) {
+        const float bh = child->box.contentRect.height + child->box.padding.top +
+                         child->box.padding.bottom + child->box.border.top + child->box.border.bottom;
+        resolveAutoMargins(cbHeight, *top, *bottom, Prop::MarginTop, Prop::MarginBottom,
+                           child->box.margin.top, child->box.margin.bottom, bh);
     }
 
     // Compute position in containing-block-relative space.

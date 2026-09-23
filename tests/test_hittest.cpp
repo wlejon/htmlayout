@@ -252,6 +252,47 @@ static void testHitFixedEscapesScrollingAncestor() {
           "an abspos escapes a static clipper, whose box is not its containing block");
 }
 
+// hitTestSubtree: one subtree tested on its own, where layout put it — the
+// query for a top-layer box, which no ancestor clips or covers.
+static void testHitSubtree() {
+    printf("--- HitTest: hitTestSubtree ---\n");
+    HitMockNode root; initBlock(root, "div");
+    root.style["width"] = "600px"; root.style["height"] = "600px";
+
+    // A clipping, transformed ancestor the subtree must ignore.
+    HitMockNode clip; initBlock(clip, "div");
+    clip.style["width"] = "40px"; clip.style["height"] = "40px";
+    clip.style["overflow"] = "hidden";
+    clip.style["transform"] = "translateX(0px)";
+
+    HitMockNode box; initBlock(box, "div");
+    box.style["position"] = "fixed";
+    box.style["left"] = "200px"; box.style["top"] = "200px";
+    box.style["width"] = "100px"; box.style["height"] = "50px";
+
+    HitMockNode inner; initBlock(inner, "div");
+    inner.style["height"] = "20px";
+
+    // A sibling painted later, covering the same spot.
+    HitMockNode cover; initBlock(cover, "div");
+    cover.style["position"] = "absolute";
+    cover.style["left"] = "0px"; cover.style["top"] = "0px";
+    cover.style["width"] = "600px"; cover.style["height"] = "600px";
+
+    box.addChild(&inner);
+    clip.addChild(&box);
+    root.addChild(&clip);
+    root.addChild(&cover);
+
+    HitTextMetrics m;
+    layoutTree(&root, 600, m);
+
+    check(hitTest(&root, 250, 205) == &cover, "the whole-tree hit lands on the cover");
+    check(hitTestSubtree(&box, 250, 205) == &inner, "the subtree hit finds its own child");
+    check(hitTestSubtree(&box, 250, 240) == &box, "and its own box");
+    check(hitTestSubtree(&box, 50, 50) == nullptr, "a point outside the subtree misses");
+}
+
 static void testHitBodyOverflowPropagation() {
     printf("--- HitTest: body overflow propagates to the viewport ---\n");
     // CSS 2.1 §11.1.1. `body { overflow: hidden }` with everything inside it
@@ -350,6 +391,7 @@ void testHitTest() {
     testHitWithPadding();
     testHitBodyOverflowPropagation();
     testHitFixedEscapesScrollingAncestor();
+    testHitSubtree();
     testHitBlockInInlineRegrow();
     testHitNull();
 }

@@ -164,6 +164,8 @@ struct L4MockElement : public MockElement {
     bool isPlaceholderShown() const override { return placeholderShownState; }
     bool isIndeterminate() const override { return indeterminateState; }
     bool isTarget() const override { return targetState; }
+    bool modalState = false;
+    bool isModal() const override { return modalState; }
 };
 
 static void testSelectorsL4() {
@@ -248,6 +250,15 @@ static void testSelectorsL4() {
     target.targetState = true;
     auto sel14 = parseSelector(":target");
     check(sel14.matches(target), ":target matches targeted element");
+
+    L4MockElement modal;
+    modal.tag = "dialog";
+    modal.modalState = true;
+    L4MockElement plainDialog;
+    plainDialog.tag = "dialog";
+    auto sel15 = parseSelector("dialog:modal");
+    check(sel15.matches(modal), ":modal matches a modal element");
+    check(!sel15.matches(plainDialog), ":modal does not match a non-modal one");
 }
 
 // ========== Overflow L3 Tests ==========

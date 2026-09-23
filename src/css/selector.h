@@ -48,6 +48,9 @@ struct ElementRef {
     virtual bool isPlaceholderShown() const { return false; } // :placeholder-shown
     virtual bool isIndeterminate() const { return false; } // :indeterminate
     virtual bool isTarget() const { return false; }     // :target (URL fragment match)
+    // :modal — the element is in the top layer in a state that makes the rest
+    // of the document inert (a dialog opened with showModal(), fullscreen).
+    virtual bool isModal() const { return false; }
 
     // Shadow DOM: which scope does this element belong to?
     // nullptr = document scope. Non-null = shadow root scope.

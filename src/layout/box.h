@@ -718,6 +718,14 @@ void applyOverflowClipping(LayoutNode* root);
 // Returns null if the point is outside the root's box.
 LayoutNode* hitTest(LayoutNode* root, float x, float y);
 
+// Hit test one subtree on its own, as if nothing else were painted: `node` is
+// placed where layout put it (its ancestors' content origins summed, with no
+// ancestor scroll offset, transform or overflow clip applied). This is the
+// query for a box that paints outside its ancestors' stacking and clipping —
+// the top layer (a modal dialog, fullscreen, a popover). Null when the point
+// misses the subtree.
+LayoutNode* hitTestSubtree(LayoutNode* node, float x, float y);
+
 // Get children for layout, flattening any 'display: contents' nodes into the parent's sequence.
 std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node);
 

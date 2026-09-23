@@ -817,6 +817,9 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
             if (name == "target") {
                 return elem.isTarget();
             }
+            if (name == "modal") {
+                return elem.isModal();
+            }
             if (name == "not") {
                 // :not() matches if NONE of the compound selectors in the list match
                 for (auto& compound : ss.selectorListArg) {

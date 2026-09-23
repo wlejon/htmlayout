@@ -700,6 +700,19 @@ LayoutNode* hitTest(LayoutNode* root, float x, float y) {
     return hitTestRecursive(root, x, y, 0.0f, 0.0f);
 }
 
+LayoutNode* hitTestSubtree(LayoutNode* node, float x, float y) {
+    if (!node) return nullptr;
+    // The parent's content origin as layout placed it: the plain sum of
+    // contentRect origins, no ancestor scroll and no ancestor clip — the same
+    // space layoutAbsoluteElements positions a fixed box in.
+    float offX = 0.0f, offY = 0.0f;
+    for (LayoutNode* p = node->parent(); p; p = p->parent()) {
+        offX += p->box.contentRect.x;
+        offY += p->box.contentRect.y;
+    }
+    return hitTestRecursive(node, x, y, offX, offY);
+}
+
 void markDirty(LayoutNode* node) {
     if (!node) return;
     node->box.dirty = true;
