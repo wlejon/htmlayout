@@ -162,9 +162,10 @@ void Cascade::rankLayers() {
 
 bool Cascade::evaluateContainerQuery(const ElementRef& elem,
                                       const std::string& containerName,
-                                      const std::string& condition) const {
+                                      const std::string& condition,
+                                      bool fromSelf) const {
     // Walk up the tree to find the nearest container ancestor
-    const ElementRef* current = elem.parent();
+    const ElementRef* current = fromSelf ? &elem : elem.parent();
     while (current) {
         std::string_view cType = current->containerType();
         if (cType != "none") {
@@ -246,6 +247,12 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
                 imported.rules.clear();
                 imported.mediaBlocks.clear();
                 imported.layerBlocks.push_back(std::move(layerBlock));
+                // Unlayered container queries join the import's layer too.
+                for (auto& cb : imported.containerBlocks) {
+                    if (cb.layered) continue;
+                    cb.layered = true;
+                    cb.layer = imp.layer;
+                }
             }
 
             addStylesheet(imported, scope, media, origin);
@@ -284,42 +291,39 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
             if (!evaluateMediaQuery(cond, *media)) return false;
         return true;
     };
-    // Plain rules and matching @media rules interleave in source order
-    // (Rule::sourcePos), so a later plain rule beats an earlier @media rule.
-    auto addInSourceOrder = [&](const std::vector<Rule>& plain,
-                                const std::vector<MediaBlock>& blocks, int layerIdx) {
-        std::vector<const Rule*> ordered;
-        ordered.reserve(plain.size());
-        for (auto& rule : plain) ordered.push_back(&rule);
-        for (auto& block : blocks) {
-            if (!mediaMatches(block)) continue;
-            for (auto& rule : block.rules) ordered.push_back(&rule);
-        }
-        std::stable_sort(ordered.begin(), ordered.end(), [](const Rule* a, const Rule* b) {
-            return a->sourcePos < b->sourcePos;
-        });
-        for (const Rule* rule : ordered) {
-            auto selectors = parseSelectorList(rule->selector);
-            for (auto& sel : selectors) {
-                rules_.push_back({std::move(sel), rule->declarations, scope, nextOrder_++, layerIdx, origin, {}, {}});
-                classifyLastRule();
-            }
-        }
+    // Every applicable rule — plain, @media, @layer, @container, in any
+    // nesting — enters in one source order (Rule::sourcePos), so a later
+    // plain rule beats an earlier @media or @container rule of the same
+    // layer and specificity.
+    struct Pending {
+        const Rule* rule;
+        int layerIdx;                    // -1 = unlayered
+        const ContainerBlock* container; // null = no container query
+    };
+    std::vector<Pending> ordered;
+    ordered.reserve(sheet.rules.size());
+    auto addRules = [&](const std::vector<Rule>& rules, int layerIdx,
+                        const ContainerBlock* cb) {
+        for (auto& rule : rules) ordered.push_back({&rule, layerIdx, cb});
+    };
+    auto addMedia = [&](const std::vector<MediaBlock>& blocks, int layerIdx) {
+        for (auto& block : blocks)
+            if (mediaMatches(block)) addRules(block.rules, layerIdx, nullptr);
     };
 
     // Unconditional + @media rules
-    addInSourceOrder(sheet.rules, sheet.mediaBlocks, -1);
+    addRules(sheet.rules, -1, nullptr);
+    addMedia(sheet.mediaBlocks, -1);
 
     // @layer rules (and @media inside @layer)
     for (auto& layerBlock : sheet.layerBlocks) {
         int layerIdx = getOrCreateLayerIndex(layerBlock.name);
-        addInSourceOrder(layerBlock.rules, layerBlock.mediaBlocks, layerIdx);
+        addRules(layerBlock.rules, layerIdx, nullptr);
+        addMedia(layerBlock.mediaBlocks, layerIdx);
     }
 
-    // Add @container rules whose enclosing @media conditions match, in source
-    // order across blocks (an @media nested in a container query is its own
-    // block, emitted before the rules that follow it in the outer one).
-    std::vector<std::pair<const ContainerBlock*, const Rule*>> containerRules;
+    // @container rules whose @media conditions match; the block may sit in
+    // (or hold) an @layer, and carry enclosing container queries.
     for (auto& containerBlock : sheet.containerBlocks) {
         if (media) {
             bool ok = true;
@@ -328,17 +332,24 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
             if (!ok) continue;
         }
         if (!containerBlock.rules.empty()) usesContainers_ = true;
-        for (auto& rule : containerBlock.rules) containerRules.push_back({&containerBlock, &rule});
+        const int layerIdx =
+            containerBlock.layered ? getOrCreateLayerIndex(containerBlock.layer) : -1;
+        addRules(containerBlock.rules, layerIdx, &containerBlock);
     }
-    std::stable_sort(containerRules.begin(), containerRules.end(),
-                     [](const auto& a, const auto& b) {
-                         return a.second->sourcePos < b.second->sourcePos;
-                     });
-    for (auto& [containerBlock, rule] : containerRules) {
-        auto selectors = parseSelectorList(rule->selector);
+
+    std::stable_sort(ordered.begin(), ordered.end(), [](const Pending& a, const Pending& b) {
+        return a.rule->sourcePos < b.rule->sourcePos;
+    });
+    for (const Pending& p : ordered) {
+        std::vector<ContainerQuery> queries;
+        if (p.container) {
+            queries = p.container->enclosing;
+            queries.push_back({p.container->name, p.container->condition});
+        }
+        auto selectors = parseSelectorList(p.rule->selector);
         for (auto& sel : selectors) {
-            rules_.push_back({std::move(sel), rule->declarations, scope, nextOrder_++, -1, origin,
-                              containerBlock->name, containerBlock->condition});
+            rules_.push_back({std::move(sel), p.rule->declarations, scope, nextOrder_++,
+                              p.layerIdx, origin, queries});
             classifyLastRule();
         }
     }
@@ -504,11 +515,9 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
 
     for (size_t ruleIdx : candidates) {
         const auto& rule = rules_[ruleIdx];
-        // Container query check: if the rule has a container condition, evaluate it
-        if (!rule.containerCondition.empty()) {
-            if (!evaluateContainerQuery(elem, rule.containerName, rule.containerCondition)) {
-                continue;
-            }
+        // Container queries (nested @container rules each add one).
+        if (!rule.containerQueries.empty() && !containerQueriesHold(elem, rule.containerQueries)) {
+            continue;
         }
 
         // Use pre-classified selector type flags (set at insertion time)
@@ -1047,7 +1056,10 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
         if (rule.scope != nullptr && rule.scope != elem.scope()) return false;
         // The selector with the pseudo-element already stripped from its
         // subject (classifyLastRule); an empty subject matches everything.
-        return rule.pseudoSelector.matches(elem);
+        if (!rule.pseudoSelector.matches(elem)) return false;
+        // A pseudo-element's query container is the nearest container among
+        // its originating element and that element's ancestors.
+        return containerQueriesHold(elem, rule.containerQueries, /*fromSelf=*/true);
     };
 
     // ::before and ::after generate a box only if some rule gives them

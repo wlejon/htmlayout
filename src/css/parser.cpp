@@ -112,12 +112,13 @@ private:
     // conditions. Rule::sourcePos records the emission order so the cascade
     // can interleave plain and @media rules correctly.
     //
-    // The conditional group rules nest in any order the flat Stylesheet can
-    // express: @media / @supports anywhere; @layer anywhere outside
-    // @container (a nested layer's name is qualified by its parent's, `a.b`);
-    // @container anywhere outside @layer and another @container, carrying
-    // the enclosing @media conditions (ContainerBlock::mediaConditions), and
-    // an @media inside it becomes a further ContainerBlock with the same query.
+    // The conditional group rules nest in any order: @media / @supports
+    // anywhere; @layer anywhere (a nested layer's name is qualified by its
+    // parent's, `a.b`); @container anywhere, carrying the enclosing @media
+    // conditions, container queries and layer (ContainerBlock::
+    // mediaConditions / enclosing / layer). Inside a container query, an
+    // @media, @layer or further @container becomes its own ContainerBlock
+    // with the combined conditions.
 
     struct Scope {
         std::vector<Rule>* rules = nullptr;             // where style rules go
@@ -125,9 +126,33 @@ private:
         std::vector<std::string> mediaConds;            // enclosing @media conditions
         bool inLayer = false;                           // inside an @layer block
         std::string layer;                              // its full name
-        const ContainerBlock* container = nullptr;      // enclosing @container query
+        std::vector<ContainerQuery> containers;         // enclosing @container queries
         bool dead = false;                              // inside a false @supports
     };
+
+    // Parse a block body (the '{' consumed) into a new ContainerBlock whose
+    // queries are `queries` (the last is the block's own) and whose media
+    // conditions and layer are the given ones.
+    void parseContainerBody(const Scope& s, std::vector<ContainerQuery> queries,
+                            std::vector<std::string> mediaConds, bool inLayer,
+                            const std::string& layer,
+                            const std::vector<std::string>* parents,
+                            const std::string& selText) {
+        ContainerBlock cb;
+        cb.name = queries.back().name;
+        cb.condition = queries.back().condition;
+        cb.enclosing.assign(queries.begin(), queries.end() - 1);
+        cb.mediaConditions = mediaConds;
+        cb.layered = inLayer;
+        cb.layer = layer;
+        Scope inner{&cb.rules, nullptr, std::move(mediaConds)};
+        inner.inLayer = inLayer;
+        inner.layer = layer;
+        inner.containers = std::move(queries);
+        inner.dead = s.dead;
+        parseBody(inner, parents, selText);
+        if (!cb.rules.empty()) m_sheet->containerBlocks.push_back(std::move(cb));
+    }
 
     Stylesheet* m_sheet = nullptr;
     size_t m_nextSourcePos = 1;
@@ -257,18 +282,13 @@ private:
         if (name == "media") {
             std::string cond;
             if (!collectPrelude(cond)) return;
-            if (s.container && !s.dead) {
-                // @media inside @container: the same container query, with
+            if (!s.containers.empty() && !s.dead) {
+                // @media inside @container: the same container queries, with
                 // one more media condition.
-                ContainerBlock cb;
-                cb.name = s.container->name;
-                cb.condition = s.container->condition;
-                cb.mediaConditions = s.mediaConds;
-                cb.mediaConditions.push_back(cond);
-                Scope inner{&cb.rules, nullptr, cb.mediaConditions};
-                inner.container = &cb;
-                parseBody(inner, parents, selText);
-                if (!cb.rules.empty()) m_sheet->containerBlocks.push_back(std::move(cb));
+                std::vector<std::string> conds = s.mediaConds;
+                conds.push_back(cond);
+                parseContainerBody(s, s.containers, std::move(conds), s.inLayer, s.layer,
+                                   parents, selText);
                 return;
             }
             if (!s.mediaOut) { skipBlockBody(); return; }
@@ -296,26 +316,26 @@ private:
             }
             return;
         }
-        if (name == "container" && m_sheet && !s.dead && !s.container && !s.inLayer) {
+        if (name == "container" && m_sheet && !s.dead) {
             std::string prelude;
             if (!collectPrelude(prelude)) return;
-            ContainerBlock cb;
-            splitContainerPrelude(prelude, cb);
-            cb.mediaConditions = s.mediaConds;
-            Scope inner{&cb.rules, nullptr, s.mediaConds};
-            inner.container = &cb;
-            parseBody(inner, parents, selText);
-            if (!cb.rules.empty()) m_sheet->containerBlocks.push_back(std::move(cb));
+            ContainerQuery q;
+            splitContainerPrelude(prelude, q);
+            // A query with no condition matches nothing (css-contain-3
+            // requires one); its rules are dropped.
+            if (q.condition.empty()) { skipBlockBody(); return; }
+            std::vector<ContainerQuery> queries = s.containers;
+            queries.push_back(std::move(q));
+            parseContainerBody(s, std::move(queries), s.mediaConds, s.inLayer, s.layer,
+                               parents, selText);
             return;
         }
-        if (name == "layer" && m_sheet && !s.dead && !s.container) {
+        if (name == "layer" && m_sheet && !s.dead) {
             parseLayerAtRule(s, parents, selText);
             return;
         }
-        // @layer / @container where the flat Stylesheet has no place for them
-        // (a layer inside a container query, a container query inside a layer
-        // or another container query, anything inside a false @supports),
-        // @charset, unknown at-rules: skipped.
+        // @layer / @container inside a false @supports, @charset, unknown
+        // at-rules: skipped.
         consumeAtRule();
     }
 
@@ -336,6 +356,12 @@ private:
             return;
         }
         if (prelude.find(',') != std::string::npos) { skipBlockBody(); return; }
+        if (!s.containers.empty()) {
+            // @layer inside @container: the container block carries the layer.
+            parseContainerBody(s, s.containers, s.mediaConds, /*inLayer=*/true,
+                               qualify(prelude), parents, selText);
+            return;
+        }
         LayerBlock lb;
         lb.name = qualify(prelude);
         Scope inner{&lb.rules, &lb.mediaBlocks, s.mediaConds};
@@ -396,15 +422,26 @@ private:
         parseBody(s, &selectors, selText, /*emitEmptySelf=*/true);
     }
 
-    static void splitContainerPrelude(const std::string& prelude, ContainerBlock& block) {
-        // "sidebar (min-width: 400px)" or "(min-width: 400px)"
-        auto parenPos = prelude.find('(');
-        if (parenPos != std::string::npos) {
-            std::string before = trim(prelude.substr(0, parenPos));
-            if (!before.empty()) block.name = before;
-            block.condition = trim(prelude.substr(parenPos));
+    static void splitContainerPrelude(const std::string& prelude, ContainerQuery& block) {
+        // "sidebar (min-width: 400px)" or "(min-width: 400px)". The name is a
+        // leading ident, so neither a function (`style(...)`) nor the `not`
+        // keyword opening the condition counts as one.
+        std::string p = trim(prelude);
+        size_t end = 0;
+        while (end < p.size() && p[end] != '(' &&
+               !std::isspace(static_cast<unsigned char>(p[end])))
+            ++end;
+        std::string word = p.substr(0, end);
+        std::string lower = word;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return (char)std::tolower(c); });
+        const bool isName = !word.empty() && end < p.size() && p[end] != '(' &&
+                            lower != "not" && lower != "and" && lower != "or";
+        if (isName) {
+            block.name = word;
+            block.condition = trim(p.substr(end));
         } else {
-            block.condition = prelude;
+            block.condition = p;
         }
     }
 

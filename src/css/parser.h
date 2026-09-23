@@ -42,6 +42,12 @@ struct LayerBlock {
     std::vector<MediaBlock> mediaBlocks;
 };
 
+// One container query: `[name] <condition>`.
+struct ContainerQuery {
+    std::string name;               // container name (empty = any container)
+    std::string condition;          // e.g. "(min-width: 400px)"
+};
+
 // A @container block: container query with contained rules
 struct ContainerBlock {
     std::string name;               // container name (empty = any container)
@@ -50,6 +56,14 @@ struct ContainerBlock {
     // @media conditions that must also match: the block sits inside @media,
     // or holds an @media nested in the container query.
     std::vector<std::string> mediaConditions;
+    // Enclosing @container queries, outermost first, that must also match: a
+    // container query nested in another. Each finds its own query container
+    // (css-contain-3 §2.2).
+    std::vector<ContainerQuery> enclosing;
+    // The cascade layer the rules belong to: the block sits inside @layer,
+    // or holds an @layer. `layer` is the qualified name ("" = anonymous).
+    bool layered = false;
+    std::string layer;
 };
 
 // An @import rule: url + optional media/layer qualifiers

@@ -462,8 +462,8 @@ static void testCascadeContainerQueries() {
     printf("--- Cascade: container queries ---\n");
     Cascade cascade;
     auto sheet = parse(
-        "@container (min-width: 400px) { .item { color: blue; } }\n"
         ".item { color: red; }\n"
+        "@container (min-width: 400px) { .item { color: blue; } }\n"
     );
     cascade.addStylesheet(sheet);
 
@@ -477,6 +477,15 @@ static void testCascadeContainerQueries() {
 
     auto s = cascade.resolve(item);
     check(s["color"] == "blue", "cascade: container query matches when wide enough");
+
+    // A matching container rule is ordered by its source position: a later
+    // plain rule of equal specificity beats it.
+    Cascade before;
+    before.addStylesheet(parse(
+        "@container (min-width: 400px) { .item { color: blue; } }\n"
+        ".item { color: red; }\n"));
+    check(before.resolve(item)["color"] == "red",
+          "cascade: later plain rule beats an earlier matching @container rule");
 }
 
 static void testCascadeVarRecursionLimit() {

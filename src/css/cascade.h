@@ -269,9 +269,9 @@ private:
         size_t order = 0;       // insertion order for stable sort
         int layerOrder = -1;    // -1 = unlayered (highest priority), >=0 = layer index
         Origin origin = Origin::Author;
-        // Container query: if non-empty, this rule only applies when the container condition is met
-        std::string containerName;     // required container name (empty = any)
-        std::string containerCondition; // e.g. "(min-width: 400px)"
+        // Container queries: the rule applies only while every one holds,
+        // each against its own query container (nested @container rules).
+        std::vector<ContainerQuery> containerQueries;
         // Pre-classified selector type (avoids scanning simples per-element)
         bool isHostSelector = false;
         bool isSlottedSelector = false;
@@ -556,9 +556,20 @@ private:
     void rankLayers();
 
     // Evaluate a container query condition against an element's container ancestors
+    // `fromSelf`: the search starts at `elem` itself — a pseudo-element's
+    // query container may be its originating element.
     bool evaluateContainerQuery(const ElementRef& elem,
                                 const std::string& containerName,
-                                const std::string& condition) const;
+                                const std::string& condition,
+                                bool fromSelf = false) const;
+    // Every query of a rule holds (true for a rule with none).
+    bool containerQueriesHold(const ElementRef& elem,
+                              const std::vector<ContainerQuery>& queries,
+                              bool fromSelf = false) const {
+        for (const auto& q : queries)
+            if (!evaluateContainerQuery(elem, q.name, q.condition, fromSelf)) return false;
+        return true;
+    }
 };
 
 } // namespace htmlayout::css
