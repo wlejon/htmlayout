@@ -121,24 +121,77 @@ float lowestRunTop(const ClampNode* t) {
     return y;
 }
 
+// The tests write the `line-clamp` shorthand straight into computed styles;
+// expand it into its longhands as the cascade would.
+void expandClampShorthands(ClampNode* n) {
+    auto it = n->style_.find("line-clamp");
+    if (it != n->style_.end()) {
+        std::string v = it->second;
+        n->style_.erase(it);
+        for (auto& e : expandShorthand("line-clamp", v)) n->style_[e.property] = e.value;
+    }
+    for (auto* c : n->childNodes) expandClampShorthands(static_cast<ClampNode*>(c));
+}
+
 void layout(ClampNode* root, float width, ClampMetrics& m) {
+    expandClampShorthands(root);
     markSubtreeDirty(root);
     layoutTree(root, width, m);
 }
 
+std::string expansion(const char* value) {
+    std::string s;
+    for (auto& e : expandShorthand("line-clamp", value)) {
+        if (!s.empty()) s += "; ";
+        s += e.property + ": " + e.value;
+    }
+    return s;
+}
+
+void checkExpansion(const char* value, const char* expected) {
+    std::string got = expansion(value);
+    std::string name = std::string("line-clamp: ") + value + "  ->  " + expected;
+    if (got != expected) name += "  [got " + got + "]";
+    check(got == expected, name.c_str());
+}
+
 void testCascade() {
     printf("--- line-clamp: cascade ---\n");
-    check(initialValue("line-clamp") == "none", "line-clamp: initial value none");
+    check(initialValue("max-lines") == "none", "max-lines: initial value none");
+    check(initialValue("block-ellipsis") == "no-ellipsis", "block-ellipsis: initial value no-ellipsis");
+    check(initialValue("continue") == "auto", "continue: initial value auto");
     check(initialValue("-webkit-line-clamp") == "none", "-webkit-line-clamp: initial value none");
     check(initialValue("-webkit-box-orient") == "horizontal",
           "-webkit-box-orient: initial value horizontal");
-    check(!isInherited("line-clamp") && !isInherited("-webkit-line-clamp"),
-          "line-clamp: not inherited");
+    check(!isInherited("max-lines") && !isInherited("continue") &&
+              !isInherited("-webkit-line-clamp"),
+          "max-lines / continue: not inherited");
+    check(isInherited("block-ellipsis"), "block-ellipsis: inherited");
+    check(isShorthandProperty("line-clamp"), "line-clamp is a shorthand");
+
+    checkExpansion("none", "max-lines: none; block-ellipsis: no-ellipsis; continue: auto");
+    checkExpansion("auto", "max-lines: none; block-ellipsis: auto; continue: collapse");
+    checkExpansion("3", "max-lines: 3; block-ellipsis: auto; continue: collapse");
+    checkExpansion("2 no-ellipsis", "max-lines: 2; block-ellipsis: no-ellipsis; continue: collapse");
+    checkExpansion("\" [more]\" 1", "max-lines: 1; block-ellipsis: \" [more]\"; continue: collapse");
+    checkExpansion("2 auto", "max-lines: 2; block-ellipsis: auto; continue: collapse");
+    checkExpansion("2 -webkit-legacy", "max-lines: 2; block-ellipsis: auto; continue: -webkit-legacy");
+    checkExpansion("\"...\"", "max-lines: none; block-ellipsis: \"...\"; continue: collapse");
+    checkExpansion("inherit", "max-lines: inherit; block-ellipsis: inherit; continue: inherit");
+    checkExpansion("0", "");
+    checkExpansion("-1", "");
+    checkExpansion("2 3", "");
+    checkExpansion("2 auto auto", "");
+    checkExpansion("-webkit-legacy", "");
+    checkExpansion("-webkit-legacy 2", "");
+    checkExpansion("2 bogus", "");
 
     Cascade cascade;
     cascade.addStylesheet(parse(
         ".legacy { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }"
-        ".std { line-clamp: 2 \"...\"; }"));
+        ".std { line-clamp: 2 \"...\"; }"
+        ".long { max-lines: 4; continue: collapse; block-ellipsis: \"--\"; }"
+        ".bad { line-clamp: 2; line-clamp: 0; }"));
     MockElement legacy; legacy.tag = "div"; legacy.classes = "legacy";
     auto ls = cascade.resolve(legacy);
     check(ls["display"] == "-webkit-box", "cascade: display -webkit-box kept");
@@ -146,9 +199,70 @@ void testCascade() {
     check(ls["-webkit-line-clamp"] == "3", "cascade: -webkit-line-clamp kept");
     MockElement std_; std_.tag = "div"; std_.classes = "std";
     auto ss = cascade.resolve(std_);
-    check(ss["line-clamp"].rfind("2", 0) == 0 &&
-          ss["line-clamp"].find("...") != std::string::npos,
-          "cascade: line-clamp keeps count and ellipsis string");
+    check(ss["max-lines"] == "2" && ss["block-ellipsis"] == "\"...\"" &&
+              ss["continue"] == "collapse",
+          "cascade: line-clamp expands into its longhands");
+    MockElement lng; lng.tag = "div"; lng.classes = "long";
+    auto lg = cascade.resolve(lng);
+    check(lg["max-lines"] == "4" && lg["continue"] == "collapse" && lg["block-ellipsis"] == "\"--\"",
+          "cascade: the longhands can be set directly");
+    MockElement bad; bad.tag = "div"; bad.classes = "bad";
+    check(cascade.resolve(bad)["max-lines"] == "2", "cascade: an invalid line-clamp is dropped");
+    auto sheet = parse("@supports (line-clamp: 2) { .x { color: red } }"
+                       "@supports (line-clamp: 0) { .y { color: red } }");
+    check(sheet.rules.size() == 1 && sheet.rules[0].selector == ".x",
+          "@supports: line-clamp validates through its expansion");
+}
+
+void testLonghandLayout() {
+    printf("--- line-clamp: layout reads the longhands ---\n");
+    ClampMetrics m;
+    auto make = [](Tree& t) {
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        t.textNode(box, words(16));
+        return box;
+    };
+    {
+        Tree t;
+        ClampNode* box = make(t);
+        box->style_["max-lines"] = "2";
+        box->style_["continue"] = "collapse";
+        box->style_["block-ellipsis"] = "auto";
+        layout(t.nodes[0].get(), 120, m);
+        check(approxEq(box->box.contentRect.height, 24) && box->box.textTruncated,
+              "max-lines + continue: collapse clamps");
+    }
+    {
+        Tree t;
+        ClampNode* box = make(t);
+        box->style_["max-lines"] = "2";
+        layout(t.nodes[0].get(), 120, m);
+        check(approxEq(box->box.contentRect.height, 48) && !box->box.textTruncated,
+              "max-lines alone (continue: auto) does not clamp");
+    }
+    {
+        Tree t;
+        ClampNode* box = make(t);
+        box->style_["max-lines"] = "1";
+        box->style_["continue"] = "collapse";
+        box->style_["block-ellipsis"] = "no-ellipsis";
+        layout(t.nodes[0].get(), 120, m);
+        const ClampNode* text = static_cast<ClampNode*>(box->childNodes[0]);
+        check(approxEq(box->box.contentRect.height, 12) && !endsWith(drawn(text), kEllipsis),
+              "block-ellipsis: no-ellipsis clamps without an ellipsis");
+    }
+    {
+        Tree t;
+        ClampNode* box = make(t);
+        box->style_["max-lines"] = "1";
+        box->style_["continue"] = "-webkit-legacy";
+        box->style_["block-ellipsis"] = "\"+\"";
+        layout(t.nodes[0].get(), 120, m);
+        const ClampNode* text = static_cast<ClampNode*>(box->childNodes[0]);
+        check(approxEq(box->box.contentRect.height, 12) && endsWith(drawn(text), "+"),
+              "continue: -webkit-legacy clamps, with a string block-ellipsis");
+    }
 }
 
 void testStandardClamp() {
@@ -344,6 +458,7 @@ void testRelayout() {
     // Only the container is marked: its clamped descendants must still be
     // laid out afresh rather than reused with last pass's cut.
     box->style_["line-clamp"] = "3";
+    expandClampShorthands(box);
     markDirty(box);
     layoutTree(root, 120.0f, m);
     check(approxEq(box->box.contentRect.height, 36.0f), "relayout: 2 -> 3 grows to 3 lines");
@@ -351,6 +466,7 @@ void testRelayout() {
     check(!p2->box.clampHidden, "relayout: 2 -> 3 un-hides line 3");
 
     box->style_["line-clamp"] = "none";
+    expandClampShorthands(box);
     markDirty(box);
     layoutTree(root, 120.0f, m);
     check(approxEq(box->box.contentRect.height, 36.0f) && !box->box.textTruncated,
@@ -359,6 +475,7 @@ void testRelayout() {
 
     // A second pass with nothing marked reuses the clamped subtree as is.
     box->style_["line-clamp"] = "1";
+    expandClampShorthands(box);
     markDirty(box);
     layoutTree(root, 120.0f, m);
     layoutTree(root, 120.0f, m);
@@ -387,6 +504,7 @@ void testRelayout() {
 void testLineClamp() {
     printf("\n=== line-clamp ===\n");
     testCascade();
+    testLonghandLayout();
     testStandardClamp();
     testWebkitClamp();
     testNestedBlocks();

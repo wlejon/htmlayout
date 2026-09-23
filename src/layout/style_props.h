@@ -25,6 +25,7 @@ namespace htmlayout::layout {
     X(AlignItems,          "align-items")           \
     X(AlignSelf,           "align-self")            \
     X(AspectRatio,         "aspect-ratio")          \
+    X(BlockEllipsis,       "block-ellipsis")        \
     X(BorderBottomStyle,   "border-bottom-style")   \
     X(BorderBottomWidth,   "border-bottom-width")   \
     X(BorderCollapse,      "border-collapse")       \
@@ -48,6 +49,7 @@ namespace htmlayout::layout {
     X(ColumnWidth,         "column-width")          \
     X(Contain,             "contain")               \
     X(ContainerType,       "container-type")        \
+    X(Continue,            "continue")              \
     X(ContentVisibility,   "content-visibility")    \
     X(Direction,           "direction")             \
     X(Display,             "display")               \
@@ -81,7 +83,6 @@ namespace htmlayout::layout {
     X(JustifySelf,         "justify-self")          \
     X(Left,                "left")                  \
     X(LetterSpacing,       "letter-spacing")        \
-    X(LineClamp,           "line-clamp")            \
     X(LineHeight,          "line-height")           \
     X(ListStylePosition,   "list-style-position")   \
     X(ListStyleType,       "list-style-type")       \
@@ -90,6 +91,7 @@ namespace htmlayout::layout {
     X(MarginRight,         "margin-right")          \
     X(MarginTop,           "margin-top")            \
     X(MaxHeight,           "max-height")            \
+    X(MaxLines,            "max-lines")             \
     X(MaxWidth,            "max-width")             \
     X(MinHeight,           "min-height")            \
     X(MinWidth,            "min-width")             \

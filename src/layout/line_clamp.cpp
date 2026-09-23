@@ -23,47 +23,37 @@ int parseClampCount(const std::string& tok) {
     return v > 1000000 ? 1000000 : static_cast<int>(v);
 }
 
-// line-clamp: none | [ <integer [1,∞]> || <'block-ellipsis'> ] -webkit-legacy?
-// block-ellipsis: no-ellipsis | auto | <string>
-// Anything unparseable is treated as `none`.
-LineClampSpec parseLineClamp(const std::string& v) {
-    LineClampSpec spec;
-    int count = 0;
-    size_t i = 0;
-    while (i < v.size()) {
-        unsigned char c = static_cast<unsigned char>(v[i]);
-        if (std::isspace(c)) { ++i; continue; }
-        if (c == '"' || c == '\'') {
-            size_t close = v.find(static_cast<char>(c), i + 1);
-            if (close == std::string::npos) return {};
-            spec.ellipsis = true;
-            spec.ellipsisText = v.substr(i + 1, close - i - 1);
-            i = close + 1;
-            continue;
-        }
-        size_t j = i;
-        while (j < v.size() && !std::isspace(static_cast<unsigned char>(v[j]))) ++j;
-        std::string tok = v.substr(i, j - i);
-        i = j;
-        if (int n = parseClampCount(tok)) {
-            if (count) return {};
-            count = n;
-        } else if (tok == "auto") {
-            spec.ellipsis = true;
-        } else if (tok == "no-ellipsis" || tok == "none") {
-            // `none` was block-ellipsis's name for this in earlier drafts.
-            spec.ellipsis = false;
-        } else if (tok != "-webkit-legacy") {
-            return {};
-        }
+// block-ellipsis: no-ellipsis | auto | <string>. Returns false for an
+// unparseable value.
+bool parseBlockEllipsis(const std::string& v, LineClampSpec& spec) {
+    if (v == "auto") {
+        spec.ellipsis = true;
+        return true;
     }
-    spec.maxLines = count;
-    return spec;
+    if (v == "no-ellipsis" || v.empty()) {
+        spec.ellipsis = false;
+        return true;
+    }
+    if (v.size() >= 2 && (v[0] == '"' || v[0] == '\'') && v.back() == v[0]) {
+        spec.ellipsis = true;
+        spec.ellipsisText = v.substr(1, v.size() - 2);
+        return true;
+    }
+    return false;
 }
 
 LineClampSpec resolveLineClamp(LayoutNode* node) {
-    const std::string& lc = styleVal(node, Prop::LineClamp);
-    if (!lc.empty() && lc != "none") return parseLineClamp(lc);
+    // The line-clamp longhands: max-lines counts, and only takes effect when
+    // `continue` discards the rest (collapse; discard, which needs
+    // fragmentation, is treated the same; -webkit-legacy is the shorthand's
+    // compatibility flag).
+    const std::string& cont = styleVal(node, Prop::Continue);
+    if (cont == "collapse" || cont == "discard" || cont == "-webkit-legacy") {
+        LineClampSpec spec;
+        spec.maxLines = parseClampCount(styleVal(node, Prop::MaxLines));
+        if (spec.maxLines > 0 && parseBlockEllipsis(styleVal(node, Prop::BlockEllipsis), spec))
+            return spec;
+    }
     // The legacy property only takes effect on a vertical -webkit-box, which
     // browsers lay out as a block container.
     const std::string& wlc = styleVal(node, Prop::WebkitLineClamp);

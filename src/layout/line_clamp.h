@@ -5,7 +5,9 @@
 namespace htmlayout::layout {
 
 // line-clamp (CSS Overflow 4) and the legacy -webkit-line-clamp, for block
-// containers. Block layout calls beginLineClamp() before it lays out the
+// containers. The standard clamp is read from the shorthand's longhands:
+// `max-lines` <integer> with `continue: collapse` (or discard /
+// -webkit-legacy), and `block-ellipsis` for the ellipsis. Block layout calls beginLineClamp() before it lays out the
 // children and applyLineClamp() once they are placed, before the auto height
 // is resolved.
 //

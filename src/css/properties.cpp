@@ -164,11 +164,13 @@ const std::vector<PropertyDef>& knownProperties() {
         // Text overflow & wrapping
         {"text-overflow",     "clip",       false},
 
-        // Line clamping (CSS Overflow 4). `line-clamp` is kept whole —
-        // `none | <integer> <block-ellipsis>?` — and read by block layout; the
-        // legacy `-webkit-line-clamp` only applies on a
-        // `display: -webkit-box; -webkit-box-orient: vertical` box.
-        {"line-clamp",        "none",       false},
+        // Line clamping (CSS Overflow 4). The `line-clamp` shorthand expands
+        // into these three longhands, which block layout reads; the legacy
+        // `-webkit-line-clamp` is a property of its own that only applies on
+        // a `display: -webkit-box; -webkit-box-orient: vertical` box.
+        {"max-lines",         "none",       false},
+        {"block-ellipsis",    "no-ellipsis", true},
+        {"continue",          "auto",       false},
         {"-webkit-line-clamp","none",       false},
         {"-webkit-box-orient","horizontal", false},
         {"overflow-wrap",     "normal",     true},
@@ -635,6 +637,69 @@ bool isFontStyle(const std::string& v) {
     return v == "italic" || v == "oblique";
 }
 
+std::string asciiLower(std::string s) {
+    for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+
+// line-clamp (CSS Overflow 4):
+//   none | auto | [ <integer [1,∞]> || <'block-ellipsis'> ] -webkit-legacy?
+// into max-lines / block-ellipsis / continue. An invalid value expands to
+// nothing, so the declaration is dropped.
+void expandLineClamp(const std::vector<std::string>& parts, std::vector<ExpandedDecl>& out) {
+    auto emit = [&](std::string maxLines, std::string ellipsis, std::string cont) {
+        out.push_back({"max-lines", std::move(maxLines)});
+        out.push_back({"block-ellipsis", std::move(ellipsis)});
+        out.push_back({"continue", std::move(cont)});
+    };
+    if (parts.size() == 1) {
+        std::string v = asciiLower(parts[0]);
+        if (v == "inherit" || v == "initial" || v == "unset" || v == "revert" ||
+            v == "revert-layer") {
+            emit(v, v, v);
+            return;
+        }
+        if (v == "none") { emit("none", "no-ellipsis", "auto"); return; }
+        if (v == "auto") { emit("none", "auto", "collapse"); return; }
+    }
+    std::string count, ellipsis;
+    bool legacy = false;
+    for (size_t i = 0; i < parts.size(); i++) {
+        const std::string& p = parts[i];
+        std::string lower = asciiLower(p);
+        if (legacy) return;  // -webkit-legacy comes last
+        if (lower == "-webkit-legacy") {
+            if (i == 0) return;  // needs something to modify
+            legacy = true;
+            continue;
+        }
+        bool digits = !p.empty() && std::all_of(p.begin(), p.end(), [](char c) {
+            return c >= '0' && c <= '9';
+        });
+        if (digits || (p.size() > 1 && p[0] == '+' &&
+                       std::all_of(p.begin() + 1, p.end(), [](char c) {
+                           return c >= '0' && c <= '9';
+                       }))) {
+            if (!count.empty()) return;
+            std::string d = p[0] == '+' ? p.substr(1) : p;
+            size_t nz = d.find_first_not_of('0');
+            if (nz == std::string::npos) return;  // 0 is out of range
+            count = d.substr(nz);
+            continue;
+        }
+        bool isString = p.size() >= 2 && (p[0] == '"' || p[0] == '\'') && p.back() == p[0];
+        if (isString || lower == "auto" || lower == "no-ellipsis") {
+            if (!ellipsis.empty()) return;
+            ellipsis = isString ? p : lower;
+            continue;
+        }
+        return;
+    }
+    if (count.empty() && ellipsis.empty()) return;
+    emit(count.empty() ? "none" : count, ellipsis.empty() ? "auto" : ellipsis,
+         legacy ? "-webkit-legacy" : "collapse");
+}
+
 } // anonymous namespace
 
 bool isShorthandProperty(std::string_view property) {
@@ -652,6 +717,7 @@ bool isShorthandProperty(std::string_view property) {
         "flex", "flex-flow",
         "gap", "background", "font", "transition", "animation", "outline",
         "list-style", "columns", "column-rule", "overflow", "container",
+        "line-clamp",
         "grid-area", "grid-column", "grid-row", "grid-template",
         "place-content", "place-items", "place-self",
         // Logical properties (remapped to physical / logical longhands below).
@@ -685,6 +751,12 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
 
     auto parts = splitValue(value);
     if (parts.empty()) return {{property, value}};
+
+    if (property == "line-clamp") {
+        std::vector<ExpandedDecl> out;
+        expandLineClamp(parts, out);
+        return out;
+    }
 
     if (property == "margin") {
         std::vector<ExpandedDecl> out;
