@@ -2356,9 +2356,16 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             firstBlockChildMarginTop > 0) {
             float collapsed = std::max(node->box.margin.top, firstBlockChildMarginTop);
             node->box.margin.top = collapsed;
-            // Shift all children up by the first child's margin that was applied to cursorY
+            // Shift all children up by the first child's margin that was applied to cursorY.
+            // A text child's placed runs sit in this box's content space, not
+            // relative to the text node's own rect, so they move explicitly —
+            // otherwise text laid out beside the collapsing child (anonymous
+            // lines after it) keeps its pre-collapse position while its rect
+            // and line box move up.
             for (auto* child : getLayoutChildren(node)) {
                 child->box.contentRect.y -= firstBlockChildMarginTop;
+                if (child->isTextNode())
+                    for (auto& run : child->box.textRuns) run.y -= firstBlockChildMarginTop;
             }
             for (auto& lb : node->box.lineBoxes) lb.top -= firstBlockChildMarginTop;
             for (auto& ef : node->box.escapedFloats) {
