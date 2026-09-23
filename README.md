@@ -49,6 +49,7 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - Text geometry queries: caret rect, selection rectangles, and text-node hit testing for editor/selection UIs. Caret positions come from the consumer's shaper cluster map when it provides one, so ligatures and kerning land correctly
 - Incremental (dirty-flag) relayout that reuses untouched subtrees, with per-pass statistics (`lastLayoutStats()`)
 - `text-overflow: ellipsis`, `overflow-wrap`, `word-break`, `white-space` handling, `text-indent`
+- `line-clamp` (`none | <integer> <block-ellipsis>?`, with `auto` / `no-ellipsis` / a `<string>`) and the legacy `-webkit-line-clamp` on `display: -webkit-box; -webkit-box-orient: vertical`: lines are counted through in-flow block descendants in the same formatting context, the box's auto height ends after the Nth line, text past it is removed from the placed runs and element boxes past it are flagged `clampHidden`, and the last kept line's final run is trimmed to carry the ellipsis. Not yet: RTL ellipsis placement (it goes on the visually rightmost run), an ellipsis after a line that ends in an atomic inline, and the separate `max-lines` / `block-ellipsis` / `continue` longhands
 - `letter-spacing`, `word-spacing` applied during text measurement
 - `display: contents` (children promoted into parent formatting context)
 - `position: relative`, `absolute`, `fixed`, `sticky` (layout-time positioning)
@@ -244,8 +245,12 @@ applyOverflowClipping(rootNode);
 // box.contentRect  — {x, y, width, height}
 // box.margin, box.padding, box.border — edge sizes
 // box.naturalHeight — pre-clamp content height (scroll extent)
-// box.textTruncated — true if text-overflow:ellipsis truncated this node
-// box.textRuns      — placed run geometry for text nodes
+// box.textTruncated — true if text-overflow:ellipsis truncated this node, or
+//                     line-clamp cut lines off this block container
+// box.clampHidden   — past a line-clamp container's clamp point: laid out, but
+//                     skip painting it (and its subtree); hitTest already does
+// box.textRuns      — placed run geometry for text nodes (line-clamp has
+//                     already dropped clamped runs and added the ellipsis)
 ```
 
 ### 4. Hit testing
