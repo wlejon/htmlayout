@@ -246,7 +246,8 @@ private:
                 prop.compare(prop.size() - 6, 6, "-color") == 0)) {
             if (lowerVal == "transparent" || lowerVal == "currentcolor" ||
                 lowerVal == "inherit") return true;
-            return parseColor(value) != Color{0, 0, 0, 0};
+            Color parsed;
+            return tryParseColor(value, parsed);
         }
         return true;
     }

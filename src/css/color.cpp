@@ -1,9 +1,12 @@
 #include "css/color.h"
+#include "css/color_space.h"
 #include "../from_chars_compat.h"
 #include <unordered_map>
 #include <algorithm>
 #include <cmath>
 #include <charconv>
+#include <optional>
+#include <string_view>
 #include <vector>
 
 namespace htmlayout::css {
@@ -166,245 +169,415 @@ const std::unordered_map<std::string, Color>& namedColors() {
     return colors;
 }
 
-std::string toLowerStr(const std::string& s) {
-    std::string r = s;
-    for (auto& c : r) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    return r;
-}
+using colorspace::ColorVal;
+using colorspace::Space;
 
 int hexDigit(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return 0;
+    return -1;
 }
 
-uint8_t clampByte(int v) {
-    return static_cast<uint8_t>(std::max(0, std::min(255, v)));
-}
-
-uint8_t clampByte(float v) {
-    return static_cast<uint8_t>(std::max(0.0f, std::min(255.0f, std::round(v))));
-}
-
-// Parse a number from string, returns 0 on failure
-float parseNum(const std::string& s) {
-    float v = 0;
-    std::string trimmed = s;
-    while (!trimmed.empty() && trimmed.front() == ' ') trimmed.erase(0, 1);
-    while (!trimmed.empty() && trimmed.back() == ' ') trimmed.pop_back();
-    // Remove % sign for percentage handling later
-    bool isPercent = false;
-    if (!trimmed.empty() && trimmed.back() == '%') {
-        trimmed.pop_back();
-        isPercent = true;
-    }
-    auto [ptr, ec] = htmlayout::from_chars_fp(trimmed.data(), trimmed.data() + trimmed.size(), v);
-    if (ec != std::errc()) return 0;
-    if (isPercent) v = v * 255.0f / 100.0f;
+ColorVal fromBytes(const Color& c) {
+    ColorVal v;
+    v.c[0] = c.r / 255.0;
+    v.c[1] = c.g / 255.0;
+    v.c[2] = c.b / 255.0;
+    v.alpha = c.a / 255.0;
     return v;
 }
 
-bool isPercentStr(const std::string& s) {
-    std::string t = s;
-    while (!t.empty() && t.front() == ' ') t.erase(0, 1);
-    while (!t.empty() && t.back() == ' ') t.pop_back();
-    return !t.empty() && t.back() == '%';
+// ---------------------------------------------------------------------------
+// A small tokenizer for colour values (input already lower-cased).
+
+struct Tok {
+    enum Kind { Num, Pct, Dim, Ident, Func, Hash, Comma, Slash } kind;
+    double v = 0;
+    std::string s;      // unit (Dim), name (Ident/Func), digits (Hash)
+    std::string inner;  // Func arguments
+    std::string raw;    // source text, for nested colours
+};
+
+bool isIdentStart(char c) {
+    return (c >= 'a' && c <= 'z') || c == '-' || c == '_' || (unsigned char)c >= 0x80;
 }
+bool isIdentChar(char c) { return isIdentStart(c) || (c >= '0' && c <= '9'); }
+bool isDigit(char c) { return c >= '0' && c <= '9'; }
 
-// HSL to RGB conversion
-Color hslToRgb(float h, float s, float l, float a) {
-    // h in degrees, s and l in 0-1 range
-    h = std::fmod(h, 360.0f);
-    if (h < 0) h += 360.0f;
-    s = std::max(0.0f, std::min(1.0f, s));
-    l = std::max(0.0f, std::min(1.0f, l));
-
-    auto hueToRgb = [](float p, float q, float t) -> float {
-        if (t < 0) t += 1;
-        if (t > 1) t -= 1;
-        if (t < 1.0f/6) return p + (q - p) * 6 * t;
-        if (t < 1.0f/2) return q;
-        if (t < 2.0f/3) return p + (q - p) * (2.0f/3 - t) * 6;
-        return p;
-    };
-
-    float r, g, b;
-    if (s == 0) {
-        r = g = b = l;
-    } else {
-        float q = l < 0.5f ? l * (1 + s) : l + s - l * s;
-        float p = 2 * l - q;
-        r = hueToRgb(p, q, h / 360.0f + 1.0f/3);
-        g = hueToRgb(p, q, h / 360.0f);
-        b = hueToRgb(p, q, h / 360.0f - 1.0f/3);
-    }
-
-    return {clampByte(r * 255), clampByte(g * 255), clampByte(b * 255),
-            clampByte(a * 255)};
-}
-
-// Split "r, g, b" or "r, g, b, a" or "r g b" or "r g b / a" style args
-std::vector<std::string> splitColorArgs(const std::string& args) {
-    std::vector<std::string> parts;
-    std::string current;
-    for (size_t i = 0; i < args.size(); i++) {
-        char c = args[i];
-        if (c == ',' || c == '/') {
-            if (!current.empty()) parts.push_back(current);
-            current.clear();
-        } else if (c == ' ') {
-            // For space-separated syntax, check if we already have content
-            if (!current.empty()) {
-                // Look for slash-alpha syntax: "r g b / a"
-                parts.push_back(current);
-                current.clear();
-            }
-        } else {
-            current += c;
+std::optional<std::vector<Tok>> lex(std::string_view s) {
+    std::vector<Tok> out;
+    size_t i = 0, n = s.size();
+    while (i < n) {
+        char c = s[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') { i++; continue; }
+        size_t start = i;
+        if (c == ',') { out.push_back({Tok::Comma}); i++; continue; }
+        if (c == '/') { out.push_back({Tok::Slash}); i++; continue; }
+        if (c == '#') {
+            i++;
+            while (i < n && isIdentChar(s[i])) i++;
+            Tok t{Tok::Hash};
+            t.s = std::string(s.substr(start + 1, i - start - 1));
+            t.raw = std::string(s.substr(start, i - start));
+            out.push_back(std::move(t));
+            continue;
         }
+        auto startsNumber = [&](size_t p) {
+            if (p < n && (s[p] == '+' || s[p] == '-')) p++;
+            if (p < n && isDigit(s[p])) return true;
+            return p + 1 < n && s[p] == '.' && isDigit(s[p + 1]);
+        };
+        if (startsNumber(i)) {
+            size_t p = i;
+            if (s[p] == '+' || s[p] == '-') p++;
+            while (p < n && isDigit(s[p])) p++;
+            if (p + 1 < n && s[p] == '.' && isDigit(s[p + 1])) {
+                p++;
+                while (p < n && isDigit(s[p])) p++;
+            }
+            if (p < n && s[p] == 'e') {
+                size_t q = p + 1;
+                if (q < n && (s[q] == '+' || s[q] == '-')) q++;
+                if (q < n && isDigit(s[q])) {
+                    p = q;
+                    while (p < n && isDigit(s[p])) p++;
+                }
+            }
+            const char* b = s.data() + i;
+            if (*b == '+') b++;
+            double v = 0;
+            auto [ptr, ec] = htmlayout::from_chars_fp(b, s.data() + p, v);
+            if (ec != std::errc() || ptr != s.data() + p) return std::nullopt;
+            Tok t{Tok::Num};
+            t.v = v;
+            i = p;
+            if (i < n && s[i] == '%') {
+                t.kind = Tok::Pct;
+                i++;
+            } else if (i < n && isIdentStart(s[i])) {
+                size_t u = i;
+                while (i < n && isIdentChar(s[i])) i++;
+                t.kind = Tok::Dim;
+                t.s = std::string(s.substr(u, i - u));
+            }
+            t.raw = std::string(s.substr(start, i - start));
+            out.push_back(std::move(t));
+            continue;
+        }
+        if (isIdentStart(c)) {
+            while (i < n && isIdentChar(s[i])) i++;
+            Tok t{Tok::Ident};
+            t.s = std::string(s.substr(start, i - start));
+            if (i < n && s[i] == '(') {
+                int depth = 0;
+                size_t p = i;
+                for (; p < n; p++) {
+                    if (s[p] == '(') depth++;
+                    else if (s[p] == ')' && --depth == 0) break;
+                }
+                if (p >= n) return std::nullopt;  // unbalanced
+                t.kind = Tok::Func;
+                t.inner = std::string(s.substr(i + 1, p - i - 1));
+                i = p + 1;
+            }
+            t.raw = std::string(s.substr(start, i - start));
+            out.push_back(std::move(t));
+            continue;
+        }
+        return std::nullopt;
     }
-    if (!current.empty()) parts.push_back(current);
-    return parts;
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// Component arguments: `a b c [/ alpha]` (modern) or `a, b, c[, alpha]`
+// (legacy, rgb()/hsl() only; `none` is not allowed there).
+
+struct Args {
+    const Tok* comp[3] = {nullptr, nullptr, nullptr};
+    const Tok* alpha = nullptr;
+    bool legacy = false;
+};
+
+bool isComponentTok(const Tok& t) {
+    return t.kind == Tok::Num || t.kind == Tok::Pct || t.kind == Tok::Dim ||
+           (t.kind == Tok::Ident && t.s == "none");
+}
+
+std::optional<Args> splitArgs(const std::vector<Tok>& t, size_t from, bool allowLegacy) {
+    Args a;
+    size_t n = t.size() - from;
+    bool hasComma = false;
+    for (size_t i = from; i < t.size(); i++)
+        if (t[i].kind == Tok::Comma) hasComma = true;
+    if (hasComma) {
+        if (!allowLegacy || (n != 5 && n != 7)) return std::nullopt;
+        for (size_t k = 0; k < n; k++) {
+            const Tok& x = t[from + k];
+            if (k % 2 == 1) {
+                if (x.kind != Tok::Comma) return std::nullopt;
+            } else if (!isComponentTok(x) || x.kind == Tok::Ident) {
+                return std::nullopt;
+            }
+        }
+        a.legacy = true;
+        for (int k = 0; k < 3; k++) a.comp[k] = &t[from + k * 2];
+        if (n == 7) a.alpha = &t[from + 6];
+        return a;
+    }
+    if (n != 3 && n != 5) return std::nullopt;
+    for (int k = 0; k < 3; k++) {
+        if (!isComponentTok(t[from + k])) return std::nullopt;
+        a.comp[k] = &t[from + k];
+    }
+    if (n == 5) {
+        if (t[from + 3].kind != Tok::Slash || !isComponentTok(t[from + 4])) return std::nullopt;
+        a.alpha = &t[from + 4];
+    }
+    return a;
+}
+
+// A <number> | <percentage> | none component. `pct100` is the value 100%
+// maps to (0 = percentages not allowed). Numbers are scaled by `numScale`.
+bool component(const Tok* t, double pct100, double numScale, ColorVal& out, int idx) {
+    if (t->kind == Tok::Ident) { out.missing[idx] = true; out.c[idx] = 0; return true; }
+    if (t->kind == Tok::Num) { out.c[idx] = t->v * numScale; return true; }
+    if (t->kind == Tok::Pct && pct100 != 0) { out.c[idx] = t->v / 100.0 * pct100; return true; }
+    return false;
+}
+
+bool hueComponent(const Tok* t, ColorVal& out, int idx) {
+    if (t->kind == Tok::Ident) { out.missing[idx] = true; out.c[idx] = 0; return true; }
+    double deg;
+    if (t->kind == Tok::Num) deg = t->v;
+    else if (t->kind == Tok::Dim) {
+        if (t->s == "deg") deg = t->v;
+        else if (t->s == "rad") deg = t->v * 180.0 / 3.14159265358979323846;
+        else if (t->s == "grad") deg = t->v * 0.9;
+        else if (t->s == "turn") deg = t->v * 360.0;
+        else return false;
+    } else return false;
+    if (!std::isfinite(deg)) return false;
+    deg = std::fmod(deg, 360.0);
+    if (deg < 0) deg += 360.0;
+    out.c[idx] = deg;
+    return true;
+}
+
+bool alphaComponent(const Tok* t, ColorVal& out) {
+    if (!t) { out.alpha = 1.0; return true; }
+    if (t->kind == Tok::Ident) { out.alphaMissing = true; out.alpha = 0; return true; }
+    double a;
+    if (t->kind == Tok::Num) a = t->v;
+    else if (t->kind == Tok::Pct) a = t->v / 100.0;
+    else return false;
+    out.alpha = std::clamp(a, 0.0, 1.0);
+    return true;
+}
+
+void clampComp(ColorVal& v, int i, double lo, double hi) {
+    if (!v.missing[i]) v.c[i] = std::clamp(v.c[i], lo, hi);
+}
+
+struct Ctx {
+    Color current{0, 0, 0, 255};
+};
+
+std::optional<ColorVal> parseColorVal(std::string_view s, const Ctx& ctx, int depth);
+
+std::optional<ColorVal> parseColorFunc(const Tok& f, const Ctx& ctx, int depth) {
+    auto toks = lex(f.inner);
+    if (!toks) return std::nullopt;
+    const std::string& name = f.s;
+    ColorVal v;
+
+    if (name == "rgb" || name == "rgba") {
+        auto a = splitArgs(*toks, 0, true);
+        if (!a) return std::nullopt;
+        v.space = Space::SRGB;
+        for (int i = 0; i < 3; i++)
+            if (!component(a->comp[i], 1.0, 1.0 / 255.0, v, i)) return std::nullopt;
+        if (!alphaComponent(a->alpha, v)) return std::nullopt;
+        return v;
+    }
+    if (name == "hsl" || name == "hsla" || name == "hwb") {
+        bool hwb = name == "hwb";
+        auto a = splitArgs(*toks, 0, !hwb);
+        if (!a) return std::nullopt;
+        v.space = hwb ? Space::HWB : Space::HSL;
+        // Bare numbers are accepted for s/l (w/b), meaning the same as %.
+        if (!hueComponent(a->comp[0], v, 0) ||
+            !component(a->comp[1], 1.0, 0.01, v, 1) ||
+            !component(a->comp[2], 1.0, 0.01, v, 2) ||
+            !alphaComponent(a->alpha, v)) return std::nullopt;
+        if (!hwb) clampComp(v, 1, 0.0, 1e9);
+        return v;
+    }
+    if (name == "lab" || name == "lch" || name == "oklab" || name == "oklch") {
+        auto a = splitArgs(*toks, 0, false);
+        if (!a) return std::nullopt;
+        bool ok = name.rfind("ok", 0) == 0;
+        bool polar = name.back() == 'h';
+        v.space = ok ? (polar ? Space::OKLCH : Space::OKLab) : (polar ? Space::LCH : Space::Lab);
+        double lMax = ok ? 1.0 : 100.0;
+        if (!component(a->comp[0], lMax, 1.0, v, 0)) return std::nullopt;
+        clampComp(v, 0, 0.0, lMax);
+        if (polar) {
+            if (!component(a->comp[1], ok ? 0.4 : 150.0, 1.0, v, 1) ||
+                !hueComponent(a->comp[2], v, 2)) return std::nullopt;
+            clampComp(v, 1, 0.0, 1e9);
+        } else {
+            double ab = ok ? 0.4 : 125.0;
+            if (!component(a->comp[1], ab, 1.0, v, 1) ||
+                !component(a->comp[2], ab, 1.0, v, 2)) return std::nullopt;
+        }
+        if (!alphaComponent(a->alpha, v)) return std::nullopt;
+        return v;
+    }
+    if (name == "color") {
+        if (toks->empty() || (*toks)[0].kind != Tok::Ident) return std::nullopt;
+        auto sp = colorspace::spaceFromName((*toks)[0].s);
+        if (!sp || colorspace::isPolar(*sp) || *sp == Space::Lab || *sp == Space::OKLab)
+            return std::nullopt;
+        auto a = splitArgs(*toks, 1, false);
+        if (!a) return std::nullopt;
+        v.space = *sp;
+        for (int i = 0; i < 3; i++)
+            if (!component(a->comp[i], 1.0, 1.0, v, i)) return std::nullopt;
+        if (!alphaComponent(a->alpha, v)) return std::nullopt;
+        return v;
+    }
+    if (name == "color-mix") {
+        // Split on top-level commas.
+        std::vector<std::vector<const Tok*>> groups(1);
+        for (const Tok& t : *toks) {
+            if (t.kind == Tok::Comma) groups.emplace_back();
+            else groups.back().push_back(&t);
+        }
+        Space space = Space::OKLab;  // css-color-5: the interpolation method may be omitted
+        auto hue = colorspace::HueMethod::Shorter;
+        size_t first = 0;
+        if (!groups[0].empty() && groups[0][0]->kind == Tok::Ident && groups[0][0]->s == "in") {
+            const auto& g = groups[0];
+            if (g.size() < 2 || g[1]->kind != Tok::Ident) return std::nullopt;
+            auto sp = colorspace::spaceFromName(g[1]->s);
+            if (!sp) return std::nullopt;
+            space = *sp;
+            if (g.size() == 4) {
+                if (!colorspace::isPolar(space) || g[2]->kind != Tok::Ident ||
+                    g[3]->kind != Tok::Ident || g[3]->s != "hue") return std::nullopt;
+                const std::string& m = g[2]->s;
+                if (m == "shorter") hue = colorspace::HueMethod::Shorter;
+                else if (m == "longer") hue = colorspace::HueMethod::Longer;
+                else if (m == "increasing") hue = colorspace::HueMethod::Increasing;
+                else if (m == "decreasing") hue = colorspace::HueMethod::Decreasing;
+                else return std::nullopt;
+            } else if (g.size() != 2) {
+                return std::nullopt;
+            }
+            first = 1;
+        }
+        if (groups.size() - first != 2) return std::nullopt;
+        ColorVal col[2];
+        std::optional<double> pct[2];
+        for (int k = 0; k < 2; k++) {
+            const auto& g = groups[first + k];
+            const Tok* colorTok = nullptr;
+            for (const Tok* t : g) {
+                if (t->kind == Tok::Pct) {
+                    if (pct[k] || t->v < 0 || t->v > 100) return std::nullopt;
+                    pct[k] = t->v / 100.0;
+                } else if (t->kind == Tok::Ident || t->kind == Tok::Hash || t->kind == Tok::Func) {
+                    if (colorTok) return std::nullopt;
+                    colorTok = t;
+                } else {
+                    return std::nullopt;
+                }
+            }
+            if (!colorTok) return std::nullopt;
+            auto c = parseColorVal(colorTok->raw, ctx, depth + 1);
+            if (!c) return std::nullopt;
+            col[k] = *c;
+        }
+        // Percentage normalisation (css-color-5 §3.1).
+        double p1, p2, alphaMult = 1.0;
+        if (!pct[0] && !pct[1]) { p1 = p2 = 0.5; }
+        else if (!pct[1]) { p1 = *pct[0]; p2 = 1 - p1; }
+        else if (!pct[0]) { p2 = *pct[1]; p1 = 1 - p2; }
+        else {
+            p1 = *pct[0];
+            p2 = *pct[1];
+            double sum = p1 + p2;
+            if (sum <= 0) return std::nullopt;
+            if (sum < 1) alphaMult = sum;
+            p1 /= sum;
+            p2 /= sum;
+        }
+        (void)p1;
+        return colorspace::mix(col[0], col[1], space, hue, p2, alphaMult);
+    }
+    return std::nullopt;
+}
+
+std::optional<ColorVal> parseColorVal(std::string_view s, const Ctx& ctx, int depth) {
+    if (depth > 16) return std::nullopt;
+    auto toks = lex(s);
+    if (!toks || toks->size() != 1) return std::nullopt;
+    const Tok& t = (*toks)[0];
+    if (t.kind == Tok::Ident) {
+        if (t.s == "currentcolor") return fromBytes(ctx.current);
+        auto& names = namedColors();
+        auto it = names.find(t.s);
+        if (it == names.end()) return std::nullopt;
+        return fromBytes(it->second);
+    }
+    if (t.kind == Tok::Hash) {
+        const std::string& h = t.s;
+        int d[8];
+        if (h.size() != 3 && h.size() != 4 && h.size() != 6 && h.size() != 8) return std::nullopt;
+        for (size_t i = 0; i < h.size(); i++)
+            if ((d[i] = hexDigit(h[i])) < 0) return std::nullopt;
+        Color c;
+        if (h.size() <= 4) {
+            c = {uint8_t(d[0] * 17), uint8_t(d[1] * 17), uint8_t(d[2] * 17),
+                 uint8_t(h.size() == 4 ? d[3] * 17 : 255)};
+        } else {
+            c = {uint8_t(d[0] * 16 + d[1]), uint8_t(d[2] * 16 + d[3]), uint8_t(d[4] * 16 + d[5]),
+                 uint8_t(h.size() == 8 ? d[6] * 16 + d[7] : 255)};
+        }
+        return fromBytes(c);
+    }
+    if (t.kind == Tok::Func) return parseColorFunc(t, ctx, depth);
+    return std::nullopt;
+}
+
+uint8_t toByte(double v) {
+    return static_cast<uint8_t>(std::clamp(std::round(v * 255.0), 0.0, 255.0));
 }
 
 } // anonymous namespace
 
+bool tryParseColor(const std::string& value, Color& out, const Color& currentColor) {
+    std::string lower = value;
+    for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    Ctx ctx;
+    ctx.current = currentColor;
+    auto v = parseColorVal(lower, ctx, 0);
+    if (!v) return false;
+    double rgb[3], a;
+    colorspace::toClippedSRGB(*v, rgb, a);
+    out = {toByte(rgb[0]), toByte(rgb[1]), toByte(rgb[2]), toByte(a)};
+    return true;
+}
+
+Color parseColor(const std::string& value, const Color& currentColor) {
+    Color c{0, 0, 0, 0};
+    if (!tryParseColor(value, c, currentColor)) return {0, 0, 0, 0};
+    return c;
+}
+
 Color parseColor(const std::string& value) {
-    if (value.empty()) return {0, 0, 0, 0};
-
-    std::string lower = toLowerStr(value);
-
-    // Trim
-    while (!lower.empty() && lower.front() == ' ') lower.erase(0, 1);
-    while (!lower.empty() && lower.back() == ' ') lower.pop_back();
-
-    // Named colors
-    auto& names = namedColors();
-    auto it = names.find(lower);
-    if (it != names.end()) return it->second;
-
-    // Hex colors
-    if (!lower.empty() && lower[0] == '#') {
-        std::string hex = lower.substr(1);
-        if (hex.size() == 3) {
-            // #RGB -> #RRGGBB
-            return {
-                static_cast<uint8_t>(hexDigit(hex[0]) * 17),
-                static_cast<uint8_t>(hexDigit(hex[1]) * 17),
-                static_cast<uint8_t>(hexDigit(hex[2]) * 17),
-                255
-            };
-        }
-        if (hex.size() == 4) {
-            // #RGBA -> #RRGGBBAA
-            return {
-                static_cast<uint8_t>(hexDigit(hex[0]) * 17),
-                static_cast<uint8_t>(hexDigit(hex[1]) * 17),
-                static_cast<uint8_t>(hexDigit(hex[2]) * 17),
-                static_cast<uint8_t>(hexDigit(hex[3]) * 17)
-            };
-        }
-        if (hex.size() == 6) {
-            return {
-                static_cast<uint8_t>(hexDigit(hex[0]) * 16 + hexDigit(hex[1])),
-                static_cast<uint8_t>(hexDigit(hex[2]) * 16 + hexDigit(hex[3])),
-                static_cast<uint8_t>(hexDigit(hex[4]) * 16 + hexDigit(hex[5])),
-                255
-            };
-        }
-        if (hex.size() == 8) {
-            return {
-                static_cast<uint8_t>(hexDigit(hex[0]) * 16 + hexDigit(hex[1])),
-                static_cast<uint8_t>(hexDigit(hex[2]) * 16 + hexDigit(hex[3])),
-                static_cast<uint8_t>(hexDigit(hex[4]) * 16 + hexDigit(hex[5])),
-                static_cast<uint8_t>(hexDigit(hex[6]) * 16 + hexDigit(hex[7]))
-            };
-        }
-    }
-
-    // rgb() / rgba()
-    if (lower.size() > 4 && (lower.substr(0, 4) == "rgb(" || lower.substr(0, 5) == "rgba(")) {
-        size_t start = lower.find('(');
-        size_t end = lower.rfind(')');
-        if (start != std::string::npos && end != std::string::npos && end > start) {
-            std::string args = lower.substr(start + 1, end - start - 1);
-            auto parts = splitColorArgs(args);
-            if (parts.size() >= 3) {
-                float r = parseNum(parts[0]);
-                float g = parseNum(parts[1]);
-                float b = parseNum(parts[2]);
-                float a = parts.size() >= 4 ? parseNum(parts[3]) : 255.0f;
-                // If alpha is in 0-1 range (not percent), scale it
-                if (parts.size() >= 4 && !isPercentStr(parts[3])) {
-                    float rawA = 0;
-                    std::string trimA = parts[3];
-                    while (!trimA.empty() && trimA.front() == ' ') trimA.erase(0, 1);
-                    auto [p, e] = htmlayout::from_chars_fp(trimA.data(), trimA.data() + trimA.size(), rawA);
-                    if (e == std::errc()) {
-                        if (rawA <= 1.0f) a = rawA * 255.0f;
-                        else a = rawA;
-                    }
-                }
-                return {clampByte(r), clampByte(g), clampByte(b), clampByte(a)};
-            }
-        }
-    }
-
-    // hsl() / hsla()
-    if (lower.size() > 4 && (lower.substr(0, 4) == "hsl(" || lower.substr(0, 5) == "hsla(")) {
-        size_t start = lower.find('(');
-        size_t end = lower.rfind(')');
-        if (start != std::string::npos && end != std::string::npos && end > start) {
-            std::string args = lower.substr(start + 1, end - start - 1);
-            auto parts = splitColorArgs(args);
-            if (parts.size() >= 3) {
-                // h in degrees, s and l as percentages
-                float h = 0;
-                std::string hStr = parts[0];
-                while (!hStr.empty() && hStr.front() == ' ') hStr.erase(0, 1);
-                while (!hStr.empty() && hStr.back() == ' ') hStr.pop_back();
-                // Remove deg suffix if present
-                if (hStr.size() > 3 && hStr.substr(hStr.size() - 3) == "deg") {
-                    hStr = hStr.substr(0, hStr.size() - 3);
-                }
-                htmlayout::from_chars_fp(hStr.data(), hStr.data() + hStr.size(), h);
-
-                // s and l as percentages
-                float s = 0, l = 0;
-                std::string sStr = parts[1], lStr = parts[2];
-                while (!sStr.empty() && sStr.front() == ' ') sStr.erase(0, 1);
-                while (!sStr.empty() && sStr.back() == ' ') sStr.pop_back();
-                if (!sStr.empty() && sStr.back() == '%') sStr.pop_back();
-                htmlayout::from_chars_fp(sStr.data(), sStr.data() + sStr.size(), s);
-                s /= 100.0f;
-
-                while (!lStr.empty() && lStr.front() == ' ') lStr.erase(0, 1);
-                while (!lStr.empty() && lStr.back() == ' ') lStr.pop_back();
-                if (!lStr.empty() && lStr.back() == '%') lStr.pop_back();
-                htmlayout::from_chars_fp(lStr.data(), lStr.data() + lStr.size(), l);
-                l /= 100.0f;
-
-                float a = 1.0f;
-                if (parts.size() >= 4) {
-                    std::string aStr = parts[3];
-                    while (!aStr.empty() && aStr.front() == ' ') aStr.erase(0, 1);
-                    while (!aStr.empty() && aStr.back() == ' ') aStr.pop_back();
-                    if (!aStr.empty() && aStr.back() == '%') {
-                        aStr.pop_back();
-                        htmlayout::from_chars_fp(aStr.data(), aStr.data() + aStr.size(), a);
-                        a /= 100.0f;
-                    } else {
-                        htmlayout::from_chars_fp(aStr.data(), aStr.data() + aStr.size(), a);
-                    }
-                }
-
-                return hslToRgb(h, s, l, a);
-            }
-        }
-    }
-
-    return {0, 0, 0, 0}; // unrecognized
+    return parseColor(value, Color{0, 0, 0, 255});
 }
 
 } // namespace htmlayout::css

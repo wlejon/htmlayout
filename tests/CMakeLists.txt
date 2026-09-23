@@ -26,6 +26,7 @@ add_executable(htmlayout_test
     test_parser_extra.cpp
     test_incremental.cpp
     test_bidi.cpp
+    test_color.cpp
 )
 target_include_directories(htmlayout_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(htmlayout_test PRIVATE htmlayout gumbo)
