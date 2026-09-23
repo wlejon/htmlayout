@@ -41,7 +41,12 @@ struct ColorContext {
 // - color-mix([in <space> [<hue-method> hue]], <color> [p%], <color> [p%])
 // - light-dark(<color>, <color>), chosen by ColorContext::scheme
 // Colours outside sRGB are gamut-mapped into it with the CSS Color 4 §13.2
-// algorithm (OKLCH chroma reduction). System colours are not supported.
+// algorithm (OKLCH chroma reduction).
+// - CSS Color 4 system colours (Canvas, CanvasText, ButtonFace, Field,
+//   Highlight, AccentColor, Mark, ...) and the deprecated ones (Window,
+//   ButtonHighlight, ThreeDFace, ...) as the aliases §6.2.1 maps them to,
+//   with a light and a dark value chosen by ColorContext::scheme
+
 // Returns {0,0,0,0} for unrecognized values.
 Color parseColor(const std::string& value);
 

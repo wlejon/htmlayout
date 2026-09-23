@@ -171,6 +171,60 @@ const std::unordered_map<std::string, Color>& namedColors() {
     return colors;
 }
 
+// CSS Color 4 §6.2 system colours, keyed lowercase, as {light, dark}: the
+// values a browser uses with no OS theme to follow (Chromium's), the dark
+// ones for an element whose used colour scheme is dark.
+struct SystemColor {
+    Color light, dark;
+};
+
+const std::unordered_map<std::string, SystemColor>& systemColors() {
+    static const std::unordered_map<std::string, SystemColor> colors = [] {
+        std::unordered_map<std::string, SystemColor> m = {
+            {"accentcolor",       {{0, 117, 255, 255},   {153, 200, 255, 255}}},
+            {"accentcolortext",   {{255, 255, 255, 255}, {0, 0, 0, 255}}},
+            {"activetext",        {{255, 0, 0, 255},     {255, 158, 158, 255}}},
+            {"buttonborder",      {{118, 118, 118, 255}, {107, 107, 107, 255}}},
+            {"buttonface",        {{239, 239, 239, 255}, {107, 107, 107, 255}}},
+            {"buttontext",        {{0, 0, 0, 255},       {255, 255, 255, 255}}},
+            {"canvas",            {{255, 255, 255, 255}, {18, 18, 18, 255}}},
+            {"canvastext",        {{0, 0, 0, 255},       {255, 255, 255, 255}}},
+            {"field",             {{255, 255, 255, 255}, {59, 59, 59, 255}}},
+            {"fieldtext",         {{0, 0, 0, 255},       {255, 255, 255, 255}}},
+            {"graytext",          {{109, 109, 109, 255}, {142, 142, 142, 255}}},
+            {"highlight",         {{181, 213, 255, 255}, {153, 200, 255, 255}}},
+            {"highlighttext",     {{0, 0, 0, 255},       {0, 0, 0, 255}}},
+            {"linktext",          {{0, 0, 238, 255},     {158, 158, 255, 255}}},
+            {"mark",              {{255, 255, 0, 255},   {102, 77, 0, 255}}},
+            {"marktext",          {{0, 0, 0, 255},       {255, 255, 255, 255}}},
+            {"selecteditem",      {{0, 117, 255, 255},   {153, 200, 255, 255}}},
+            {"selecteditemtext",  {{255, 255, 255, 255}, {0, 0, 0, 255}}},
+            {"visitedtext",       {{85, 26, 139, 255},   {208, 173, 240, 255}}},
+        };
+        // The deprecated keywords (§6.2.1) are aliases for these.
+        static const std::pair<const char*, const char*> kDeprecated[] = {
+            {"activeborder", "buttonborder"},     {"activecaption", "canvas"},
+            {"appworkspace", "canvas"},           {"background", "canvas"},
+            {"buttonhighlight", "buttonface"},    {"buttonshadow", "buttonface"},
+            {"captiontext", "canvastext"},        {"inactiveborder", "buttonborder"},
+            {"inactivecaption", "canvas"},        {"inactivecaptiontext", "graytext"},
+            {"infobackground", "canvas"},         {"infotext", "canvastext"},
+            {"menu", "canvas"},                   {"menutext", "canvastext"},
+            {"scrollbar", "canvas"},              {"threeddarkshadow", "buttonborder"},
+            {"threedface", "buttonface"},         {"threedhighlight", "buttonborder"},
+            {"threedlightshadow", "buttonborder"}, {"threedshadow", "buttonborder"},
+            {"window", "canvas"},                 {"windowframe", "buttonborder"},
+            {"windowtext", "canvastext"},
+        };
+        for (const auto& [alias, target] : kDeprecated) {
+            SystemColor c = m.at(target);
+            m.emplace(alias, c);
+        }
+        return m;
+    }();
+    return colors;
+}
+
 using colorspace::ColorVal;
 using colorspace::Space;
 
@@ -709,8 +763,11 @@ std::optional<ColorVal> parseColorVal(std::string_view s, const Ctx& ctx, int de
         if (t.s == "currentcolor") return fromBytes(ctx.current);
         auto& names = namedColors();
         auto it = names.find(t.s);
-        if (it == names.end()) return std::nullopt;
-        return fromBytes(it->second);
+        if (it != names.end()) return fromBytes(it->second);
+        auto& sys = systemColors();
+        auto st = sys.find(t.s);
+        if (st == sys.end()) return std::nullopt;
+        return fromBytes(ctx.dark ? st->second.dark : st->second.light);
     }
     if (t.kind == Tok::Hash) {
         const std::string& h = t.s;

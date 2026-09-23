@@ -391,6 +391,64 @@ void testColorIntegration() {
     check(found, "border shorthand keeps an oklch() colour whole");
 }
 
+void testSystemColors() {
+    printf("--- Color: system colours ---\n");
+    checkColor("Canvas", 255, 255, 255);
+    checkColor("CanvasText", 0, 0, 0);
+    checkColor("canvastext", 0, 0, 0);
+    checkColor("ButtonFace", 239, 239, 239);
+    checkColor("ButtonText", 0, 0, 0);
+    checkColor("ButtonBorder", 118, 118, 118);
+    checkColor("Field", 255, 255, 255);
+    checkColor("FieldText", 0, 0, 0);
+    checkColor("LinkText", 0, 0, 238);
+    checkColor("VisitedText", 85, 26, 139);
+    checkColor("ActiveText", 255, 0, 0);
+    checkColor("Mark", 255, 255, 0);
+    checkColor("MarkText", 0, 0, 0);
+    // Every CSS Color 4 system colour parses.
+    for (const char* name : {"AccentColor", "AccentColorText", "GrayText", "Highlight",
+                             "HighlightText", "SelectedItem", "SelectedItemText"}) {
+        Color c;
+        std::string label = std::string("system colour ") + name + " parses";
+        check(tryParseColor(name, c) && c.a == 255, label.c_str());
+    }
+    // The deprecated keywords are the aliases §6.2.1 gives them.
+    checkSame("Window", "Canvas");
+    checkSame("WindowText", "CanvasText");
+    checkSame("ButtonHighlight", "ButtonFace");
+    checkSame("ThreeDFace", "ButtonFace");
+    checkSame("ThreeDShadow", "ButtonBorder");
+    checkSame("InactiveCaptionText", "GrayText");
+    checkSame("InfoBackground", "Canvas");
+    checkSame("MenuText", "CanvasText");
+    checkSame("Background", "Canvas");
+    checkInvalid("CanvasTexts");
+    checkInvalid("ButtonFaceColor");
+
+    // A dark used colour scheme picks the dark values.
+    ColorContext dark{Color{0, 0, 0, 255}, ColorScheme::Dark};
+    Color c;
+    check(tryParseColor("Canvas", c, dark) && near(c, 18, 18, 18), "Canvas under a dark scheme");
+    check(tryParseColor("CanvasText", c, dark) && near(c, 255, 255, 255),
+          "CanvasText under a dark scheme");
+    check(tryParseColor("Window", c, dark) && near(c, 18, 18, 18),
+          "a deprecated alias follows the dark scheme too");
+
+    // System colours work wherever a colour does.
+    checkColor("color-mix(in srgb, Canvas, CanvasText)", 128, 128, 128);
+    checkColor("rgb(from ButtonFace r g b / 50%)", 239, 239, 239, 128);
+    check(tryParseColor("light-dark(CanvasText, Canvas)", c, dark) && near(c, 18, 18, 18),
+          "system colours inside light-dark()");
+    auto s = parse("@supports (color: Canvas) { .x { color: red; } }");
+    check(s.rules.size() == 1, "@supports accepts a system colour");
+    auto r = expandShorthand("border", "1px solid ButtonBorder");
+    bool found = false;
+    for (auto& d : r)
+        if (d.property == "border-top-color") found = d.value == "ButtonBorder";
+    check(found, "border shorthand takes a system colour");
+}
+
 } // namespace
 
 void testColor() {
@@ -404,4 +462,5 @@ void testColor() {
     testWideGamutSpaces();
     testGamutMapping();
     testColorIntegration();
+    testSystemColors();
 }
