@@ -1,4 +1,5 @@
 #include "css/cascade.h"
+#include "css/container_query.h"
 #include "css/properties.h"
 #include <algorithm>
 #include <cctype>
@@ -160,60 +161,58 @@ void Cascade::rankLayers() {
     }
 }
 
-bool Cascade::evaluateContainerQuery(const ElementRef& elem,
-                                      const std::string& containerName,
-                                      const std::string& condition,
-                                      bool fromSelf) const {
-    // Walk up the tree to find the nearest container ancestor
+bool Cascade::evaluateContainerQuery(const ElementRef& elem, const ContainerQuery& query,
+                                      bool fromSelf, const ComputedStyle* firstStyle) const {
+    // An invalid condition never matches.
+    const ContainerCondition* cond = query.parsed.get();
+    if (!cond) return false;
+
+    // The query container is the nearest ancestor (the element itself for a
+    // pseudo-element's originating element) that carries the query's name, if
+    // it names one, and can answer every feature it tests: size features need
+    // a size container (container-type size / inline-size); style features
+    // any element, every element being a style container (css-contain-3 §2).
     const ElementRef* current = fromSelf ? &elem : elem.parent();
-    while (current) {
+    bool first = true;
+    for (; current; current = current->parent(), first = false) {
         std::string_view cType = current->containerType();
-        if (cType != "none") {
-            // Check name match if required
-            if (!containerName.empty()) {
-                std::string cName(current->containerName());
-                // Check if the container's name list contains the required name
-                bool nameMatch = false;
-                std::istringstream iss(cName);
-                std::string n;
-                while (iss >> n) {
-                    if (n == containerName) { nameMatch = true; break; }
-                }
-                if (!nameMatch) {
-                    current = current->parent();
-                    continue;
-                }
+        const bool sizeContainer = cType == "size" || cType == "inline-size";
+        if (cond->usesSize() && !sizeContainer) continue;
+        if (!query.name.empty()) {
+            std::istringstream iss{std::string(current->containerName())};
+            bool nameMatch = false;
+            std::string n;
+            while (iss >> n) {
+                if (n == query.name) { nameMatch = true; break; }
             }
-
-            // Evaluate the condition against this container
-            // Parse conditions like "(min-width: 400px)" or "(width > 400px)"
-            std::string cond = condition;
-            // Strip outer parens if present
-            if (!cond.empty() && cond.front() == '(') cond.erase(0, 1);
-            if (!cond.empty() && cond.back() == ')') cond.pop_back();
-
-            // Trim
-            size_t s = cond.find_first_not_of(" \t\n\r\f");
-            size_t e = cond.find_last_not_of(" \t\n\r\f");
-            if (s == std::string::npos) return true;
-            cond = cond.substr(s, e - s + 1);
-
-            float inlineSize = current->containerInlineSize();
-            float blockSize = current->containerBlockSize();
-
-            // Build a MediaContext to reuse evaluateMediaFeature / range parsing
-            MediaContext mctx;
-            mctx.viewportWidth = inlineSize;
-            mctx.viewportHeight = (cType == "size") ? blockSize : 0;
-
-            // Evaluate potentially multiple conditions joined by and/or
-            // Split into parenthesized features
-            std::string fullCond = "(" + cond + ")";
-            return evaluateMediaQuery(fullCond, mctx);
+            if (!nameMatch) continue;
         }
-        current = current->parent();
+
+        ContainerQueryEnv env;
+        env.hasInlineAxis = sizeContainer;
+        env.hasBlockAxis = cType == "size";
+        env.inlineSize = current->containerInlineSize();
+        env.blockSize = current->containerBlockSize();
+        const ComputedStyle* style = first ? firstStyle : nullptr;
+        env.styleValue = [current, style](std::string_view prop, std::string& out) {
+            if (style) {
+                // A custom property as the container sees it: its own or
+                // inherited (the map alone holds only its own).
+                const std::string* v = nullptr;
+                if (ComputedStyle::isCustom(prop)) {
+                    v = style->customProperty(prop);
+                } else if (auto it = style->find(prop); it != style->end()) {
+                    v = &it->second;
+                }
+                out = v ? *v : std::string();
+                return true;
+            }
+            out.clear();
+            return current->computedStyleValue(prop, out);
+        };
+        return cond->matches(env);
     }
-    return false; // no container found
+    return false;  // no eligible container: the query is unknown
 }
 
 void Cascade::setImportResolver(ImportResolver resolver) {
@@ -352,12 +351,21 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
     std::stable_sort(ordered.begin(), ordered.end(), [](const Pending& a, const Pending& b) {
         return a.rule->sourcePos < b.rule->sourcePos;
     });
+    // Each block's query list, with every condition parsed, built once per
+    // block rather than once per rule.
+    std::unordered_map<const ContainerBlock*, std::vector<ContainerQuery>> blockQueries;
+    auto queriesOf = [&](const ContainerBlock* cb) -> const std::vector<ContainerQuery>& {
+        auto it = blockQueries.find(cb);
+        if (it != blockQueries.end()) return it->second;
+        std::vector<ContainerQuery> qs = cb->enclosing;
+        qs.push_back({cb->name, cb->condition, cb->parsed});
+        for (auto& q : qs)
+            if (!q.parsed) q.parsed = ContainerCondition::parse(q.condition);
+        return blockQueries.emplace(cb, std::move(qs)).first->second;
+    };
     for (const Pending& p : ordered) {
         std::vector<ContainerQuery> queries;
-        if (p.container) {
-            queries = p.container->enclosing;
-            queries.push_back({p.container->name, p.container->condition});
-        }
+        if (p.container) queries = queriesOf(p.container);
         auto selectors = parseSelectorList(p.rule->selector);
         for (auto& sel : selectors) {
             rules_.push_back({std::move(sel), p.rule->declarations, scope, nextOrder_++,
@@ -570,7 +578,8 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     for (size_t ruleIdx : candidates) {
         const auto& rule = rules_[ruleIdx];
         // Container queries (nested @container rules each add one).
-        if (!rule.containerQueries.empty() && !containerQueriesHold(elem, rule.containerQueries)) {
+        if (!rule.containerQueries.empty() &&
+            !containerQueriesHold(elem, rule.containerQueries, /*fromSelf=*/false, parentStyle)) {
             continue;
         }
 
@@ -1079,7 +1088,7 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
         if (!rule.pseudoSelector.matches(elem)) return false;
         // A pseudo-element's query container is the nearest container among
         // its originating element and that element's ancestors.
-        return containerQueriesHold(elem, rule.containerQueries, /*fromSelf=*/true);
+        return containerQueriesHold(elem, rule.containerQueries, /*fromSelf=*/true, &elemStyle);
     };
 
     // ::before and ::after generate a box only if some rule gives them

@@ -6,6 +6,8 @@
 
 namespace htmlayout::css {
 
+class ContainerCondition;  // css/container_query.h
+
 // A single CSS declaration: property: value
 struct Declaration {
     std::string property;   // e.g. "color", "margin-left"
@@ -50,12 +52,16 @@ struct LayerBlock {
 struct ContainerQuery {
     std::string name;               // container name (empty = any container)
     std::string condition;          // e.g. "(min-width: 400px)"
+    // `condition` parsed (css/container_query.h). Null = not a valid query,
+    // which never matches, or a query built by hand (the cascade parses it).
+    std::shared_ptr<const ContainerCondition> parsed;
 };
 
 // A @container block: container query with contained rules
 struct ContainerBlock {
     std::string name;               // container name (empty = any container)
     std::string condition;           // e.g. "(min-width: 400px)"
+    std::shared_ptr<const ContainerCondition> parsed;  // as ContainerQuery::parsed
     std::vector<Rule> rules;
     // @media conditions that must also match: the block sits inside @media,
     // or holds an @media nested in the container query.

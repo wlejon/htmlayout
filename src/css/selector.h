@@ -89,6 +89,16 @@ struct ElementRef {
 
     // Container queries: the current block size of this element's content box.
     virtual float containerBlockSize() const { return 0; }
+
+    // Container style queries (`style(--x: 1)`): this element's computed
+    // value of `property` into `out` (left empty when the property is unset),
+    // returning true; false when the element cannot report computed values,
+    // which makes a style query against it unknown. The cascade answers
+    // queries against an element's parent (the usual unnamed style query)
+    // from the parent style handed to resolve(), without this hook.
+    virtual bool computedStyleValue(std::string_view /*property*/, std::string& /*out*/) const {
+        return false;
+    }
 };
 
 // ---- Internal selector representation ----

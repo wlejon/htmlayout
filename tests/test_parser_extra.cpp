@@ -344,6 +344,140 @@ static void testContainerSourceOrder() {
     check(cs["background-color"] == "blue", "interleaved rules keep source order");
 }
 
+// One rule `.c { color: red }` under `@container <prelude>`, resolved for a
+// child of `box`: does it apply?
+static bool containerApplies(const std::string& prelude, MockElement& box,
+                             const ComputedStyle* parentStyle = nullptr) {
+    Cascade c;
+    c.addStylesheet(parse("@container " + prelude + " { .c { color: red; } }"));
+    MockElement item; item.tag = "span"; item.classes = "c";
+    box.childElems.clear();
+    box.addChild(&item);
+    auto cs = c.resolve(item, {}, parentStyle);
+    auto it = cs.find("color");
+    box.childElems.clear();
+    return it != cs.end() && it->second == "red";
+}
+
+static void testContainerConditionLogic() {
+    printf("--- container query conditions: not / and / or / ranges ---\n");
+    MockElement box; box.tag = "div"; box.contType = "size";
+    box.contInlineSize = 300; box.contBlockSize = 200;
+
+    check(containerApplies("(width > 200px)", box), "range: width > 200px");
+    check(!containerApplies("(width > 300px)", box), "range: width > 300px is false at 300");
+    check(containerApplies("(width >= 300px)", box), "range: >= is inclusive");
+    check(containerApplies("(250px < width)", box), "range: value first");
+    check(containerApplies("(100px < width <= 300px)", box), "range: two-sided");
+    check(!containerApplies("(100px < width < 300px)", box), "range: two-sided, exclusive end");
+    check(!containerApplies("(100px < width > 50px)", box), "range: mixed directions are invalid");
+    check(containerApplies("(min-width: 300px) and (max-height: 200px)", box), "and: both hold");
+    check(!containerApplies("(min-width: 300px) and (min-height: 201px)", box), "and: one fails");
+    check(containerApplies("(min-width: 900px) or (height: 200px)", box), "or: one holds");
+    check(!containerApplies("(min-width: 900px) or (height: 10px)", box), "or: none holds");
+    check(containerApplies("not (width < 100px)", box), "not: negates");
+    check(!containerApplies("not (width > 100px)", box), "not: negates a true feature");
+    check(containerApplies("((width > 100px) and (height > 100px)) or (width > 900px)", box),
+          "parenthesized sub-query");
+    check(containerApplies("not ((width > 900px) or (height > 900px))", box),
+          "not over a parenthesized or");
+    check(!containerApplies("(width > 100px) and (height > 100px) or (width > 1px)", box),
+          "and/or mixed at one level is invalid");
+    check(containerApplies("(orientation: landscape)", box), "orientation: landscape");
+    check(!containerApplies("(orientation: portrait)", box), "orientation: portrait");
+    check(containerApplies("(aspect-ratio > 1/1)", box), "aspect-ratio > 1/1");
+    check(containerApplies("(aspect-ratio: 3/2)", box), "aspect-ratio: 3/2 exactly");
+    check(containerApplies("(min-aspect-ratio: 1.4)", box), "min-aspect-ratio: number");
+    check(containerApplies("(width)", box), "boolean context: nonzero width");
+    check(containerApplies("(inline-size > 18.5em)", box), "em: 16px when unknown (296 < 300)");
+    check(!containerApplies("(inline-size > 19em)", box), "em: 304 > 300");
+    check(containerApplies("(block-size < 3in)", box), "absolute units: 3in = 288px");
+
+    // Unknown is neither true nor false: `not` of it is still unknown.
+    check(!containerApplies("(width > 50vw)", box), "viewport unit: unknown");
+    check(!containerApplies("not (width > 50vw)", box), "not unknown is unknown");
+    check(containerApplies("(width > 50vw) or (width > 1px)", box), "unknown or true = true");
+    check(!containerApplies("(width > 50vw) and (width > 1px)", box), "unknown and true = unknown");
+    check(!containerApplies("(foo: bar)", box), "unknown feature: general-enclosed");
+    check(!containerApplies("not (foo: bar)", box), "not general-enclosed is unknown");
+    check(containerApplies("(foo: bar) or (width > 1px)", box), "general-enclosed or true");
+    check(!containerApplies("(width > )", box), "malformed range is unknown");
+
+    // An inline-size container answers only inline-axis features.
+    MockElement inl; inl.tag = "div"; inl.contType = "inline-size";
+    inl.contInlineSize = 300; inl.contBlockSize = 200;
+    check(containerApplies("(width > 200px)", inl), "inline-size container: width");
+    check(!containerApplies("(height > 10px)", inl), "inline-size container: height is unknown");
+    check(!containerApplies("not (height > 10px)", inl),
+          "inline-size container: not height is unknown too");
+    check(!containerApplies("(orientation: landscape)", inl),
+          "inline-size container: orientation is unknown");
+
+    // A size query skips ancestors that are not size containers.
+    MockElement outer; outer.tag = "div"; outer.contType = "inline-size"; outer.contInlineSize = 500;
+    MockElement plain; plain.tag = "div";  // container-type none
+    outer.addChild(&plain);
+    check(containerApplies("(width > 400px)", plain), "size query finds the nearest size container");
+    outer.childElems.clear();
+}
+
+static void testContainerStyleQueries() {
+    printf("--- container style queries ---\n");
+    // Every element is a style container: an unnamed style() query asks the
+    // parent, whose style the cascade has from resolve().
+    MockElement parent; parent.tag = "div";  // container-type none
+    ComputedStyle ps;
+    ps["--theme"] = " dark ";
+    ps["--pad"] = "1px   2px";
+    check(containerApplies("style(--theme: dark)", parent, &ps), "style(): custom property value");
+    check(!containerApplies("style(--theme: light)", parent, &ps), "style(): other value");
+    check(containerApplies("style(--pad: 1px 2px)", parent, &ps), "style(): whitespace-normalized");
+    check(containerApplies("style(--theme)", parent, &ps), "style(--x): set");
+    check(!containerApplies("style(--missing)", parent, &ps), "style(--x): unset");
+    check(containerApplies("not style(--theme: light)", parent, &ps), "not style()");
+    check(containerApplies("style((--theme: dark) and (--pad))", parent, &ps), "and inside style()");
+    check(containerApplies("style(not (--theme: light))", parent, &ps), "not inside style()");
+    check(containerApplies("style(--theme: light) or style(--theme: dark)", parent, &ps),
+          "or of style() queries");
+    check(!containerApplies("style(color: red)", parent, &ps),
+          "style() of a standard property is unknown");
+
+    // Inherited custom properties are seen too.
+    ComputedStyle inheritedOnly;
+    auto vars = std::make_shared<StyleMap>();
+    (*vars)["--theme"] = "dark";
+    inheritedOnly.inheritedVars = vars;
+    check(containerApplies("style(--theme: dark)", parent, &inheritedOnly),
+          "style(): an inherited custom property");
+
+    // Without the parent style and without the hook: unknown, even negated.
+    check(!containerApplies("style(--theme: dark)", parent), "no computed values: unknown");
+    check(!containerApplies("not style(--theme: dark)", parent), "no computed values: not unknown");
+
+    // Through the ElementRef hook (and past the parent, by name).
+    parent.reportsComputed = true;
+    parent.computed["--theme"] = "dark";
+    check(containerApplies("style(--theme: dark)", parent), "computedStyleValue hook");
+    MockElement named; named.tag = "section"; named.contName = "card";
+    named.reportsComputed = true;
+    named.computed["--theme"] = "light";
+    MockElement mid; mid.tag = "div"; mid.reportsComputed = true;
+    named.addChild(&mid);
+    check(containerApplies("card style(--theme: light)", mid),
+          "named style query skips to the named container");
+    check(!containerApplies("style(--theme: light)", mid),
+          "unnamed style query asks the parent");
+
+    // Mixed size and style: the container must be a size container.
+    MockElement sized; sized.tag = "div"; sized.contType = "inline-size"; sized.contInlineSize = 400;
+    sized.reportsComputed = true;
+    sized.computed["--theme"] = "dark";
+    MockElement inner; inner.tag = "div"; inner.reportsComputed = true;
+    sized.addChild(&inner);
+    check(containerApplies("(width > 300px) and style(--theme: dark)", inner),
+          "size + style query uses the size container");
+}
+
 void testParserExtra() {
     printf("=== Parser extras ===\n");
     testLayerBlock();
@@ -364,5 +498,7 @@ void testParserExtra() {
     testContainerPseudoElement();
     testContainerSourceOrder();
     testContainerPreludeName();
+    testContainerConditionLogic();
+    testContainerStyleQueries();
     testPseudoLayersAndOrigins();
 }

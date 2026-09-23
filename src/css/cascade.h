@@ -558,16 +558,18 @@ private:
     // Evaluate a container query condition against an element's container ancestors
     // `fromSelf`: the search starts at `elem` itself — a pseudo-element's
     // query container may be its originating element.
-    bool evaluateContainerQuery(const ElementRef& elem,
-                                const std::string& containerName,
-                                const std::string& condition,
-                                bool fromSelf = false) const;
+    // `firstStyle`: the computed style of the first candidate container (the
+    // parent, or `elem` itself when `fromSelf`), answering style() queries
+    // against it without the ElementRef::computedStyleValue hook.
+    bool evaluateContainerQuery(const ElementRef& elem, const ContainerQuery& query,
+                                bool fromSelf, const ComputedStyle* firstStyle) const;
     // Every query of a rule holds (true for a rule with none).
     bool containerQueriesHold(const ElementRef& elem,
                               const std::vector<ContainerQuery>& queries,
-                              bool fromSelf = false) const {
+                              bool fromSelf = false,
+                              const ComputedStyle* firstStyle = nullptr) const {
         for (const auto& q : queries)
-            if (!evaluateContainerQuery(elem, q.name, q.condition, fromSelf)) return false;
+            if (!evaluateContainerQuery(elem, q, fromSelf, firstStyle)) return false;
         return true;
     }
 };

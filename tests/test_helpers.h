@@ -99,6 +99,16 @@ struct MockElement : public htmlayout::css::ElementRef {
     std::string_view containerName() const override { return contName; }
     float containerInlineSize() const override { return contInlineSize; }
     float containerBlockSize() const override { return contBlockSize; }
+    // Computed values reported to container style queries; with
+    // `reportsComputed` false the element cannot answer them.
+    bool reportsComputed = false;
+    std::unordered_map<std::string, std::string> computed;
+    bool computedStyleValue(std::string_view property, std::string& out) const override {
+        if (!reportsComputed) return false;
+        auto it = computed.find(std::string(property));
+        out = it == computed.end() ? std::string() : it->second;
+        return true;
+    }
 
     void addChild(MockElement* child) {
         child->parentElem = this;

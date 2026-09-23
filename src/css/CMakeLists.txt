@@ -3,6 +3,7 @@ add_library(htmlayout_css STATIC
     parser.cpp
     selector.cpp
     cascade.cpp
+    container_query.cpp
     properties.cpp
     ua_stylesheet.cpp
     color.cpp

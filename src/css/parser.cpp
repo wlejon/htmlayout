@@ -2,6 +2,7 @@
 #include "css/properties.h"
 #include "css/color.h"
 #include "css/nesting.h"
+#include "css/container_query.h"
 #include "../from_chars_compat.h"
 #include <algorithm>
 #include <atomic>
@@ -143,6 +144,7 @@ private:
         ContainerBlock cb;
         cb.name = queries.back().name;
         cb.condition = queries.back().condition;
+        cb.parsed = queries.back().parsed;
         cb.enclosing.assign(queries.begin(), queries.end() - 1);
         cb.mediaConditions = mediaConds;
         cb.layered = inLayer;
@@ -326,6 +328,7 @@ private:
             // A query with no condition matches nothing (css-contain-3
             // requires one); its rules are dropped.
             if (q.condition.empty()) { skipBlockBody(); return; }
+            q.parsed = ContainerCondition::parse(q.condition);
             std::vector<ContainerQuery> queries = s.containers;
             queries.push_back(std::move(q));
             parseContainerBody(s, std::move(queries), s.mediaConds, s.inLayer, s.layer,
