@@ -52,6 +52,13 @@ struct ElementRef {
     // of the document inert (a dialog opened with showModal(), fullscreen).
     virtual bool isModal() const { return false; }
 
+    // :scope — is this element the scoping root? In a stylesheet, outside
+    // @scope (not implemented), that is the root element, so :scope matches
+    // like :root. A consumer answering querySelector()/matches()/closest()
+    // on an element overrides this to name that element instead, as the
+    // DOM specifies for those calls.
+    virtual bool isScopingRoot() const { return parent() == nullptr; }
+
     // Shadow DOM: which scope does this element belong to?
     // nullptr = document scope. Non-null = shadow root scope.
     virtual void* scope() const { return nullptr; }

@@ -361,7 +361,39 @@ static void testIsWhereHas() {
           ":has() specificity = most specific argument");
 }
 
+// :scope is the root element unless the ElementRef names another scoping
+// root, which is how a DOM answers el.querySelectorAll(':scope > x').
+struct ScopedMock : MockElement {
+    const ElementRef* scopingRoot = nullptr;
+    bool isScopingRoot() const override {
+        return scopingRoot ? scopingRoot == this : MockElement::isScopingRoot();
+    }
+};
+
+static void testScope() {
+    printf("--- Selector: :scope ---\n");
+    ScopedMock root; root.tag = "html";
+    ScopedMock box; box.tag = "div";
+    ScopedMock p; p.tag = "p";
+    root.addChild(&box);
+    box.addChild(&p);
+    auto child = parseSelector(":scope > div");
+    auto self = parseSelector(":scope");
+    check(self.matches(root), ":scope is the root element by default");
+    check(!self.matches(box), ":scope is not a non-root element by default");
+    check(child.matches(box), ":scope > div matches the root's child by default");
+
+    for (ScopedMock* m : {&root, &box, &p}) m->scopingRoot = &box;
+    auto scopedChild = parseSelector(":scope > p");
+    check(self.matches(box), ":scope names the consumer's scoping root");
+    check(!self.matches(root), ":scope no longer matches the root once another root is named");
+    check(scopedChild.matches(p), ":scope > p matches the scoping root's child");
+    check(!child.matches(box), ":scope > div no longer matches under the root");
+    check(parseSelector(":root").matches(root), ":root is unaffected by the scoping root");
+}
+
 void testSelector() {
+    testScope();
     testSimpleTag();
     testSimpleClass();
     testSimpleId();

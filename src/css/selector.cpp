@@ -745,9 +745,11 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
             if (name == "hover") return elem.isHovered();
             if (name == "focus") return elem.isFocused();
             if (name == "active") return elem.isActive();
-            // Outside @scope (not implemented), the scoping root is the root
-            // element, so :scope matches like :root.
-            if (name == "root" || name == "scope") return elem.parent() == nullptr;
+            if (name == "root") return elem.parent() == nullptr;
+            // The scoping root: the root element in a stylesheet (outside
+            // @scope, which is not implemented), the context element when a
+            // consumer answers querySelector() and friends (ElementRef).
+            if (name == "scope") return elem.isScopingRoot();
             if (name == "empty")
                 return elem.children().empty() && !elem.hasTextChildren();
             if (name == "host") {
