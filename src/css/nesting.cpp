@@ -231,6 +231,14 @@ std::vector<std::string> splitSelectorList(std::string_view list) {
     return parts;
 }
 
+std::vector<std::string> resolveTopLevel(std::string_view list) {
+    auto alts = splitSelectorList(list);
+    static const std::string kScope = ":scope";
+    for (auto& alt : alts)
+        if (hasAnyAmp(alt)) alt = expandOne(alt, kScope, kScope);
+    return alts;
+}
+
 std::vector<std::string> resolve(std::string_view nestedList,
                                  const std::vector<std::string>& parents) {
     auto alts = splitSelectorList(nestedList);

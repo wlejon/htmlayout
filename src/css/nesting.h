@@ -16,4 +16,10 @@ std::vector<std::string> splitSelectorList(std::string_view list);
 std::vector<std::string> resolve(std::string_view nestedList,
                                  const std::vector<std::string>& parents);
 
+// A top-level rule's selector list. An alternative using `&` outside any
+// style rule resolves it to the scoping root, `:scope` (the root element
+// outside @scope); alternatives without `&` are returned as they are — at the
+// top level they are not relative.
+std::vector<std::string> resolveTopLevel(std::string_view list);
+
 } // namespace htmlayout::css::nesting

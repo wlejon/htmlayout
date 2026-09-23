@@ -280,16 +280,30 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
         addInSourceOrder(layerBlock.rules, layerBlock.mediaBlocks, layerIdx);
     }
 
-    // Add @container rules
+    // Add @container rules whose enclosing @media conditions match, in source
+    // order across blocks (an @media nested in a container query is its own
+    // block, emitted before the rules that follow it in the outer one).
+    std::vector<std::pair<const ContainerBlock*, const Rule*>> containerRules;
     for (auto& containerBlock : sheet.containerBlocks) {
+        if (media) {
+            bool ok = true;
+            for (auto& cond : containerBlock.mediaConditions)
+                if (!evaluateMediaQuery(cond, *media)) { ok = false; break; }
+            if (!ok) continue;
+        }
         if (!containerBlock.rules.empty()) usesContainers_ = true;
-        for (auto& rule : containerBlock.rules) {
-            auto selectors = parseSelectorList(rule.selector);
-            for (auto& sel : selectors) {
-                rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, origin,
-                                  containerBlock.name, containerBlock.condition});
-                classifyLastRule();
-            }
+        for (auto& rule : containerBlock.rules) containerRules.push_back({&containerBlock, &rule});
+    }
+    std::stable_sort(containerRules.begin(), containerRules.end(),
+                     [](const auto& a, const auto& b) {
+                         return a.second->sourcePos < b.second->sourcePos;
+                     });
+    for (auto& [containerBlock, rule] : containerRules) {
+        auto selectors = parseSelectorList(rule->selector);
+        for (auto& sel : selectors) {
+            rules_.push_back({std::move(sel), rule->declarations, scope, nextOrder_++, -1, origin,
+                              containerBlock->name, containerBlock->condition});
+            classifyLastRule();
         }
     }
 }

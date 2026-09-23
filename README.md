@@ -26,7 +26,7 @@ htmlayout does **not** own the DOM, render anything, or run JavaScript. You prov
 - `transform` and `transform-origin` parsing into a 2D affine matrix or 4×4 matrix (3D functions: `translate3d`, `translateZ`, `scale3d`, `scaleZ`, `rotateX/Y/Z`, `rotate3d`, `perspective`, `matrix3d`) for consumer-side rendering
 - `@media` query evaluation (`min/max-width`, `min/max-height`, `orientation`, `prefers-color-scheme`, range syntax, logical `or`)
 - `@supports` feature queries
-- CSS nesting: nested style rules with `&` (anywhere, including `&.x` and `.a &`), relative nested selectors (`> .c`, `.c`), selector lists at every level, nested `@media` / `@supports` / `@container`, and declarations interleaved with nested rules — desugared into flat rules at parse time (see `src/css/nesting.cpp` for the specificity caveat)
+- CSS nesting: nested style rules with `&` (anywhere, including `&.x` and `.a &`), relative nested selectors (`> .c`, `.c`), selector lists at every level, nested `@media` / `@supports` / `@container` / `@layer` (block and statement forms; nested layer names qualify as `outer.inner`), `@media` inside `@container` and `@container` inside `@media`, a top-level `&` matching as `:scope` (the root element), and declarations interleaved with nested rules — desugared into flat rules at parse time (see `src/css/nesting.cpp` for the specificity caveat). The flat `Stylesheet` cannot express an `@container` inside an `@layer` (or vice versa) or two nested container queries; those inner rules are dropped
 - `@import` resolution with consumer-provided callback (with media/layer qualifiers)
 - CSS Variables (`var()`) with fallback and inheritance, substituted before shorthand expansion
 - Built-in user-agent stylesheet

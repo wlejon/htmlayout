@@ -47,6 +47,9 @@ struct ContainerBlock {
     std::string name;               // container name (empty = any container)
     std::string condition;           // e.g. "(min-width: 400px)"
     std::vector<Rule> rules;
+    // @media conditions that must also match: the block sits inside @media,
+    // or holds an @media nested in the container query.
+    std::vector<std::string> mediaConditions;
 };
 
 // An @import rule: url + optional media/layer qualifiers

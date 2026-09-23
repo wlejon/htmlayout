@@ -730,7 +730,9 @@ bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
             if (name == "hover") return elem.isHovered();
             if (name == "focus") return elem.isFocused();
             if (name == "active") return elem.isActive();
-            if (name == "root") return elem.parent() == nullptr;
+            // Outside @scope (not implemented), the scoping root is the root
+            // element, so :scope matches like :root.
+            if (name == "root" || name == "scope") return elem.parent() == nullptr;
             if (name == "empty")
                 return elem.children().empty() && !elem.hasTextChildren();
             if (name == "host") {

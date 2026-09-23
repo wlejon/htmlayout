@@ -186,6 +186,138 @@ void testNestingCascade() {
     }
 }
 
+const LayerBlock* findLayer(const Stylesheet& s, const char* name) {
+    for (auto& lb : s.layerBlocks)
+        if (lb.name == name) return &lb;
+    return nullptr;
+}
+
+void testNestedLayer() {
+    printf("--- Nesting: @layer inside style rules and layers ---\n");
+    auto s = parse(".a { color: green; @layer base { color: red; .b { color: blue } } }");
+    const LayerBlock* lb = findLayer(s, "base");
+    check(lb && lb->rules.size() == 2 && sel(lb->rules, 0) == ".a" &&
+              firstValue(lb->rules[0], "color") == "red" && sel(lb->rules, 1) == ".a .b",
+          "@layer in a style rule: bare declarations and nested rules land in the layer");
+    check(s.rules.size() == 1 && firstValue(s.rules[0], "color") == "green",
+          "@layer in a style rule: the parent's own declarations stay unlayered");
+
+    s = parse("@layer outer { .a { @layer inner { color: red } } }");
+    check(findLayer(s, "outer.inner") != nullptr, "a layer nested via a style rule is outer.inner");
+    s = parse("@layer a { @layer b { .x { color: red } } }");
+    lb = findLayer(s, "a.b");
+    check(lb && sel(lb->rules, 0) == ".x", "@layer directly inside @layer is a.b");
+    s = parse(".a { @layer x, y; }");
+    check(s.layerOrder.size() == 2 && s.layerOrder[0] == "x" && s.layerOrder[1] == "y",
+          "@layer statement inside a style rule declares order");
+    s = parse("@layer p { @layer q, r; }");
+    check(s.layerOrder.size() == 2 && s.layerOrder[0] == "p.q", "nested @layer statement qualifies names");
+    s = parse(".a { @supports (display: nope) { @layer base { color: red } } }");
+    check(s.layerBlocks.empty(), "@layer inside a false @supports is dropped");
+
+    s = parse("@media (min-width: 600px) { .a { @layer base { color: blue } } }");
+    lb = findLayer(s, "base");
+    check(lb && lb->rules.empty() && lb->mediaBlocks.size() == 1 &&
+              lb->mediaBlocks[0].condition == "(min-width: 600px)" &&
+              sel(lb->mediaBlocks[0].rules, 0) == ".a",
+          "@layer inside @media keeps the media condition");
+
+    MockElement a; a.tag = "div"; a.classes = "a";
+    {
+        Cascade c;
+        c.addStylesheet(parse(".a { @layer base { color: red } }"));
+        check(c.resolve(a)["color"] == "red", "cascade: nested @layer declarations apply");
+    }
+    {
+        // Unlayered beats layered, even when the layered rule comes later.
+        Cascade c;
+        c.addStylesheet(parse(".a { color: green; @layer base { color: red } }"));
+        check(c.resolve(a)["color"] == "green", "cascade: nested layer loses to the unlayered parent");
+    }
+    {
+        // Later-declared layers win: `top` is declared after `base`.
+        Cascade c;
+        c.addStylesheet(parse("@layer base, top; .a { @layer top { color: blue } @layer base { color: red } }"));
+        check(c.resolve(a)["color"] == "blue", "cascade: nested layers follow the declared order");
+    }
+    {
+        MediaContext narrow; narrow.viewportWidth = 400;
+        MediaContext wide; wide.viewportWidth = 800;
+        auto sheet = parse("@media (min-width: 600px) { .a { @layer base { color: blue } } }");
+        Cascade c1; c1.addStylesheet(sheet, nullptr, &narrow);
+        Cascade c2; c2.addStylesheet(sheet, nullptr, &wide);
+        check(c1.resolve(a)["color"] != "blue", "cascade: layer in @media, media fails");
+        check(c2.resolve(a)["color"] == "blue", "cascade: layer in @media, media matches");
+    }
+}
+
+void testMediaInContainer() {
+    printf("--- Nesting: @media inside @container ---\n");
+    auto s = parse("@container card (min-width: 300px) { .a { color: red } "
+                   "@media (min-width: 600px) { .a { color: blue } } }");
+    check(s.containerBlocks.size() == 2, "@media in @container: two container blocks");
+    bool found = false;
+    for (auto& cb : s.containerBlocks)
+        if (cb.name == "card" && cb.condition == "(min-width: 300px)" &&
+            cb.mediaConditions.size() == 1 && cb.mediaConditions[0] == "(min-width: 600px)" &&
+            sel(cb.rules, 0) == ".a") found = true;
+    check(found, "@media in @container: the inner block keeps the query and adds the condition");
+
+    s = parse(".a { @container (min-width: 1px) { @media print { color: red } } }");
+    check(s.containerBlocks.size() == 1 && s.containerBlocks[0].mediaConditions.size() == 1 &&
+              s.containerBlocks[0].mediaConditions[0] == "print" &&
+              sel(s.containerBlocks[0].rules, 0) == ".a",
+          "@media in @container in a style rule");
+    s = parse("@media screen { @container (min-width: 1px) { .a { color: red } } }");
+    check(s.containerBlocks.size() == 1 && s.containerBlocks[0].mediaConditions.size() == 1 &&
+              s.containerBlocks[0].mediaConditions[0] == "screen",
+          "@container inside @media carries the media condition");
+
+    MockElement box; box.tag = "div"; box.contType = "inline-size"; box.contInlineSize = 500;
+    MockElement a; a.tag = "div"; a.classes = "a";
+    box.addChild(&a);
+    MediaContext narrow; narrow.viewportWidth = 400;
+    MediaContext wide; wide.viewportWidth = 800;
+    auto sheet = parse("@container (min-width: 300px) { .a { color: red } "
+                       "@media (min-width: 600px) { .a { color: blue } } .a { background: green } }");
+    Cascade c1; c1.addStylesheet(sheet, nullptr, &narrow);
+    Cascade c2; c2.addStylesheet(sheet, nullptr, &wide);
+    auto s1 = c1.resolve(a), s2 = c2.resolve(a);
+    check(s1["color"] == "red", "cascade: @media in @container, media fails");
+    check(s2["color"] == "blue", "cascade: @media in @container, media matches");
+    check(s1["background-color"] == "green" && s2["background-color"] == "green",
+          "cascade: container rules after a nested @media still apply");
+    auto sheet2 = parse("@container (min-width: 300px) { @media (min-width: 600px) { .a { color: blue } } "
+                        ".a { color: red } }");
+    Cascade c3; c3.addStylesheet(sheet2, nullptr, &wide);
+    check(c3.resolve(a)["color"] == "red", "cascade: container rules keep source order around @media");
+}
+
+void testTopLevelAmpersand() {
+    printf("--- Nesting: top-level & ---\n");
+    auto s = parse("& { color: red }");
+    check(s.rules.size() == 1 && sel(s.rules, 0) == ":scope", "top-level & is :scope");
+    s = parse("& > .b { color: red }");
+    check(sel(s.rules, 0) == ":scope > .b", "top-level & > .b");
+    s = parse("&.x { color: red }");
+    check(sel(s.rules, 0) == ":scope.x", "top-level &.x");
+    s = parse(".a, & .b { color: red }");
+    check(sel(s.rules, 0) == ".a, :scope .b", "top-level & in one alternative leaves the others");
+    s = parse("& { .c { color: red } }");
+    check(sel(s.rules, 0) == ":scope .c", "rules nested in a top-level & resolve against :scope");
+    s = parse("[data-x=\"&\"] { color: red }");
+    check(sel(s.rules, 0) == "[data-x=\"&\"]", "an & inside a string is not the nesting selector");
+
+    MockElement root; root.tag = "html";
+    MockElement body; body.tag = "body"; body.classes = "b";
+    root.addChild(&body);
+    Cascade c;
+    c.addStylesheet(parse("& { color: red } & > .b { background: blue }"));
+    check(c.resolve(root)["color"] == "red", "cascade: top-level & matches the root");
+    check(c.resolve(body)["color"] != "red", "cascade: top-level & does not match a child");
+    check(c.resolve(body)["background-color"] == "blue", "cascade: & > .b matches the root's child");
+}
+
 } // namespace
 
 void testNesting() {
@@ -193,4 +325,7 @@ void testNesting() {
     testDeclarationInterleaving();
     testNestedConditionals();
     testNestingCascade();
+    testNestedLayer();
+    testMediaInContainer();
+    testTopLevelAmpersand();
 }

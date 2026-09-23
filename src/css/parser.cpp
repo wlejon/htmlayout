@@ -20,21 +20,17 @@ public:
     Stylesheet parseStylesheet() {
         Stylesheet sheet;
         m_sheet = &sheet;
-        Scope top{&sheet.rules, &sheet.mediaBlocks, {}, true};
+        Scope top{&sheet.rules, &sheet.mediaBlocks, {}};
         skipWhitespace();
         while (!atEnd()) {
             if (peek().type == TokenType::AtKeyword) {
-                if (peek().value == "media" || peek().value == "supports") {
-                    // @media blocks land in sheet.mediaBlocks; a true @supports
-                    // contributes its rules straight to sheet.rules.
+                const std::string& kw = peek().value;
+                if (kw == "media" || kw == "supports" || kw == "layer" || kw == "container") {
+                    // @media blocks land in sheet.mediaBlocks, @layer in
+                    // sheet.layerBlocks, @container in sheet.containerBlocks;
+                    // a true @supports contributes its rules straight to
+                    // sheet.rules.
                     parseConditionalAtRule(top, nullptr, {});
-                } else if (peek().value == "layer") {
-                    parseLayerRule(sheet);
-                } else if (peek().value == "container") {
-                    auto containerBlock = parseContainerRule();
-                    if (!containerBlock.rules.empty()) {
-                        sheet.containerBlocks.push_back(std::move(containerBlock));
-                    }
                 } else if (peek().value == "import") {
                     auto importRule = parseImportRule();
                     if (!importRule.url.empty()) {
@@ -115,12 +111,22 @@ private:
     // nested @media becomes its own MediaBlock carrying the enclosing
     // conditions. Rule::sourcePos records the emission order so the cascade
     // can interleave plain and @media rules correctly.
+    //
+    // The conditional group rules nest in any order the flat Stylesheet can
+    // express: @media / @supports anywhere; @layer anywhere outside
+    // @container (a nested layer's name is qualified by its parent's, `a.b`);
+    // @container anywhere outside @layer and another @container, carrying
+    // the enclosing @media conditions (ContainerBlock::mediaConditions), and
+    // an @media inside it becomes a further ContainerBlock with the same query.
 
     struct Scope {
         std::vector<Rule>* rules = nullptr;             // where style rules go
         std::vector<MediaBlock>* mediaOut = nullptr;    // nested @media; null = dropped
         std::vector<std::string> mediaConds;            // enclosing @media conditions
-        bool allowContainer = false;                    // nested @container allowed
+        bool inLayer = false;                           // inside an @layer block
+        std::string layer;                              // its full name
+        const ContainerBlock* container = nullptr;      // enclosing @container query
+        bool dead = false;                              // inside a false @supports
     };
 
     Stylesheet* m_sheet = nullptr;
@@ -241,11 +247,26 @@ private:
         if (name == "media") {
             std::string cond;
             if (!collectPrelude(cond)) return;
+            if (s.container && !s.dead) {
+                // @media inside @container: the same container query, with
+                // one more media condition.
+                ContainerBlock cb;
+                cb.name = s.container->name;
+                cb.condition = s.container->condition;
+                cb.mediaConditions = s.mediaConds;
+                cb.mediaConditions.push_back(cond);
+                Scope inner{&cb.rules, nullptr, cb.mediaConditions};
+                inner.container = &cb;
+                parseBody(inner, parents, selText);
+                if (!cb.rules.empty()) m_sheet->containerBlocks.push_back(std::move(cb));
+                return;
+            }
             if (!s.mediaOut) { skipBlockBody(); return; }
             MediaBlock mb;
             mb.condition = cond;
             mb.andConditions = s.mediaConds;
-            Scope inner{&mb.rules, s.mediaOut, s.mediaConds, false};
+            Scope inner = s;
+            inner.rules = &mb.rules;
             inner.mediaConds.push_back(cond);
             parseBody(inner, parents, selText);
             s.mediaOut->push_back(std::move(mb));
@@ -259,24 +280,69 @@ private:
             } else {
                 std::vector<Rule> dropped;
                 std::vector<MediaBlock> droppedMedia;
-                Scope dead{&dropped, &droppedMedia, {}, false};
+                Scope dead{&dropped, &droppedMedia, {}};
+                dead.dead = true;
                 parseBody(dead, parents, selText);
             }
             return;
         }
-        if (name == "container" && parents && s.allowContainer && m_sheet) {
+        if (name == "container" && m_sheet && !s.dead && !s.container && !s.inLayer) {
             std::string prelude;
             if (!collectPrelude(prelude)) return;
             ContainerBlock cb;
             splitContainerPrelude(prelude, cb);
-            Scope inner{&cb.rules, nullptr, {}, false};
+            cb.mediaConditions = s.mediaConds;
+            Scope inner{&cb.rules, nullptr, s.mediaConds};
+            inner.container = &cb;
             parseBody(inner, parents, selText);
             if (!cb.rules.empty()) m_sheet->containerBlocks.push_back(std::move(cb));
             return;
         }
-        // @layer inside a style rule, @media inside @container, @charset,
-        // unknown at-rules: skipped.
+        if (name == "layer" && m_sheet && !s.dead && !s.container) {
+            parseLayerAtRule(s, parents, selText);
+            return;
+        }
+        // @layer / @container where the flat Stylesheet has no place for them
+        // (a layer inside a container query, a container query inside a layer
+        // or another container query, anything inside a false @supports),
+        // @charset, unknown at-rules: skipped.
         consumeAtRule();
+    }
+
+    // `@layer a, b;` (order declaration) or `@layer [name] { ... }` at the
+    // cursor. Nested layers qualify their names by the parent's (`a.b`);
+    // anonymous layers share the name "" as they always have here.
+    void parseLayerAtRule(Scope& s, const std::vector<std::string>* parents,
+                          const std::string& selText) {
+        auto qualify = [&](const std::string& n) {
+            if (!s.inLayer || s.layer.empty()) return n;
+            return n.empty() ? s.layer : s.layer + "." + n;
+        };
+        std::string prelude;
+        if (!collectPrelude(prelude)) {
+            // Statement form: record the declared order.
+            for (auto& n : nesting::splitSelectorList(prelude))
+                m_sheet->layerOrder.push_back(qualify(n));
+            return;
+        }
+        if (prelude.find(',') != std::string::npos) { skipBlockBody(); return; }
+        LayerBlock lb;
+        lb.name = qualify(prelude);
+        Scope inner{&lb.rules, &lb.mediaBlocks, s.mediaConds};
+        inner.inLayer = true;
+        inner.layer = lb.name;
+        if (s.mediaConds.empty()) {
+            parseBody(inner, parents, selText);
+        } else {
+            // Inside @media: the layer's rules keep the conditions.
+            MediaBlock mb;
+            mb.condition = s.mediaConds.back();
+            mb.andConditions.assign(s.mediaConds.begin(), s.mediaConds.end() - 1);
+            inner.rules = &mb.rules;
+            parseBody(inner, parents, selText);
+            lb.mediaBlocks.push_back(std::move(mb));
+        }
+        m_sheet->layerBlocks.push_back(std::move(lb));
     }
 
     // A qualified rule at the cursor. Top-level (`parents` null) keeps the
@@ -301,6 +367,13 @@ private:
         std::string selText;
         if (parents) {
             selectors = nesting::resolve(prelude, *parents);
+            for (size_t i = 0; i < selectors.size(); i++) {
+                if (i) selText += ", ";
+                selText += selectors[i];
+            }
+        } else if (prelude.find('&') != std::string::npos) {
+            // A top-level `&` is the scoping root (css-nesting-1 §2).
+            selectors = nesting::resolveTopLevel(prelude);
             for (size_t i = 0; i < selectors.size(); i++) {
                 if (i) selText += ", ";
                 selText += selectors[i];
@@ -512,77 +585,6 @@ private:
         bool ok = false;
         if (!ev.parseCondition(ok)) return false;
         return ok;
-    }
-
-    // Parse @layer rule — two forms:
-    // 1. @layer name { rules }           — layer block
-    // 2. @layer name1, name2, ...;       — layer ordering declaration
-    void parseLayerRule(Stylesheet& sheet) {
-        advance(); // skip @layer keyword
-        skipWhitespace();
-
-        // Collect tokens until '{' or ';'
-        std::string nameStr;
-        while (!atEnd() && peek().type != TokenType::LeftBrace && peek().type != TokenType::Semicolon) {
-            nameStr += tokenToString(advance());
-        }
-        nameStr = trim(nameStr);
-
-        if (!atEnd() && peek().type == TokenType::Semicolon) {
-            // Layer ordering declaration: @layer name1, name2;
-            advance(); // skip ';'
-            // Split by comma and record order
-            std::string current;
-            for (char c : nameStr) {
-                if (c == ',') {
-                    std::string layerName = trim(current);
-                    if (!layerName.empty()) sheet.layerOrder.push_back(layerName);
-                    current.clear();
-                } else {
-                    current += c;
-                }
-            }
-            std::string last = trim(current);
-            if (!last.empty()) sheet.layerOrder.push_back(last);
-            return;
-        }
-
-        if (atEnd() || peek().type != TokenType::LeftBrace) return;
-        advance(); // skip '{'
-
-        LayerBlock layer;
-        layer.name = nameStr;
-
-        // Parse rules inside the layer block (@media / @supports allowed)
-        Scope scope{&layer.rules, &layer.mediaBlocks, {}, false};
-        parseBody(scope, nullptr, {});
-
-        sheet.layerBlocks.push_back(std::move(layer));
-    }
-
-    // Parse @container rule: @container [name] (condition) { rules }
-    ContainerBlock parseContainerRule() {
-        ContainerBlock block;
-        advance(); // skip @container keyword
-        skipWhitespace();
-
-        // Collect tokens until '{'
-        std::string prelude;
-        while (!atEnd() && peek().type != TokenType::LeftBrace) {
-            prelude += tokenToString(advance());
-        }
-        prelude = trim(prelude);
-
-        splitContainerPrelude(prelude, block);
-
-        if (atEnd() || peek().type != TokenType::LeftBrace) return block;
-        advance(); // skip '{'
-
-        // Parse rules inside the container block (@supports allowed; @media
-        // inside @container is not tracked and is dropped)
-        Scope scope{&block.rules, nullptr, {}, false};
-        parseBody(scope, nullptr, {});
-        return block;
     }
 
     ImportRule parseImportRule() {
