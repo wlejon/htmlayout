@@ -931,6 +931,7 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             else if (d == "inline-table") style["display"] = "table";
             else if (d == "inline-flex") style["display"] = "flex";
             else if (d == "inline-grid") style["display"] = "grid";
+            else if (d == "-webkit-inline-box") style["display"] = "-webkit-box";
         }
     }
 

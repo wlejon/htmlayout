@@ -1,6 +1,7 @@
 #include "layout/inline.h"
 #include "layout/formatting_context.h"
 #include "layout/block.h"
+#include "layout/line_clamp.h"
 #include "layout/style_util.h"
 #include "layout/style_cache.h"
 #include "layout/text.h"
@@ -242,7 +243,11 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                 d != "inline-flex" && d != "inline-grid")
                 hasBlockChild = true;
         }
-        if (!intrinsic && hasBlockChild) {
+        // Line clamping lives in the block engine, which counts the line
+        // boxes it builds; a clamped inline-block (-webkit-inline-box
+        // included) goes there too, as does one clamped last pass, whose
+        // clamp has to be undone.
+        if (!intrinsic && (hasBlockChild || lineClampApplies(node))) {
             layoutBlock(node, availableWidth, metrics);
             return;
         }

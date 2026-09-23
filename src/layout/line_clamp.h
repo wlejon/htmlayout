@@ -31,6 +31,10 @@ struct LineClampSpec {
     std::string ellipsisText = "\xE2\x80\xA6";
 };
 
+// Whether the node clamps now or did on its last layout (so block layout,
+// which owns clamping, must lay it out).
+bool lineClampApplies(LayoutNode* node);
+
 // Resolves the node's clamp, resets last pass's clamp state and, when the node
 // clamps now or did last time, marks its descendants for relayout (clamping
 // edits their boxes, so reused boxes would carry a stale clamp). Returns true

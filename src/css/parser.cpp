@@ -443,7 +443,7 @@ private:
             "grid", "inline-grid", "contents", "list-item", "flow-root",
             "table", "inline-table", "table-row", "table-cell", "table-caption",
             "table-row-group", "table-header-group", "table-footer-group",
-            "table-column", "table-column-group",
+            "table-column", "table-column-group", "-webkit-box", "-webkit-inline-box",
         };
         static const std::unordered_set<std::string> positionValues = {
             "static", "relative", "absolute", "fixed", "sticky",

@@ -359,6 +359,56 @@ void testWebkitClamp() {
     run("-webkit-box", nullptr, 48.0f, "-webkit-box without orient: no clamp");
     run("block", "vertical", 48.0f, "display:block: -webkit-line-clamp ignored");
 
+    // -webkit-inline-box is inline-level: it sits on the line after the text
+    // before it, and still clamps its own content.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        t.textNode(root, "ab ");
+        ClampNode* ib = t.block(root, "-webkit-inline-box");
+        ib->style_["-webkit-box-orient"] = "vertical";
+        ib->style_["-webkit-line-clamp"] = "2";
+        ib->style_["width"] = "60px";
+        ClampNode* txt = t.textNode(ib, words(8));   // two words a line: 4 lines
+        t.textNode(root, " cd");
+        layout(root, 400.0f, m);
+        check(approxEq(ib->box.contentRect.x, 18.0f),
+              "-webkit-inline-box: placed inline after the preceding text");
+        check(approxEq(ib->box.contentRect.height, 24.0f) && ib->box.textTruncated,
+              "-webkit-inline-box: clamps its own lines");
+        check(endsWith(drawn(txt), kEllipsis), "-webkit-inline-box: carries the ellipsis");
+        check(root->box.lineBoxes.size() == 1, "-webkit-inline-box: one line in the parent");
+    }
+    // An inline-block is a block container too: line-clamp applies to it, and
+    // taking the clamp away restores its lines.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        t.textNode(root, "ab ");
+        ClampNode* ib = t.block(root, "inline-block");
+        ib->style_["line-clamp"] = "2";
+        ib->style_["width"] = "60px";
+        ClampNode* txt = t.textNode(ib, words(8));
+        layout(root, 400.0f, m);
+        check(approxEq(ib->box.contentRect.height, 24.0f) && endsWith(drawn(txt), kEllipsis),
+              "inline-block: line-clamp clamps it");
+        ib->style_["line-clamp"] = "none";
+        layout(root, 400.0f, m);
+        check(approxEq(ib->box.contentRect.height, 48.0f) && !ib->box.textTruncated &&
+                  !endsWith(drawn(txt), kEllipsis),
+              "inline-block: removing the clamp restores its lines");
+    }
+    {
+        Cascade cascade;
+        cascade.addStylesheet(parse(".i { display: -webkit-inline-box; }"
+                                    ".abs { position: absolute; }"));
+        MockElement e; e.tag = "span"; e.classes = "i abs";
+        check(cascade.resolve(e)["display"] == "-webkit-box",
+              "-webkit-inline-box blockifies to -webkit-box");
+        auto sheet = parse("@supports (display: -webkit-inline-box) { .x { color: red } }");
+        check(sheet.rules.size() == 1, "@supports accepts display: -webkit-inline-box");
+    }
+
     // The standard property wins over the legacy one.
     Tree t;
     ClampNode* root = t.block(nullptr);

@@ -76,7 +76,7 @@ bool nodeEstablishesBFC(LayoutNode* node) {
     if (disp == "inline-block" || disp == "flex" || disp == "inline-flex" ||
         disp == "grid" || disp == "inline-grid" || disp == "flow-root" ||
         disp == "table-cell" || disp == "table-caption" ||
-        disp == "-webkit-box" || disp == "-webkit-inline-box")
+        disp == "-webkit-box")  // (-webkit-inline-box reads as inline-block)
         return true;
     const std::string& position = styleVal(node, Prop::Position);
     if (position == "absolute" || position == "fixed")

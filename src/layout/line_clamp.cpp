@@ -2,6 +2,7 @@
 #include "layout/block.h"
 #include "layout/formatting_context.h"
 #include "layout/style_cache.h"
+#include "layout/style_util.h"
 #include "layout/text.h"
 #include <algorithm>
 #include <cctype>
@@ -58,7 +59,9 @@ LineClampSpec resolveLineClamp(LayoutNode* node) {
     // browsers lay out as a block container.
     const std::string& wlc = styleVal(node, Prop::WebkitLineClamp);
     if (wlc.empty() || wlc == "none") return {};
-    const std::string& disp = styleVal(node, Prop::Display);
+    // The authored display: layout itself sees -webkit-inline-box as
+    // inline-block (style_cache.cpp).
+    const std::string& disp = styleVal(node->computedStyle(), "display");
     if (disp != "-webkit-box" && disp != "-webkit-inline-box") return {};
     if (styleVal(node, Prop::WebkitBoxOrient) != "vertical") return {};
     LineClampSpec spec;
@@ -197,7 +200,7 @@ void walk(LayoutNode* n, float ox, float oy, ClampWalk& w) {
 
         bool inlineLevel = d == "inline" || d == "inline-block" ||
                            d == "inline-flex" || d == "inline-grid" ||
-                           d == "inline-table" || d == "-webkit-inline-box";
+                           d == "inline-table";
         if (!inlineLevel) {
             // Block-level: gone once it starts past the clamp point;
             // otherwise its lines were counted and its content is cut inside.
@@ -301,6 +304,10 @@ void placeEllipsis(ClampWalk& w, const ClampLine& line, const LineClampSpec& spe
 }
 
 } // namespace
+
+bool lineClampApplies(LayoutNode* node) {
+    return node->box.textTruncated || resolveLineClamp(node).maxLines > 0;
+}
 
 bool beginLineClamp(LayoutNode* node, LineClampSpec& spec) {
     spec = resolveLineClamp(node);

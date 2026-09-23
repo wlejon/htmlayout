@@ -43,8 +43,20 @@ bool styleCachePassActive() { return g_passActive; }
 void beginStyleCachePass() { g_passActive = true; }
 void endStyleCachePass() { g_passActive = false; }
 
+// `display: -webkit-inline-box` is the inline-level counterpart of
+// -webkit-box, which layout treats as a block container that establishes a
+// BFC; so to layout it is an inline-block. Every display read comes through
+// styleVal(), so mapping it here covers all of them. The consumer's
+// ComputedStyle keeps the authored value (line_clamp.cpp reads it there to
+// recognise the legacy -webkit-line-clamp box).
+static const std::string* layoutDisplay(const std::string* v) {
+    static const std::string kInlineBlock = "inline-block";
+    return *v == "-webkit-inline-box" ? &kInlineBlock : v;
+}
+
 const std::string& styleValLive(const LayoutNode* node, Prop p) {
-    return styleVal(node->computedStyle(), kPropNames[size_t(p)]);
+    const std::string& v = styleVal(node->computedStyle(), kPropNames[size_t(p)]);
+    return p == Prop::Display ? *layoutDisplay(&v) : v;
 }
 
 void buildStyleCache(const LayoutNode* node) {
@@ -69,6 +81,8 @@ void buildStyleCache(const LayoutNode* node) {
         auto it = index.find(std::string_view(name));
         if (it != index.end()) cache->slot[size_t(it->second)] = &value;
     }
+    auto& disp = cache->slot[size_t(Prop::Display)];
+    disp = layoutDisplay(disp);
 
     node->styleCachePass = currentLayoutPass();
 }
