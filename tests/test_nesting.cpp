@@ -304,6 +304,25 @@ void testHostileNesting() {
     for (int i = 0; i < 60; i++) dup += " }";
     s = parse(dup);
     check(s.rules.size() < 64, "`& &` doubling is bounded");
+
+    // Functional pseudo-class arguments nest under a bound too.
+    for (const char* fn : {":not(", ":is(", ":has(", ":where("}) {
+        std::string nested;
+        for (int i = 0; i < 100000; i++) nested += fn;
+        nested += ".a";
+        for (int i = 0; i < 100000; i++) nested += ")";
+        auto list = parseSelectorList(nested);
+        check(list.size() == 1, (std::string("100000-deep ") + fn + ") parses").c_str());
+        MockElement e; e.tag = "div"; e.classes = "a";
+        (void)list[0].matches(e);
+    }
+    check(parseSelectorList(":not(:not(.a))").size() == 1, "shallow :not(:not()) still parses");
+    {
+        MockElement e; e.tag = "div"; e.classes = "a";
+        MockElement f; f.tag = "div"; f.classes = "b";
+        auto l = parseSelectorList(":is(:is(:is(.a)))");
+        check(l.size() == 1 && l[0].matches(e) && !l[0].matches(f), "shallow :is nesting still matches");
+    }
 }
 
 void testMediaInContainer() {

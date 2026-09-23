@@ -75,13 +75,27 @@ static bool equalsLowered(std::string_view tag, const std::string& lowered) {
 
 // ---- Selector Parser ----
 
+// Functional pseudo-classes (:not/:is/:where/:has, ::slotted) parse their
+// arguments with a nested parser. Past this nesting depth an argument parses
+// as empty, so a hostile `:not(:not(:not(…` neither runs the stack out nor
+// re-scans its tail once per level; every later recursion over the parsed
+// structure (specificity, matching) is bounded with it.
+constexpr int kMaxSelectorNesting = 32;
+thread_local int t_selectorNesting = 0;
+
 class SelectorParser {
 public:
     explicit SelectorParser(const std::string& text)
-        : m_text(text), m_pos(0) {}
+        : m_text(text), m_pos(0) { ++t_selectorNesting; }
+    ~SelectorParser() { --t_selectorNesting; }
+    SelectorParser(const SelectorParser&) = delete;
+    SelectorParser& operator=(const SelectorParser&) = delete;
+
+    static bool tooDeep() { return t_selectorNesting > kMaxSelectorNesting; }
 
     SelectorChain parseChain() {
         SelectorChain chain;
+        if (tooDeep()) { m_pos = m_text.size(); return chain; }
         skipWS();
         if (m_pos >= m_text.size()) return chain;
 
@@ -182,6 +196,7 @@ private:
 
     CompoundSelector parseCompound() {
         CompoundSelector compound;
+        if (tooDeep()) { m_pos = m_text.size(); return compound; }
         while (m_pos < m_text.size()) {
             char c = peek();
             if (c == '*') {
