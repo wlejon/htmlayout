@@ -10,6 +10,9 @@ enum class Space {
     SRGB,        // gamma-encoded sRGB, components 0..1
     SRGBLinear,
     DisplayP3,
+    A98RGB,
+    ProPhotoRGB, // D50
+    Rec2020,
     XYZD50,
     XYZD65,
     Lab,         // CIE Lab (D50): L 0..100
@@ -47,7 +50,10 @@ enum class HueMethod { Shorter, Longer, Increasing, Decreasing };
 ColorVal mix(const ColorVal& a, const ColorVal& b, Space space, HueMethod hue,
              double p2, double alphaMult);
 
-// Final step: gamma-encoded sRGB, clipped to the gamut, components 0..1.
-void toClippedSRGB(const ColorVal& in, double out[3], double& alpha);
+// Final step: gamma-encoded sRGB, components 0..1. A colour outside the sRGB
+// gamut is brought into it with the CSS Color 4 §13.2 gamut-mapping algorithm
+// (OKLCH chroma reduction by binary search, stopping within deltaEOK 0.02 of
+// the clipped colour); L >= 1 maps to white and L <= 0 to black.
+void toOutputSRGB(const ColorVal& in, double out[3], double& alpha);
 
 } // namespace htmlayout::css::colorspace

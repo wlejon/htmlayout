@@ -6,6 +6,7 @@ add_library(htmlayout_css STATIC
     properties.cpp
     ua_stylesheet.cpp
     color.cpp
+    color_calc.cpp
     color_space.cpp
     nesting.cpp
     transform.cpp

@@ -38,6 +38,18 @@ const Mat3 kLinSRGBToXYZ = {Vec3{506752.0 / 1228815, 87881.0 / 245763, 12673.0 /
 const Mat3 kLinP3ToXYZ = {Vec3{608311.0 / 1250200, 189793.0 / 714400, 198249.0 / 1000160},
                           Vec3{35783.0 / 156275, 247089.0 / 357200, 198249.0 / 2500400},
                           Vec3{0.0, 32229.0 / 714400, 5220557.0 / 5000800}};
+const Mat3 kLinA98ToXYZ = {Vec3{573536.0 / 994567, 263643.0 / 1420810, 187206.0 / 994567},
+                           Vec3{591459.0 / 1989134, 6239551.0 / 9945670, 374412.0 / 4972835},
+                           Vec3{53769.0 / 1989134, 351524.0 / 4972835, 4929758.0 / 4972835}};
+// ProPhoto's primaries are relative to D50, so this lands in XYZ-D50.
+const Mat3 kLinProPhotoToXYZD50 = {
+    Vec3{0.79776664490064230, 0.13518129740053308, 0.03134773412839220},
+    Vec3{0.28807482881940130, 0.71183523424187300, 0.00008993693872564},
+    Vec3{0.0, 0.0, 0.82510460251046020}};
+const Mat3 kLinRec2020ToXYZ = {
+    Vec3{63426534.0 / 99577255, 20160776.0 / 139408157, 47086771.0 / 278816314},
+    Vec3{26158966.0 / 99577255, 472592308.0 / 697040785, 8267143.0 / 139408157},
+    Vec3{0.0, 19567812.0 / 697040785, 295819943.0 / 278816314}};
 const Mat3 kD65ToD50 = {Vec3{1.0479297925449969, 0.022946870601609652, -0.05019226628920524},
                         Vec3{0.02962780877005599, 0.9904344267538799, -0.017073799063418826},
                         Vec3{-0.009243040646204504, 0.015055191490298152, 0.7518742814281371}};
@@ -50,6 +62,9 @@ const Mat3 kLMSToOKLab = {Vec3{0.2104542683093140, 0.7936177747023054, -0.004072
 
 const Mat3& xyzToLinSRGB() { static const Mat3 m = inverse(kLinSRGBToXYZ); return m; }
 const Mat3& xyzToLinP3() { static const Mat3 m = inverse(kLinP3ToXYZ); return m; }
+const Mat3& xyzToLinA98() { static const Mat3 m = inverse(kLinA98ToXYZ); return m; }
+const Mat3& xyzD50ToLinProPhoto() { static const Mat3 m = inverse(kLinProPhotoToXYZD50); return m; }
+const Mat3& xyzToLinRec2020() { static const Mat3 m = inverse(kLinRec2020ToXYZ); return m; }
 const Mat3& d50ToD65() { static const Mat3 m = inverse(kD65ToD50); return m; }
 const Mat3& lmsToXYZ() { static const Mat3 m = inverse(kXYZToLMS); return m; }
 const Mat3& oklabToLMS() { static const Mat3 m = inverse(kLMSToOKLab); return m; }
@@ -66,6 +81,40 @@ double gammaEncode(double c) {
     double a = std::fabs(c);
     if (a > 0.0031308) return std::copysign(1.055 * std::pow(a, 1.0 / 2.4) - 0.055, c);
     return 12.92 * c;
+}
+
+// The other RGB spaces' transfer functions (CSS Color 4 §18), also extended
+// sign-symmetrically.
+double a98Linearize(double c) { return std::copysign(std::pow(std::fabs(c), 563.0 / 256), c); }
+double a98Encode(double c) { return std::copysign(std::pow(std::fabs(c), 256.0 / 563), c); }
+
+double proPhotoLinearize(double c) {
+    double a = std::fabs(c);
+    if (a <= 16.0 / 512) return c / 16;
+    return std::copysign(std::pow(a, 1.8), c);
+}
+double proPhotoEncode(double c) {
+    double a = std::fabs(c);
+    if (a >= 1.0 / 512) return std::copysign(std::pow(a, 1 / 1.8), c);
+    return 16 * c;
+}
+
+constexpr double kRec2020Alpha = 1.09929682680944, kRec2020Beta = 0.018053968510807;
+double rec2020Linearize(double c) {
+    double a = std::fabs(c);
+    if (a < kRec2020Beta * 4.5) return c / 4.5;
+    return std::copysign(std::pow((a + kRec2020Alpha - 1) / kRec2020Alpha, 1 / 0.45), c);
+}
+double rec2020Encode(double c) {
+    double a = std::fabs(c);
+    if (a > kRec2020Beta)
+        return std::copysign(kRec2020Alpha * std::pow(a, 0.45) - (kRec2020Alpha - 1), c);
+    return 4.5 * c;
+}
+
+Vec3 map3(Vec3 v, double (*f)(double)) {
+    for (double& x : v) x = f(x);
+    return v;
 }
 
 double normHue(double h) {
@@ -181,6 +230,10 @@ Vec3 toXYZD65(Space s, const Vec3& c) {
             for (double& v : rgb) v = linearize(v);
             return mul(kLinP3ToXYZ, rgb);
         }
+        case Space::A98RGB: return mul(kLinA98ToXYZ, map3(c, a98Linearize));
+        case Space::ProPhotoRGB:
+            return mul(d50ToD65(), mul(kLinProPhotoToXYZD50, map3(c, proPhotoLinearize)));
+        case Space::Rec2020: return mul(kLinRec2020ToXYZ, map3(c, rec2020Linearize));
         case Space::XYZD65: return c;
         case Space::XYZD50: return mul(d50ToD65(), c);
         case Space::Lab: return mul(d50ToD65(), labToXYZD50(c));
@@ -215,6 +268,10 @@ Vec3 fromHub(Space target, const Vec3& srgb, const Vec3& xyz, bool& achromatic) 
             for (double& v : rgb) v = gammaEncode(v);
             return rgb;
         }
+        case Space::A98RGB: return map3(mul(xyzToLinA98(), xyz), a98Encode);
+        case Space::ProPhotoRGB:
+            return map3(mul(xyzD50ToLinProPhoto(), mul(kD65ToD50, xyz)), proPhotoEncode);
+        case Space::Rec2020: return map3(mul(xyzToLinRec2020(), xyz), rec2020Encode);
         case Space::XYZD65: return xyz;
         case Space::XYZD50: return mul(kD65ToD50, xyz);
         case Space::Lab: return xyzD50ToLab(mul(kD65ToD50, xyz));
@@ -239,6 +296,7 @@ enum class Cat { None, Red, Green, Blue, Lightness, Colorfulness, Hue, OppA, Opp
 Cat categoryOf(Space s, int i) {
     switch (s) {
         case Space::SRGB: case Space::SRGBLinear: case Space::DisplayP3:
+        case Space::A98RGB: case Space::ProPhotoRGB: case Space::Rec2020:
         case Space::XYZD50: case Space::XYZD65:
             return i == 0 ? Cat::Red : i == 1 ? Cat::Green : Cat::Blue;
         case Space::Lab: case Space::OKLab:
@@ -259,6 +317,9 @@ std::optional<Space> spaceFromName(std::string_view n) {
     if (n == "srgb") return Space::SRGB;
     if (n == "srgb-linear") return Space::SRGBLinear;
     if (n == "display-p3") return Space::DisplayP3;
+    if (n == "a98-rgb") return Space::A98RGB;
+    if (n == "prophoto-rgb") return Space::ProPhotoRGB;
+    if (n == "rec2020") return Space::Rec2020;
     if (n == "xyz" || n == "xyz-d65") return Space::XYZD65;
     if (n == "xyz-d50") return Space::XYZD50;
     if (n == "lab") return Space::Lab;
@@ -369,12 +430,72 @@ ColorVal mix(const ColorVal& a, const ColorVal& b, Space space, HueMethod method
     return R;
 }
 
-void toClippedSRGB(const ColorVal& in, double out[3], double& alpha) {
-    ColorVal s = convert(in, Space::SRGB);
-    for (int i = 0; i < 3; i++) {
-        double v = s.missing[i] ? 0.0 : s.c[i];
-        out[i] = std::isfinite(v) ? std::clamp(v, 0.0, 1.0) : 0.0;
+namespace {
+
+Vec3 oklchToSRGB(const Vec3& lch) {
+    return map3(mul(xyzToLinSRGB(), oklabToXYZ(polarToRect(lch))), gammaEncode);
+}
+
+bool inSRGBGamut(const Vec3& rgb) {
+    constexpr double eps = 1e-6;
+    for (double v : rgb)
+        if (!(v >= -eps && v <= 1 + eps)) return false;
+    return true;
+}
+
+Vec3 clip01(Vec3 rgb) {
+    for (double& v : rgb) v = std::isfinite(v) ? std::clamp(v, 0.0, 1.0) : 0.0;
+    return rgb;
+}
+
+// deltaEOK between an sRGB colour and an OKLCH one: Euclidean in OKLab.
+double deltaEOK(const Vec3& rgb, const Vec3& lch) {
+    Vec3 a = xyzToOKLab(mul(kLinSRGBToXYZ, map3(rgb, linearize)));
+    Vec3 b = polarToRect(lch);
+    double d0 = a[0] - b[0], d1 = a[1] - b[1], d2 = a[2] - b[2];
+    return std::sqrt(d0 * d0 + d1 * d1 + d2 * d2);
+}
+
+// CSS Color 4 §13.2.2, "binary search gamut mapping with local MINDE".
+Vec3 gamutMapToSRGB(const ColorVal& in) {
+    ColorVal okc = convert(in, Space::OKLCH);
+    Vec3 origin = values(okc);
+    if (origin[0] >= 1) return {1, 1, 1};
+    if (origin[0] <= 0) return {0, 0, 0};
+    constexpr double jnd = 0.02, epsilon = 0.0001;
+    Vec3 current = origin;
+    Vec3 clipped = clip01(oklchToSRGB(current));
+    if (deltaEOK(clipped, current) < jnd) return clipped;
+    double lo = 0, hi = origin[1];
+    bool loInGamut = true;
+    while (hi - lo > epsilon) {
+        double chroma = (lo + hi) / 2;
+        current[1] = chroma;
+        Vec3 rgb = oklchToSRGB(current);
+        if (loInGamut && inSRGBGamut(rgb)) {
+            lo = chroma;
+            continue;
+        }
+        clipped = clip01(rgb);
+        double e = deltaEOK(clipped, current);
+        if (e < jnd) {
+            if (jnd - e < epsilon) return clipped;
+            loInGamut = false;
+            lo = chroma;
+        } else {
+            hi = chroma;
+        }
     }
+    return clipped;
+}
+
+} // namespace
+
+void toOutputSRGB(const ColorVal& in, double out[3], double& alpha) {
+    ColorVal s = convert(in, Space::SRGB);
+    Vec3 rgb = values(s);
+    rgb = inSRGBGamut(rgb) ? clip01(rgb) : gamutMapToSRGB(in);
+    for (int i = 0; i < 3; i++) out[i] = rgb[i];
     double a = in.alphaMissing ? 0.0 : in.alpha;
     alpha = std::isfinite(a) ? std::clamp(a, 0.0, 1.0) : 0.0;
 }

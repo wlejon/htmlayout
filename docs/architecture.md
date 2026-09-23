@@ -46,8 +46,11 @@ src/
                          rule indexing, and restyle-scoping hints
     properties.h/cpp   — CSS property registry (defaults, inheritance, shorthands)
     color.h/cpp        — Color parsing (named, hex, rgb, hsl, hwb, lab, lch,
-                         oklab, oklch, color(), color-mix())
-    color_space.h/cpp  — Colour-space conversion and color-mix() interpolation
+                         oklab, oklch, color(), color-mix(), light-dark(),
+                         relative colour syntax)
+    color_calc.h/cpp   — calc()/min()/max()/clamp() in colour components
+    color_space.h/cpp  — Colour-space conversion, color-mix() interpolation
+                         and gamut mapping into sRGB
     transform.h/cpp    — transform / transform-origin → 2D affine or 4x4 matrix
     ua_stylesheet.h/cpp — Built-in default styles
   layout/
@@ -342,7 +345,7 @@ Outside a pass, reads go to the live map.
 - **At-rules**: `@font-face` and `@keyframes` are parsed and exposed on `Cascade` (`fontFaces()` / `keyframes()`) for the consumer to act on; the engine loads no fonts and runs no animations. `@scope` is not implemented.
 - **Animations & transitions**: parsed, never advanced — no time-varying values.
 - **Bidirectional text**: the engine reorders lines and honors isolates, but does not implement the UAX #9 W/N rules that assign character levels; supply those via `TextMetrics::bidiLevels()`.
-- **Color**: resolved to 8-bit sRGB with per-channel clipping, not CSS gamut mapping. No `calc()` in colour components, relative colour syntax, `light-dark()`, system colours, or `a98-rgb` / `prophoto-rgb` / `rec2020`.
+- **Color**: resolved to 8-bit sRGB; out-of-gamut colours are gamut-mapped (CSS Color 4 §13.2, OKLCH chroma reduction). `calc()` in components, the relative colour syntax, `light-dark()` and `a98-rgb` / `prophoto-rgb` / `rec2020` are parsed; system colours are not. `light-dark()` picks its branch from the `ColorContext` the consumer passes at paint time (`usedColorScheme()` turns `color-scheme` plus the preferred scheme into one).
 - **Generated content**: `::before` / `::after` boxes lay out via consumer-supplied pseudo nodes; the engine synthesizes no `content:` strings, counters, or list markers.
 - **Logical properties**: Map to physical properties assuming `writing-mode: horizontal-tb` and `direction: ltr`. Vertical writing modes are not supported.
 - **Grid subgrid**: `subgrid` keyword is not implemented.
