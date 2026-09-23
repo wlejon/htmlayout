@@ -293,6 +293,11 @@ struct LayoutNode {
     // alone on the rest, which is what lets those writes survive as inputs.
     uint32_t lastLayoutPass = 0;
 
+    // Whether line-clamp cut this block the last time it was laid out. It
+    // outlives the box (cleared each pass), so a block that stops clamping
+    // can still undo the flags it left on descendants whose boxes are reused.
+    bool lineClamped = false;
+
     // The box position box.hitBounds was last derived against. A pass that skips
     // this subtree (nothing in it laid out) compares it to the current position
     // to see how far the parent has moved the box, and translates the cached

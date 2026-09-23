@@ -29,9 +29,17 @@ namespace htmlayout::layout {
 //    run: appended to the cut run when that runs in the line's direction,
 //    otherwise (after an atomic inline, or beside an opposite-direction run)
 //    a run of its own holding just the ellipsis, added to a text node on the
-//    line or, failing that, to the last text node kept before it. The
-//    container's LayoutBox::textTruncated is set.
+//    line or, failing that, to the last text node kept before it. With no
+//    text node kept at all (lines of images or inline-blocks), the container
+//    holds it in its own LayoutBox::textRuns, in its content coordinates and
+//    its font, marked srcStart == srcEnd == kContainerEllipsisSrc — as a
+//    pseudo-element box holds its generated text. A line with nothing on it
+//    gets the ellipsis at its start edge. The container's
+//    LayoutBox::textTruncated is set.
 // Nothing happens when the content has N lines or fewer.
+// srcStart/srcEnd of an ellipsis run held by the clamp container itself.
+inline constexpr int kContainerEllipsisSrc = -1;
+
 struct LineClampSpec {
     int maxLines = 0;            // 0: no clamp
     bool ellipsis = true;        // block-ellipsis: auto | <string>

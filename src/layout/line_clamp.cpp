@@ -160,6 +160,7 @@ struct ElemRef {
 };
 
 struct ClampWalk {
+    LayoutNode* container = nullptr;  // the clamping block
     float cutY = 0;         // bottom of the last kept line
     float lineTop = 0;      // top of the last kept line
     std::vector<RunRef> lastLineRuns;
@@ -299,7 +300,6 @@ void placeEllipsis(ClampWalk& w, const ClampLine& line, const LineClampSpec& spe
         const ElemRef& e = w.lastLineElems[i];
         items.push_back({e.left, e.right, -1, static_cast<int>(i)});
     }
-    if (items.empty()) return;
     // End edge first.
     std::stable_sort(items.begin(), items.end(), [&](const Item& a, const Item& b) {
         return rtl ? a.l < b.l : a.r > b.r;
@@ -325,10 +325,29 @@ void placeEllipsis(ClampWalk& w, const ClampLine& line, const LineClampSpec& spe
         return rtl ? edge - ew >= limit - kFitSlack : edge + ew <= limit + kFitSlack;
     };
     // A stand-alone ellipsis run whose end-edge-facing side is at `edge`.
+    // The font the ellipsis is drawn in: the carrying run's, or with no text
+    // anywhere to carry it, that of the block whose line it ends.
+    auto ellipsisFont = [&]() {
+        return fontOf(carrier.text ? carrier.fontNode : line.owner);
+    };
     auto standAlone = [&](float edge, int srcAt) {
-        if (!carrier.text) return;  // no text anywhere to draw it with
-        Font f = fontOf(carrier.fontNode);
+        Font f = ellipsisFont();
         float ew = measure(metrics, spec.ellipsisText, f);
+        if (!carrier.text) {
+            // No text node to draw it with: the clamp container holds it as
+            // its own run, in its content coordinates (see line_clamp.h).
+            float h = metrics.lineHeight(*f.family, f.size, *f.weight);
+            if (h <= 0.0f) h = f.size * 1.2f;
+            PlacedTextRun e;
+            e.srcStart = e.srcEnd = kContainerEllipsisSrc;
+            e.text = spec.ellipsisText;
+            e.width = ew;
+            e.x = rtl ? edge - ew : edge;
+            e.y = line.bottom - h;
+            e.height = h;
+            w.container->box.textRuns.push_back(std::move(e));
+            return;
+        }
         PlacedTextRun e;
         e.srcStart = e.srcEnd = srcAt;
         e.text = spec.ellipsisText;
@@ -349,8 +368,7 @@ void placeEllipsis(ClampWalk& w, const ClampLine& line, const LineClampSpec& spe
         const Item& it = items[i];
         const bool lastChance = i + 1 == items.size();
         if (it.elem >= 0) {
-            float ew = carrier.text ? measure(metrics, spec.ellipsisText, fontOf(carrier.fontNode))
-                                    : 0.0f;
+            float ew = measure(metrics, spec.ellipsisText, ellipsisFont());
             float edge = rtl ? it.l : it.r;
             if (fitsAt(edge, ew)) {
                 standAlone(edge, carrierSrc());
@@ -433,13 +451,24 @@ void placeEllipsis(ClampWalk& w, const ClampLine& line, const LineClampSpec& spe
 } // namespace
 
 bool lineClampApplies(LayoutNode* node) {
-    return node->box.textTruncated || resolveLineClamp(node).maxLines > 0;
+    return node->lineClamped || resolveLineClamp(node).maxLines > 0;
 }
 
 bool beginLineClamp(LayoutNode* node, LineClampSpec& spec) {
     spec = resolveLineClamp(node);
-    bool wasClamped = node->box.textTruncated;
+    // Not box.textTruncated: the box is cleared at the start of each pass, so
+    // it forgets a clamp from the last one.
+    bool wasClamped = node->lineClamped;
+    node->lineClamped = false;
     node->box.textTruncated = false;
+    if (wasClamped) {
+        auto& runs = node->box.textRuns;
+        runs.erase(std::remove_if(runs.begin(), runs.end(),
+                                  [](const PlacedTextRun& r) {
+                                      return r.srcStart == kContainerEllipsisSrc;
+                                  }),
+                   runs.end());
+    }
     node->box.lineBoxes.clear();
     bool active = spec.maxLines > 0;
     if (active || wasClamped) markDescendantsDirty(node);
@@ -464,12 +493,14 @@ float applyLineClamp(LayoutNode* node, const LineClampSpec& spec,
     }
     const ClampLine& last = lines[static_cast<size_t>(spec.maxLines) - 1];
     ClampWalk w;
+    w.container = node;
     w.cutY = last.bottom;
     w.lineTop = last.top;
     walk(node, 0.0f, 0.0f, w);
     if (spec.ellipsis && !spec.ellipsisText.empty())
         placeEllipsis(w, last, spec, metrics);
     node->box.textTruncated = true;
+    node->lineClamped = true;
     return last.bottom;
 }
 

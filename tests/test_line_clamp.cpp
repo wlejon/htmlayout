@@ -7,6 +7,7 @@
 #include "test_helpers.h"
 #include "layout/box.h"
 #include "layout/formatting_context.h"
+#include "layout/line_clamp.h"
 #include "css/cascade.h"
 #include "css/parser.h"
 #include "css/properties.h"
@@ -688,6 +689,20 @@ void testRelayout() {
           "relayout: none restores full height");
     check(drawn(t1).find(kEllipsis) == std::string::npos, "relayout: none drops the ellipsis");
 
+    // Clamped to 1 then unclamped in the next pass: the hidden block child's
+    // box is reused, so the clamp has to be undone on it explicitly.
+    box->style_["line-clamp"] = "1";
+    expandClampShorthands(box);
+    markDirty(box);
+    layoutTree(root, 120.0f, m);
+    check(p2->box.clampHidden, "relayout: 1 hides line 3's block");
+    box->style_["line-clamp"] = "none";
+    expandClampShorthands(box);
+    markDirty(box);
+    layoutTree(root, 120.0f, m);
+    check(!p2->box.clampHidden && !box->box.textTruncated,
+          "relayout: 1 -> none un-hides the block past the clamp");
+
     // A second pass with nothing marked reuses the clamped subtree as is.
     box->style_["line-clamp"] = "1";
     expandClampShorthands(box);
@@ -714,6 +729,96 @@ void testRelayout() {
           "flex item: one ellipsis after repeated visits");
 }
 
+// The ellipsis run a clamp container holds itself (no text node to carry it).
+const PlacedTextRun* containerEllipsis(const ClampNode* box) {
+    for (const auto& r : box->box.textRuns)
+        if (r.srcStart == kContainerEllipsisSrc && r.text == kEllipsis) return &r;
+    return nullptr;
+}
+
+int containerEllipsisCount(const ClampNode* box) {
+    int n = 0;
+    for (const auto& r : box->box.textRuns)
+        if (r.srcStart == kContainerEllipsisSrc) ++n;
+    return n;
+}
+
+void testEllipsisWithoutText() {
+    printf("--- line-clamp: ellipsis on lines without text ---\n");
+    ClampMetrics m;
+    // Lines of inline-blocks only: no text node anywhere, so the container
+    // draws the ellipsis itself, after the last box kept on line 1.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        box->style_["line-clamp"] = "1";
+        std::vector<ClampNode*> ibs;
+        for (int i = 0; i < 6; ++i) {
+            ClampNode* ib = t.block(box, "inline-block");
+            ib->style_["width"] = "30px";
+            ib->style_["height"] = "10px";
+            ibs.push_back(ib);
+        }
+        layout(root, 100.0f, m);   // three boxes a line: 0..90 on line 1
+        check(box->box.textTruncated, "no text: the container is clamped");
+        const PlacedTextRun* e = containerEllipsis(box);
+        check(e != nullptr, "no text: the container carries the ellipsis");
+        // 90 + 18 > 100, so the third box goes and the ellipsis follows the second.
+        check(ibs[2]->box.clampHidden && !ibs[1]->box.clampHidden,
+              "no text: a box with no room after it is removed");
+        if (e) {
+            check(approxEq(e->x, 60.0f) && approxEq(e->width, 18.0f),
+                  "no text: the ellipsis follows the last kept box");
+            check(e->y >= 0.0f && e->y + e->height <= box->box.contentRect.height + 0.5f,
+                  "no text: the ellipsis sits on the kept line");
+        }
+
+        // Relayout: one ellipsis after a clean pass, none once unclamped.
+        markDirty(box);
+        layoutTree(root, 100.0f, m);
+        check(containerEllipsisCount(box) == 1, "no text: relayout keeps a single ellipsis");
+        box->style_["line-clamp"] = "none";
+        expandClampShorthands(box);
+        markDirty(box);
+        layoutTree(root, 100.0f, m);
+        check(containerEllipsisCount(box) == 0, "no text: unclamping drops the ellipsis");
+        check(!ibs[2]->box.clampHidden, "no text: unclamping shows the removed box");    }
+    // RTL: the ellipsis goes left of the last kept box.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        box->style_["direction"] = "rtl";
+        box->style_["line-clamp"] = "1";
+        for (int i = 0; i < 4; ++i) {
+            ClampNode* ib = t.block(box, "inline-block");
+            ib->style_["width"] = "30px";
+            ib->style_["height"] = "10px";
+        }
+        layout(root, 100.0f, m);   // line 1 right-aligned: 10..100
+        const PlacedTextRun* e = containerEllipsis(box);
+        check(e && approxEq(e->x + e->width, 40.0f),
+              "no text, rtl: the ellipsis sits left of the last kept box");
+    }
+    // A preserved empty last line after text: the ellipsis goes at its
+    // start, drawn by the text kept above it.
+    {
+        Tree t;
+        ClampNode* root = t.block(nullptr);
+        ClampNode* box = t.block(root);
+        box->style_["white-space"] = "pre";
+        box->style_["line-clamp"] = "2";
+        ClampNode* txt = t.textNode(box, "w00a\n\nw01a");
+        layout(root, 100.0f, m);
+        check(approxEq(box->box.contentRect.height, 24.0f), "empty line: clamped to 2 lines");
+        const PlacedTextRun* e = ellipsisRun(txt);
+        check(e && e->text == kEllipsis && approxEq(e->x, 0.0f) && approxEq(e->y, 12.0f),
+              "empty line: the ellipsis starts the empty last line");
+        check(drawn(txt).find("w01a") == std::string::npos, "empty line: line 3 is cut");
+    }
+}
+
 } // namespace
 
 void testLineClamp() {
@@ -726,4 +831,5 @@ void testLineClamp() {
     testMixedContent();
     testEllipsisPlacement();
     testRelayout();
+    testEllipsisWithoutText();
 }
