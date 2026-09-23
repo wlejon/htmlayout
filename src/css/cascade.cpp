@@ -388,6 +388,48 @@ static void resolveInlineLogical(ComputedStyle& style) {
     move("border-inline-end-color",   "border-", endSide,   "-color");
 }
 
+// Cascade precedence for a matched declaration (anything with important,
+// origin, layerOrder, specificity and order): true when `a` applies before
+// `b`, so `b` wins.
+template <typename M>
+static bool cascadesBefore(const M& a, const M& b) {
+    // Important declarations come after normal ones (applied last = wins)
+    if (a.important != b.important) return !a.important;
+
+    // Origin ordering (CSS Cascade L5):
+    //   Normal:    UA < Author  (author wins)
+    //   Important: Author !important < UA !important  (UA wins)
+    if (a.origin != b.origin) {
+        if (a.important) {
+            // For !important: UA beats Author — UA comes later (wins)
+            return a.origin == Origin::Author;
+        } else {
+            // For normal: Author beats UA — UA comes earlier (loses)
+            return a.origin == Origin::UserAgent;
+        }
+    }
+
+    // Layer ordering
+    if (a.layerOrder != b.layerOrder) {
+        if (a.important) {
+            // For !important: layered beats unlayered, earlier layers beat later
+            if (a.layerOrder == -1) return true;   // unlayered !important loses
+            if (b.layerOrder == -1) return false;   // unlayered !important loses
+            return a.layerOrder > b.layerOrder;     // earlier layer wins (comes later in sort)
+        } else {
+            // For normal: unlayered beats layered, later layers beat earlier
+            if (a.layerOrder == -1) return false;   // unlayered wins (comes later)
+            if (b.layerOrder == -1) return true;    // unlayered wins (comes later)
+            return a.layerOrder < b.layerOrder;     // later layer wins (comes later)
+        }
+    }
+
+    // Higher specificity wins (comes later)
+    if (a.specificity != b.specificity) return a.specificity < b.specificity;
+    // Later source order wins (comes later)
+    return a.order < b.order;
+}
+
 ComputedStyle Cascade::resolve(const ElementRef& elem,
                                 const std::string& inlineStyle,
                                 const ComputedStyle* parentStyle) const {
@@ -638,43 +680,7 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     //      Important: layered wins over unlayered; among layered, earlier layers win (reversed)
     //    - Among same importance+layer: inline > higher specificity > later source order
     std::stable_sort(matched.begin(), matched.end(),
-        [](const MatchedDecl& a, const MatchedDecl& b) {
-            // Important declarations come after normal ones (applied last = wins)
-            if (a.important != b.important) return !a.important;
-
-            // Origin ordering (CSS Cascade L5):
-            //   Normal:    UA < Author  (author wins)
-            //   Important: Author !important < UA !important  (UA wins)
-            if (a.origin != b.origin) {
-                if (a.important) {
-                    // For !important: UA beats Author — UA comes later (wins)
-                    return a.origin == Origin::Author;
-                } else {
-                    // For normal: Author beats UA — UA comes earlier (loses)
-                    return a.origin == Origin::UserAgent;
-                }
-            }
-
-            // Layer ordering
-            if (a.layerOrder != b.layerOrder) {
-                if (a.important) {
-                    // For !important: layered beats unlayered, earlier layers beat later
-                    if (a.layerOrder == -1) return true;   // unlayered !important loses
-                    if (b.layerOrder == -1) return false;   // unlayered !important loses
-                    return a.layerOrder > b.layerOrder;     // earlier layer wins (comes later in sort)
-                } else {
-                    // For normal: unlayered beats layered, later layers beat earlier
-                    if (a.layerOrder == -1) return false;   // unlayered wins (comes later)
-                    if (b.layerOrder == -1) return true;    // unlayered wins (comes later)
-                    return a.layerOrder < b.layerOrder;     // later layer wins (comes later)
-                }
-            }
-
-            // Higher specificity wins (comes later)
-            if (a.specificity != b.specificity) return a.specificity < b.specificity;
-            // Later source order wins (comes later)
-            return a.order < b.order;
-        });
+        [](const MatchedDecl& a, const MatchedDecl& b) { return cascadesBefore(a, b); });
 
     // 4. Apply declarations in sorted order (last wins per property)
     //    Expand shorthands into longhands before applying.
@@ -1043,6 +1049,8 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
         bool important;
         uint32_t specificity;
         size_t order;
+        int layerOrder;  // layer rank, -1 = unlayered
+        Origin origin;
     };
 
     // Only rules whose subject targets ::pseudoName can contribute. They were
@@ -1087,20 +1095,19 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
         for (auto& decl : rule.declarations) {
             matched.push_back({
                 &decl.property, &decl.value, decl.important,
-                rule.selector.specificity, rule.order
+                rule.selector.specificity, rule.order,
+                rule.layerOrder < 0 ? -1 : layerRanks_[static_cast<size_t>(rule.layerOrder)],
+                rule.origin
             });
         }
     }
 
     if (matched.empty()) return {};
 
-    // Sort by cascade precedence
+    // Sort by cascade precedence: the same origin / layer / specificity /
+    // order rules as an element's own declarations.
     std::stable_sort(matched.begin(), matched.end(),
-        [](const MatchedDecl& a, const MatchedDecl& b) {
-            if (a.important != b.important) return !a.important;
-            if (a.specificity != b.specificity) return a.specificity < b.specificity;
-            return a.order < b.order;
-        });
+        [](const MatchedDecl& a, const MatchedDecl& b) { return cascadesBefore(a, b); });
 
     // Apply declarations. The pseudo inherits the originating element's custom
     // properties the way a child would: by sharing its set.

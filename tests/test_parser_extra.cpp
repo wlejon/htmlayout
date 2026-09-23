@@ -283,6 +283,36 @@ static void testContainerPseudoElement() {
           "@container ::before rejects when the query fails");
 }
 
+static void testPseudoLayersAndOrigins() {
+    printf("--- ::before cascade: layers and origins ---\n");
+    MockElement item; item.tag = "span"; item.classes = "c"; item.elemId = "i";
+    // A layered rule loses to an unlayered one even with higher specificity.
+    Cascade c;
+    c.addStylesheet(parse(
+        "@layer base { #i.c::before { color: red; } }\n"
+        ".c::before { content: \"x\"; color: blue; }"));
+    auto es = c.resolve(item);
+    auto ps = c.resolvePseudo(item, "before", es);
+    check(ps["color"] == "blue", "::before: unlayered beats a more specific layered rule");
+
+    // Author beats the UA origin even with lower specificity.
+    Cascade o;
+    o.addStylesheet(parse("#i.c::before { content: \"x\"; color: red; }"), nullptr, nullptr,
+                    Origin::UserAgent);
+    o.addStylesheet(parse(".c::before { color: blue; }"));
+    auto ps2 = o.resolvePseudo(item, "before", o.resolve(item));
+    check(ps2["color"] == "blue", "::before: author beats a more specific UA rule");
+
+    // Later layers beat earlier ones.
+    Cascade l;
+    l.addStylesheet(parse(
+        "@layer a, b;\n"
+        "@layer b { .c::before { content: \"x\"; color: green; } }\n"
+        "@layer a { #i.c::before { color: red; } }"));
+    auto ps3 = l.resolvePseudo(item, "before", l.resolve(item));
+    check(ps3["color"] == "green", "::before: later layer beats an earlier one");
+}
+
 static void testContainerPreludeName() {
     printf("--- @container prelude name ---\n");
     auto a = parse("@container not (min-width: 400px) { .c { color: red; } }");
@@ -334,4 +364,5 @@ void testParserExtra() {
     testContainerPseudoElement();
     testContainerSourceOrder();
     testContainerPreludeName();
+    testPseudoLayersAndOrigins();
 }
