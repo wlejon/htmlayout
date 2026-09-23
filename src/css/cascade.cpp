@@ -240,59 +240,44 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
         getOrCreateLayerIndex(name);
     }
 
-    // Add unconditional rules
-    for (auto& rule : sheet.rules) {
-        auto selectors = parseSelectorList(rule.selector);
-        for (auto& sel : selectors) {
-            rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, origin, {}, {}});
-            classifyLastRule();
+    // With no media context every @media block applies (permissive).
+    auto mediaMatches = [media](const MediaBlock& block) {
+        if (!media) return true;
+        if (!evaluateMediaQuery(block.condition, *media)) return false;
+        for (auto& cond : block.andConditions)
+            if (!evaluateMediaQuery(cond, *media)) return false;
+        return true;
+    };
+    // Plain rules and matching @media rules interleave in source order
+    // (Rule::sourcePos), so a later plain rule beats an earlier @media rule.
+    auto addInSourceOrder = [&](const std::vector<Rule>& plain,
+                                const std::vector<MediaBlock>& blocks, int layerIdx) {
+        std::vector<const Rule*> ordered;
+        ordered.reserve(plain.size());
+        for (auto& rule : plain) ordered.push_back(&rule);
+        for (auto& block : blocks) {
+            if (!mediaMatches(block)) continue;
+            for (auto& rule : block.rules) ordered.push_back(&rule);
         }
-    }
-
-    // Add @media rules whose conditions match
-    for (auto& block : sheet.mediaBlocks) {
-        bool matches = true;
-        if (media) {
-            matches = evaluateMediaQuery(block.condition, *media);
-        }
-        // If no media context provided, include all @media rules (permissive)
-        if (matches) {
-            for (auto& rule : block.rules) {
-                auto selectors = parseSelectorList(rule.selector);
-                for (auto& sel : selectors) {
-                    rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, -1, origin, {}, {}});
-                    classifyLastRule();
-                }
-            }
-        }
-    }
-
-    // Add @layer rules
-    for (auto& layerBlock : sheet.layerBlocks) {
-        int layerIdx = getOrCreateLayerIndex(layerBlock.name);
-        for (auto& rule : layerBlock.rules) {
-            auto selectors = parseSelectorList(rule.selector);
+        std::stable_sort(ordered.begin(), ordered.end(), [](const Rule* a, const Rule* b) {
+            return a->sourcePos < b->sourcePos;
+        });
+        for (const Rule* rule : ordered) {
+            auto selectors = parseSelectorList(rule->selector);
             for (auto& sel : selectors) {
-                rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, layerIdx, origin, {}, {}});
+                rules_.push_back({std::move(sel), rule->declarations, scope, nextOrder_++, layerIdx, origin, {}, {}});
                 classifyLastRule();
             }
         }
-        // @media inside @layer
-        for (auto& mediaBlock : layerBlock.mediaBlocks) {
-            bool matches = true;
-            if (media) {
-                matches = evaluateMediaQuery(mediaBlock.condition, *media);
-            }
-            if (matches) {
-                for (auto& rule : mediaBlock.rules) {
-                    auto selectors = parseSelectorList(rule.selector);
-                    for (auto& sel : selectors) {
-                        rules_.push_back({std::move(sel), rule.declarations, scope, nextOrder_++, layerIdx, origin, {}, {}});
-                        classifyLastRule();
-                    }
-                }
-            }
-        }
+    };
+
+    // Unconditional + @media rules
+    addInSourceOrder(sheet.rules, sheet.mediaBlocks, -1);
+
+    // @layer rules (and @media inside @layer)
+    for (auto& layerBlock : sheet.layerBlocks) {
+        int layerIdx = getOrCreateLayerIndex(layerBlock.name);
+        addInSourceOrder(layerBlock.rules, layerBlock.mediaBlocks, layerIdx);
     }
 
     // Add @container rules

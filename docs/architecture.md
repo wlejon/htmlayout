@@ -37,7 +37,10 @@ Include paths are rooted at `src/`.
 src/
   css/
     tokenizer.h/cpp    — CSS tokenizer (text → tokens)
-    parser.h/cpp       — CSS parser (tokens → rules + declarations)
+    parser.h/cpp       — CSS parser (tokens → rules + declarations); nested
+                         rules are flattened here, in source order
+    nesting.h/cpp      — css-nesting-1 selector resolution (`&`, relative
+                         selectors, parent-list cross product)
     selector.h/cpp     — CSS selector parser + matcher
     cascade.h/cpp      — Style cascade with scope support (shadow DOM),
                          rule indexing, and restyle-scoping hints

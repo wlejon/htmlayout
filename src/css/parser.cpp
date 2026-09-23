@@ -1,6 +1,7 @@
 #include "css/parser.h"
 #include "css/properties.h"
 #include "css/color.h"
+#include "css/nesting.h"
 #include "../from_chars_compat.h"
 #include <algorithm>
 #include <charconv>
@@ -18,23 +19,15 @@ public:
 
     Stylesheet parseStylesheet() {
         Stylesheet sheet;
+        m_sheet = &sheet;
+        Scope top{&sheet.rules, &sheet.mediaBlocks, {}, true};
         skipWhitespace();
         while (!atEnd()) {
             if (peek().type == TokenType::AtKeyword) {
-                if (peek().value == "media") {
-                    auto mediaBlock = parseMediaRule();
-                    if (!mediaBlock.condition.empty() || !mediaBlock.rules.empty()) {
-                        sheet.mediaBlocks.push_back(std::move(mediaBlock));
-                    }
-                } else if (peek().value == "supports") {
-                    // @supports works similarly to @media but evaluates CSS feature support
-                    auto supportsBlock = parseSupportsRule();
-                    // Include rules if the condition evaluates to true
-                    if (!supportsBlock.rules.empty()) {
-                        for (auto& rule : supportsBlock.rules) {
-                            sheet.rules.push_back(std::move(rule));
-                        }
-                    }
+                if (peek().value == "media" || peek().value == "supports") {
+                    // @media blocks land in sheet.mediaBlocks; a true @supports
+                    // contributes its rules straight to sheet.rules.
+                    parseConditionalAtRule(top, nullptr, {});
                 } else if (peek().value == "layer") {
                     parseLayerRule(sheet);
                 } else if (peek().value == "container") {
@@ -65,12 +58,10 @@ public:
                 continue;
             }
             // Try to parse a qualified rule (selector { declarations })
-            auto rule = parseRule();
-            if (!rule.selector.empty()) {
-                sheet.rules.push_back(std::move(rule));
-            }
+            parseQualifiedRule(top, nullptr);
             skipWhitespace();
         }
+        m_sheet = nullptr;
         return sheet;
     }
 
@@ -115,75 +106,223 @@ private:
         while (!atEnd() && peek().type == TokenType::Whitespace) advance();
     }
 
-    MediaBlock parseMediaRule() {
-        MediaBlock block;
-        advance(); // skip @media keyword
-        skipWhitespace();
+    // ------------------------------------------------------------------
+    // Rule lists and style-rule bodies, including css-nesting-1.
+    //
+    // Nested rules are desugared as they are parsed: every style rule, or
+    // run of declarations between nested rules, is emitted as a flat Rule
+    // (selector resolved by css/nesting.cpp) into the current Scope, and a
+    // nested @media becomes its own MediaBlock carrying the enclosing
+    // conditions. Rule::sourcePos records the emission order so the cascade
+    // can interleave plain and @media rules correctly.
 
-        // Collect condition tokens until '{'
-        std::string condition;
-        while (!atEnd() && peek().type != TokenType::LeftBrace) {
-            condition += tokenToString(advance());
-        }
-        block.condition = trim(condition);
+    struct Scope {
+        std::vector<Rule>* rules = nullptr;             // where style rules go
+        std::vector<MediaBlock>* mediaOut = nullptr;    // nested @media; null = dropped
+        std::vector<std::string> mediaConds;            // enclosing @media conditions
+        bool allowContainer = false;                    // nested @container allowed
+    };
 
-        if (atEnd() || peek().type != TokenType::LeftBrace) return block;
-        advance(); // skip '{'
+    Stylesheet* m_sheet = nullptr;
+    size_t m_nextSourcePos = 1;
 
-        // Parse rules inside the media block
-        skipWhitespace();
-        while (!atEnd() && peek().type != TokenType::RightBrace) {
-            if (peek().type == TokenType::AtKeyword) {
-                consumeAtRule();
-                skipWhitespace();
-                continue;
-            }
-            auto rule = parseRule();
-            if (!rule.selector.empty()) {
-                block.rules.push_back(std::move(rule));
-            }
-            skipWhitespace();
-        }
-        if (!atEnd() && peek().type == TokenType::RightBrace) advance();
-        return block;
+    void emit(Scope& s, Rule rule) {
+        rule.sourcePos = m_nextSourcePos++;
+        s.rules->push_back(std::move(rule));
     }
 
-    // Parse @supports rule: evaluate the condition and include rules if supported
-    MediaBlock parseSupportsRule() {
-        MediaBlock block; // reuse MediaBlock structure
-        advance(); // skip @supports keyword
+    // Collect an at-rule prelude up to '{' (consumed) — false if the rule
+    // ends first (a ';' is consumed too).
+    bool collectPrelude(std::string& out) {
+        advance(); // @keyword
         skipWhitespace();
-
-        // Collect condition tokens until '{'
-        std::string condition;
-        while (!atEnd() && peek().type != TokenType::LeftBrace) {
-            condition += tokenToString(advance());
+        std::string text;
+        while (!atEnd() && peek().type != TokenType::LeftBrace &&
+               peek().type != TokenType::Semicolon && peek().type != TokenType::RightBrace) {
+            text += tokenToString(advance());
         }
-        block.condition = trim(condition);
+        out = trim(text);
+        if (!atEnd() && peek().type == TokenType::Semicolon) { advance(); return false; }
+        if (atEnd() || peek().type != TokenType::LeftBrace) return false;
+        advance(); // '{'
+        return true;
+    }
 
-        if (atEnd() || peek().type != TokenType::LeftBrace) return block;
-        advance(); // skip '{'
+    // Skip the rest of a block whose '{' was already consumed.
+    void skipBlockBody() {
+        int depth = 1;
+        while (!atEnd()) {
+            auto t = advance().type;
+            if (t == TokenType::LeftBrace) depth++;
+            else if (t == TokenType::RightBrace && --depth == 0) return;
+        }
+    }
 
-        // Evaluate @supports condition: we support most CSS properties
-        // For simplicity, if the condition contains a known property, we support it
-        bool supported = evaluateSupportsCondition(block.condition);
+    // Does the item at the cursor start a nested rule rather than a
+    // declaration? A '{' reached before any top-level ';' or '}' means a
+    // rule (css-syntax-3 would try the declaration first and reparse; the
+    // outcome is the same outside custom properties whose value holds a
+    // {} block, which are always taken as declarations here).
+    bool nextIsNestedRule() const {
+        size_t p = m_pos;
+        auto at = [&](size_t i) -> const Token& {
+            static const Token eof{TokenType::EndOfFile, "", 0.0, ""};
+            return i < m_tokens.size() ? m_tokens[i] : eof;
+        };
+        if (at(p).type == TokenType::Ident && at(p).value.rfind("--", 0) == 0) {
+            size_t q = p + 1;
+            while (at(q).type == TokenType::Whitespace) q++;
+            if (at(q).type == TokenType::Colon) return false;
+        }
+        int depth = 0;
+        for (; p < m_tokens.size(); p++) {
+            auto t = m_tokens[p].type;
+            if (t == TokenType::EndOfFile) return false;
+            if (t == TokenType::Function || t == TokenType::LeftParen ||
+                t == TokenType::LeftBracket) depth++;
+            else if (t == TokenType::RightParen || t == TokenType::RightBracket) {
+                if (depth > 0) depth--;
+            } else if (depth == 0) {
+                if (t == TokenType::Semicolon || t == TokenType::RightBrace) return false;
+                if (t == TokenType::LeftBrace) return true;
+            }
+        }
+        return false;
+    }
 
-        // Parse rules inside
+    // Parse the contents of a block whose '{' was consumed, up to and
+    // including its '}'. `parents` non-null means a style rule's body (or a
+    // conditional rule nested in one): declarations are allowed and apply
+    // to `selText`. Null means a plain rule list.
+    void parseBody(Scope& s, const std::vector<std::string>* parents,
+                   const std::string& selText, bool emitEmptySelf = false) {
+        Rule pending;
+        pending.selector = selText;
+        bool sawNested = false;
+        auto flush = [&]() {
+            if (pending.declarations.empty()) return;
+            Rule r;
+            r.selector = selText;
+            r.declarations = std::move(pending.declarations);
+            pending.declarations.clear();
+            emit(s, std::move(r));
+        };
         skipWhitespace();
         while (!atEnd() && peek().type != TokenType::RightBrace) {
-            if (peek().type == TokenType::AtKeyword) {
-                consumeAtRule();
-                skipWhitespace();
+            if (peek().type == TokenType::Whitespace || peek().type == TokenType::Semicolon) {
+                advance();
                 continue;
             }
-            auto rule = parseRule();
-            if (!rule.selector.empty() && supported) {
-                block.rules.push_back(std::move(rule));
+            if (peek().type == TokenType::AtKeyword) {
+                sawNested = true;
+                flush();
+                parseConditionalAtRule(s, parents, selText);
+                continue;
             }
-            skipWhitespace();
+            if (!parents || nextIsNestedRule()) {
+                sawNested = true;
+                flush();
+                parseQualifiedRule(s, parents);
+                continue;
+            }
+            auto decl = parseDeclaration();
+            if (!decl.property.empty()) pending.declarations.push_back(std::move(decl));
         }
         if (!atEnd() && peek().type == TokenType::RightBrace) advance();
-        return block;
+        if (!pending.declarations.empty()) flush();
+        else if (emitEmptySelf && !sawNested) emit(s, std::move(pending));
+    }
+
+    // @media / @supports / @container (and anything else, skipped) at the
+    // cursor, in a rule list or nested in a style rule.
+    void parseConditionalAtRule(Scope& s, const std::vector<std::string>* parents,
+                                const std::string& selText) {
+        const std::string name = peek().value;
+        if (name == "media") {
+            std::string cond;
+            if (!collectPrelude(cond)) return;
+            if (!s.mediaOut) { skipBlockBody(); return; }
+            MediaBlock mb;
+            mb.condition = cond;
+            mb.andConditions = s.mediaConds;
+            Scope inner{&mb.rules, s.mediaOut, s.mediaConds, false};
+            inner.mediaConds.push_back(cond);
+            parseBody(inner, parents, selText);
+            s.mediaOut->push_back(std::move(mb));
+            return;
+        }
+        if (name == "supports") {
+            std::string cond;
+            if (!collectPrelude(cond)) return;
+            if (evaluateSupportsCondition(cond)) {
+                parseBody(s, parents, selText);
+            } else {
+                std::vector<Rule> dropped;
+                std::vector<MediaBlock> droppedMedia;
+                Scope dead{&dropped, &droppedMedia, {}, false};
+                parseBody(dead, parents, selText);
+            }
+            return;
+        }
+        if (name == "container" && parents && s.allowContainer && m_sheet) {
+            std::string prelude;
+            if (!collectPrelude(prelude)) return;
+            ContainerBlock cb;
+            splitContainerPrelude(prelude, cb);
+            Scope inner{&cb.rules, nullptr, {}, false};
+            parseBody(inner, parents, selText);
+            if (!cb.rules.empty()) m_sheet->containerBlocks.push_back(std::move(cb));
+            return;
+        }
+        // @layer inside a style rule, @media inside @container, @charset,
+        // unknown at-rules: skipped.
+        consumeAtRule();
+    }
+
+    // A qualified rule at the cursor. Top-level (`parents` null) keeps the
+    // prelude text as the selector; nested ones resolve `&` against parents.
+    void parseQualifiedRule(Scope& s, const std::vector<std::string>* parents) {
+        std::string prelude;
+        while (!atEnd() && peek().type != TokenType::LeftBrace) {
+            prelude += tokenToString(advance());
+        }
+        prelude = trim(prelude);
+        if (atEnd() || peek().type != TokenType::LeftBrace) {
+            // Malformed trailing rule: kept, without declarations, as before.
+            if (!prelude.empty() && !parents) {
+                Rule r;
+                r.selector = prelude;
+                emit(s, std::move(r));
+            }
+            return;
+        }
+        advance(); // '{'
+        std::vector<std::string> selectors;
+        std::string selText;
+        if (parents) {
+            selectors = nesting::resolve(prelude, *parents);
+            for (size_t i = 0; i < selectors.size(); i++) {
+                if (i) selText += ", ";
+                selText += selectors[i];
+            }
+        } else {
+            selectors = nesting::splitSelectorList(prelude);
+            selText = prelude;
+        }
+        if (selectors.empty()) { skipBlockBody(); return; }
+        parseBody(s, &selectors, selText, /*emitEmptySelf=*/true);
+    }
+
+    static void splitContainerPrelude(const std::string& prelude, ContainerBlock& block) {
+        // "sidebar (min-width: 400px)" or "(min-width: 400px)"
+        auto parenPos = prelude.find('(');
+        if (parenPos != std::string::npos) {
+            std::string before = trim(prelude.substr(0, parenPos));
+            if (!before.empty()) block.name = before;
+            block.condition = trim(prelude.substr(parenPos));
+        } else {
+            block.condition = prelude;
+        }
     }
 
     // @supports declaration probe: does this engine support `property: value`?
@@ -414,28 +553,9 @@ private:
         LayerBlock layer;
         layer.name = nameStr;
 
-        // Parse rules inside the layer block
-        skipWhitespace();
-        while (!atEnd() && peek().type != TokenType::RightBrace) {
-            if (peek().type == TokenType::AtKeyword) {
-                if (peek().value == "media") {
-                    auto mediaBlock = parseMediaRule();
-                    if (!mediaBlock.condition.empty() || !mediaBlock.rules.empty()) {
-                        layer.mediaBlocks.push_back(std::move(mediaBlock));
-                    }
-                } else {
-                    consumeAtRule();
-                }
-                skipWhitespace();
-                continue;
-            }
-            auto rule = parseRule();
-            if (!rule.selector.empty()) {
-                layer.rules.push_back(std::move(rule));
-            }
-            skipWhitespace();
-        }
-        if (!atEnd() && peek().type == TokenType::RightBrace) advance();
+        // Parse rules inside the layer block (@media / @supports allowed)
+        Scope scope{&layer.rules, &layer.mediaBlocks, {}, false};
+        parseBody(scope, nullptr, {});
 
         sheet.layerBlocks.push_back(std::move(layer));
     }
@@ -453,37 +573,15 @@ private:
         }
         prelude = trim(prelude);
 
-        // Parse prelude: optional name followed by condition in parens
-        // e.g., "sidebar (min-width: 400px)" or "(min-width: 400px)"
-        auto parenPos = prelude.find('(');
-        if (parenPos != std::string::npos) {
-            std::string before = trim(prelude.substr(0, parenPos));
-            if (!before.empty()) {
-                block.name = before;
-            }
-            block.condition = trim(prelude.substr(parenPos));
-        } else {
-            block.condition = prelude;
-        }
+        splitContainerPrelude(prelude, block);
 
         if (atEnd() || peek().type != TokenType::LeftBrace) return block;
         advance(); // skip '{'
 
-        // Parse rules inside the container block
-        skipWhitespace();
-        while (!atEnd() && peek().type != TokenType::RightBrace) {
-            if (peek().type == TokenType::AtKeyword) {
-                consumeAtRule();
-                skipWhitespace();
-                continue;
-            }
-            auto rule = parseRule();
-            if (!rule.selector.empty()) {
-                block.rules.push_back(std::move(rule));
-            }
-            skipWhitespace();
-        }
-        if (!atEnd() && peek().type == TokenType::RightBrace) advance();
+        // Parse rules inside the container block (@supports allowed; @media
+        // inside @container is not tracked and is dropped)
+        Scope scope{&block.rules, nullptr, {}, false};
+        parseBody(scope, nullptr, {});
         return block;
     }
 
@@ -753,41 +851,6 @@ private:
             }
             advance();
         }
-    }
-
-    // Reconstruct the selector text from tokens up to '{'
-    Rule parseRule() {
-        Rule rule;
-        std::string selector;
-        // Consume tokens until we hit '{' to form the selector
-        while (!atEnd() && peek().type != TokenType::LeftBrace) {
-            selector += tokenToString(advance());
-        }
-        // Trim whitespace from selector
-        rule.selector = trim(selector);
-
-        if (atEnd() || peek().type != TokenType::LeftBrace) {
-            return rule; // malformed
-        }
-        advance(); // skip '{'
-
-        // Parse declarations until '}'
-        while (!atEnd() && peek().type != TokenType::RightBrace) {
-            skipWhitespace();
-            if (atEnd() || peek().type == TokenType::RightBrace) break;
-            if (peek().type == TokenType::Semicolon) {
-                advance();
-                continue;
-            }
-            auto decl = parseDeclaration();
-            if (!decl.property.empty()) {
-                rule.declarations.push_back(std::move(decl));
-            }
-        }
-        if (!atEnd() && peek().type == TokenType::RightBrace) {
-            advance(); // skip '}'
-        }
-        return rule;
     }
 
     Declaration parseDeclaration() {

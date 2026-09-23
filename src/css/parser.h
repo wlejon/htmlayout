@@ -14,15 +14,25 @@ struct Declaration {
 };
 
 // A CSS selector + its declarations
+// Nested style rules (css-nesting-1) are desugared by the parser into flat
+// rules whose selector has `&` resolved, so a Rule never nests.
 struct Rule {
     std::string selector;               // raw selector text
     std::vector<Declaration> declarations;
+    // Position in the sheet's source order across rules, @media blocks, and
+    // @layer blocks. Nesting can place a conditional rule (say, a nested
+    // @media) between two plain rules, so the cascade orders by this rather
+    // than by which list a rule sits in. 0 for rules not built by parse().
+    size_t sourcePos = 0;
 };
 
 // A @media block: condition + contained rules
 struct MediaBlock {
     std::string condition;          // e.g. "(min-width: 768px)"
     std::vector<Rule> rules;
+    // Enclosing conditions that must also match: an @media nested inside
+    // another @media, or inside a style rule that sits in an @media.
+    std::vector<std::string> andConditions;
 };
 
 // A @layer block: named cascade layer with contained rules
