@@ -249,6 +249,61 @@ void testNestedLayer() {
         check(c1.resolve(a)["color"] != "blue", "cascade: layer in @media, media fails");
         check(c2.resolve(a)["color"] == "blue", "cascade: layer in @media, media matches");
     }
+    {
+        // A layer's own rules beat its sublayers', even when the parent's
+        // order was declared up front (sublayer created after the parent).
+        Cascade c;
+        c.addStylesheet(parse("@layer b, a; @layer a { .a { color: green } @layer x { .a { color: red } } }"));
+        check(c.resolve(a)["color"] == "green", "cascade: a layer's own rules beat its sublayer");
+    }
+    {
+        // Sublayers sit where their parent sits: a.y is declared after b,
+        // but a is before b, so b wins.
+        Cascade c;
+        c.addStylesheet(parse("@layer a { @layer x { .a { color: red } } } @layer b { .a { color: blue } } "
+                              "@layer a { @layer y { .a { color: red } } }"));
+        check(c.resolve(a)["color"] == "blue", "cascade: a later sublayer of an earlier layer loses");
+    }
+    {
+        // `@layer a.b` declares `a` first, so a's own rules outrank a.b.
+        Cascade c;
+        c.addStylesheet(parse("@layer a.b { .a { color: red } } @layer a { .a { color: green } }"));
+        check(c.resolve(a)["color"] == "green", "cascade: a dotted layer name declares its parent first");
+    }
+    {
+        // !important reverses the layer order, hierarchically too.
+        Cascade c;
+        c.addStylesheet(parse("@layer a { .a { color: green !important } @layer x { .a { color: red !important } } }"));
+        check(c.resolve(a)["color"] == "red", "cascade: !important in a sublayer beats its parent's");
+    }
+}
+
+void testHostileNesting() {
+    printf("--- Nesting: hostile depth and expansion ---\n");
+    // Deep block nesting: dropped past the bound, not a stack overflow.
+    std::string deep;
+    for (int i = 0; i < 100000; i++) deep += ".a{";
+    deep += "color:red";
+    for (int i = 0; i < 100000; i++) deep += "}";
+    deep += " .ok { color: blue }";
+    auto s = parse(deep);
+    check(!s.rules.empty() && s.rules.back().selector == ".ok", "100000-deep nesting parses; later rules survive");
+
+    // A geometric cross product is dropped rather than built.
+    std::string wide = ".a, .b, .c, .d";
+    for (int i = 0; i < 12; i++) wide += " { & .a, & .b, & .c, & .d";
+    wide += " { color: red }";
+    for (int i = 0; i < 12; i++) wide += " }";
+    wide += " .ok { color: blue }";
+    s = parse(wide);
+    check(!s.rules.empty() && s.rules.back().selector == ".ok", "4^13 selector expansion is bounded");
+
+    std::string dup = ".a";
+    for (int i = 0; i < 60; i++) dup += " { & &";
+    dup += " { color: red }";
+    for (int i = 0; i < 60; i++) dup += " }";
+    s = parse(dup);
+    check(s.rules.size() < 64, "`& &` doubling is bounded");
 }
 
 void testMediaInContainer() {
@@ -328,4 +383,5 @@ void testNesting() {
     testNestedLayer();
     testMediaInContainer();
     testTopLevelAmpersand();
+    testHostileNesting();
 }

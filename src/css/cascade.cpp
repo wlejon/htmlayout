@@ -120,8 +120,44 @@ int Cascade::getOrCreateLayerIndex(const std::string& name) {
     for (int i = 0; i < static_cast<int>(layerNames_.size()); i++) {
         if (layerNames_[i] == name) return i;
     }
+    // A sublayer's parent exists first: `@layer a.b` declares `a` too.
+    auto dot = name.rfind('.');
+    if (dot != std::string::npos && dot > 0) getOrCreateLayerIndex(name.substr(0, dot));
     layerNames_.push_back(name);
+    rankLayers();
     return static_cast<int>(layerNames_.size()) - 1;
+}
+
+void Cascade::rankLayers() {
+    const int n = static_cast<int>(layerNames_.size());
+    auto parentOf = [&](int i) -> int {
+        auto dot = layerNames_[i].rfind('.');
+        if (dot == std::string::npos || dot == 0) return -1;
+        const std::string parent = layerNames_[i].substr(0, dot);
+        for (int j = 0; j < n; j++)
+            if (layerNames_[j] == parent) return j;
+        return -1;
+    };
+    std::vector<std::vector<int>> children(static_cast<size_t>(n) + 1);  // [n] = the root
+    for (int i = 0; i < n; i++) {
+        int p = parentOf(i);
+        children[p < 0 ? static_cast<size_t>(n) : static_cast<size_t>(p)].push_back(i);
+    }
+    layerRanks_.assign(static_cast<size_t>(n), 0);
+    int next = 0;
+    // Post-order, iteratively: {node, next child to visit}.
+    std::vector<std::pair<int, size_t>> stack{{n, 0}};
+    while (!stack.empty()) {
+        auto& [node, child] = stack.back();
+        auto& kids = children[static_cast<size_t>(node)];
+        if (child < kids.size()) {
+            int c = kids[child++];
+            stack.push_back({c, 0});
+            continue;
+        }
+        if (node < n) layerRanks_[static_cast<size_t>(node)] = next++;
+        stack.pop_back();
+    }
 }
 
 bool Cascade::evaluateContainerQuery(const ElementRef& elem,
@@ -562,7 +598,8 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
         for (auto& decl : rule.declarations) {
             matched.push_back({
                 &decl.property, &decl.value, decl.important,
-                rule.selector.specificity, rule.order, false, rule.layerOrder,
+                rule.selector.specificity, rule.order, false,
+                rule.layerOrder < 0 ? -1 : layerRanks_[static_cast<size_t>(rule.layerOrder)],
                 rule.origin
             });
         }
@@ -1118,6 +1155,7 @@ void Cascade::clear() {
     usesHas_ = false;
     ancestorClasses_.clear();
     layerNames_.clear();
+    layerRanks_.clear();
     loadedImports_.clear();
 }
 

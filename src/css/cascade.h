@@ -544,9 +544,16 @@ private:
     ImportResolver importResolver_;
     std::unordered_set<std::string> loadedImports_;
 
-    // Layer ordering: maps layer name -> index. Lower index = lower priority.
+    // Layer ordering: layerNames_ maps a layer's index (declaration order,
+    // parents before their sublayers) to its full dotted name; layerRanks_
+    // maps the index to its cascade priority, lower = lower priority. The
+    // rank is the post-order position in the layer tree: a layer's
+    // sublayers, in declaration order, rank below its own rules, and all of
+    // them sit where the parent sits among its siblings.
     std::vector<std::string> layerNames_;
+    std::vector<int> layerRanks_;
     int getOrCreateLayerIndex(const std::string& name);
+    void rankLayers();
 
     // Evaluate a container query condition against an element's container ancestors
     bool evaluateContainerQuery(const ElementRef& elem,
