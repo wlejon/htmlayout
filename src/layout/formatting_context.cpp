@@ -1136,7 +1136,7 @@ static void layoutNodeInner(LayoutNode* node, float availableWidth, TextMetrics&
     if (display == "none") {
         // Hidden — zero-size box, skip children. Stays clean: it will be reused
         // (as a zero box) until something restyles it back into the flow.
-        node->box = LayoutBox{};
+        clearHiddenBox(node);
         node->box.dirty = false;
         return;
     }

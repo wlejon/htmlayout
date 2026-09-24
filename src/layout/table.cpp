@@ -258,7 +258,7 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
             if (child->isTextNode()) continue;
             auto& cs = child->computedStyle();
             const std::string& d = styleVal(child, Prop::Display);
-            if (d == "none") { child->box = LayoutBox{}; continue; }
+            if (d == "none") { clearHiddenBox(child); continue; }
 
             // Absolutely/fixed positioned children are out of flow
             const std::string& childPos = styleVal(child, Prop::Position);
@@ -271,7 +271,7 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                     if (cell->isTextNode()) continue;
                     auto& cellStyle = cell->computedStyle();
                     const std::string& cd = styleVal(cell, Prop::Display);
-                    if (cd == "none") { cell->box = LayoutBox{}; continue; }
+                    if (cd == "none") { clearHiddenBox(cell); continue; }
                     row.cells.push_back(cell);
                 }
                 rows.push_back(std::move(row));
@@ -286,7 +286,7 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                     if (groupChild->isTextNode()) continue;
                     auto& gcs = groupChild->computedStyle();
                     const std::string& gd = styleVal(groupChild, Prop::Display);
-                    if (gd == "none") { groupChild->box = LayoutBox{}; continue; }
+                    if (gd == "none") { clearHiddenBox(groupChild); continue; }
                     if (isTableRow(gd)) {
                         TableRow row;
                         row.rowNode = groupChild;

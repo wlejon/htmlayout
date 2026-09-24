@@ -762,7 +762,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             } else {
                 auto& cs = child->computedStyle();
                 const std::string& d = styleVal(child, Prop::Display);
-                if (d == "none") { child->box = LayoutBox{}; continue; }
+                if (d == "none") { clearHiddenBox(child); continue; }
                 const std::string& cp = styleVal(child, Prop::Position);
                 if (cp == "absolute" || cp == "fixed") {
                     // Out of flow: no item, but remember where in the item
@@ -2070,7 +2070,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
         const std::string& childDisplay = styleVal(child, Prop::Display);
         if (childDisplay == "none") {
-            child->box = LayoutBox{};
+            clearHiddenBox(child);
             continue;
         }
 

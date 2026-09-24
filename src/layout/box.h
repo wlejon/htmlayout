@@ -756,6 +756,14 @@ LayoutNode* hitTestSubtree(LayoutNode* node, float x, float y);
 // Get children for layout, flattening any 'display: contents' nodes into the parent's sequence.
 std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node);
 
+// A `display: none` element generates no boxes, and neither does anything
+// inside it. Layout skips the subtree, so every descendant's box would keep
+// what the last visible layout gave it (a button inside a panel that was just
+// hidden still reporting its old rect); this empties the node's box and the
+// boxes below it. Subtrees already cleared are not walked again, so a hidden
+// panel costs one visit per pass, not one per descendant.
+void clearHiddenBox(LayoutNode* node);
+
 // Mark a node as needing re-layout, and every ancestor up to the root with it
 // (a changed child can resize its parent, which can resize *its* parent, so the
 // whole chain has to be recomputed for the change to reach the page).

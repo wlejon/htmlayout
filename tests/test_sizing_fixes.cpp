@@ -142,8 +142,39 @@ static void testInlineBlockMinMaxWidth() {
     check(near(ib3.box.contentRect.width, 80), "border-box min-width names the border box");
 }
 
+// Hiding an element empties the boxes of everything inside it, not only its
+// own: a descendant must not keep reporting the rect of its last visible
+// layout.
+static void testHiddenSubtreeClearsBoxes() {
+    printf("--- display:none clears the whole subtree ---\n");
+    SNode root; root.init();
+    SNode panel; panel.init();
+    SNode body; body.init();
+    SNode btn; btn.init("inline-block");
+    SNode t; t.textNode("Click me");
+    btn.addChild(&t); body.addChild(&btn); panel.addChild(&body); root.addChild(&panel);
+    SMetrics m;
+    layoutTree(&root, 800, m);
+    check(btn.box.contentRect.width > 0 && !t.box.textRuns.empty(), "button laid out while visible");
+
+    body.style_["display"] = "none";
+    markDirty(&body);
+    layoutTree(&root, 800, m);
+    check(body.box.contentRect.width == 0, "hidden body has no box");
+    check(btn.box.contentRect.width == 0 && btn.box.contentRect.height == 0,
+          "button inside it has no box either");
+    check(t.box.textRuns.empty(), "its text has no runs");
+
+    body.style_["display"] = "block";
+    markDirty(&body);
+    layoutTree(&root, 800, m);
+    check(near(btn.box.contentRect.width, 80) && !t.box.textRuns.empty(),
+          "shown again, the button is laid out again");
+}
+
 void testSizingFixes() {
     printf("=== Sizing fixes ===\n");
+    testHiddenSubtreeClearsBoxes();
     testPercentWidthColumnFlexItem();
     testInlineBlockMinMaxWidth();
 }

@@ -797,6 +797,33 @@ std::vector<LayoutNode*> getLayoutChildren(LayoutNode* node) {
     return result;
 }
 
+namespace {
+// A box that holds nothing from a previous layout: cleared (dirty, empty) and
+// never laid out since. Its descendants were cleared along with it.
+bool boxIsCleared(const LayoutBox& b) {
+    return b.dirty && b.contentRect.x == 0.0f && b.contentRect.y == 0.0f &&
+           b.contentRect.width == 0.0f && b.contentRect.height == 0.0f &&
+           b.textRuns.empty();
+}
+
+void clearDescendants(LayoutNode* node) {
+    auto clearOne = [](LayoutNode* c) {
+        if (!c || boxIsCleared(c->box)) return;
+        c->box = LayoutBox{};
+        clearDescendants(c);
+    };
+    clearOne(node->pseudoBefore());
+    for (auto* child : node->children()) clearOne(child);
+    clearOne(node->pseudoAfter());
+}
+} // namespace
+
+void clearHiddenBox(LayoutNode* node) {
+    if (!node) return;
+    node->box = LayoutBox{};
+    clearDescendants(node);
+}
+
 bool needsRelayout(std::initializer_list<std::string_view> changedProperties) {
     auto& lp = layoutProperties();
     for (auto prop : changedProperties) {

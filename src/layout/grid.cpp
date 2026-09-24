@@ -800,7 +800,7 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (child->isTextNode()) continue;
         auto& cs = child->computedStyle();
         if (styleVal(child, Prop::Display) == "none") {
-            child->box = LayoutBox{};
+            clearHiddenBox(child);
             continue;
         }
         const std::string& childPos = styleVal(child, Prop::Position);

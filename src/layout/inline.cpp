@@ -589,7 +589,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
                     child->box.contentRect = {};
                 } else {
                     auto& cs = child->computedStyle();
-                    if (styleVal(child, Prop::Display) == "none") { child->box = LayoutBox{}; continue; }
+                    if (styleVal(child, Prop::Display) == "none") { clearHiddenBox(child); continue; }
                     const std::string& childPos = styleVal(child, Prop::Position);
                     if (childPos == "absolute" || childPos == "fixed") {
                         // Out of flow: record the static position it would have
@@ -772,7 +772,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             for (auto* child : getLayoutChildren(node)) {
                 if (child->isTextNode()) continue;
                 auto& cs = child->computedStyle();
-                if (styleVal(child, Prop::Display) == "none") { child->box = LayoutBox{}; continue; }
+                if (styleVal(child, Prop::Display) == "none") { clearHiddenBox(child); continue; }
                 const std::string& childPos = styleVal(child, Prop::Position);
                 if (childPos == "absolute" || childPos == "fixed") {
                     // Out of flow: keep the position it would have stacked at.
@@ -895,7 +895,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             const std::string& childDisplay = styleVal(child, Prop::Display);
 
             if (childDisplay == "none") {
-                child->box = LayoutBox{};
+                clearHiddenBox(child);
                 continue;
             }
 
