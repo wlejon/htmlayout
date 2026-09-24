@@ -321,12 +321,14 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             node->box.contentRect.width = intrW;
             contentAvail = intrW;
         } else if (display == "inline-block") {
-            // Shrink-to-fit: content width = min(max-content, available).
-            // Without this, block-level children (divs) laid out at full
-            // `contentAvail` would expand the inline-block to parent width,
-            // breaking horizontal flow of sibling inline-blocks.
+            // Shrink-to-fit (CSS2 §10.3.9): min(max-content,
+            // max(min-content, available)). Without this, block-level
+            // children (divs) laid out at full `contentAvail` would expand
+            // the inline-block to parent width, breaking horizontal flow of
+            // sibling inline-blocks.
             float maxContent = computeMaxContentWidth(node, metrics);
-            float fitAvail = std::min(maxContent, contentAvail);
+            float minContent = computeMinContentWidth(node, metrics);
+            float fitAvail = std::min(maxContent, std::max(minContent, contentAvail));
             if (fitAvail < 0) fitAvail = 0;
             contentAvail = fitAvail;
             node->box.contentRect.width = fitAvail;
@@ -807,9 +809,14 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         }
 
         if (widthVal == "auto" || widthVal.empty()) {
-            // Shrink-wrap to content for inline-block with auto width
+            // The shrink-to-fit width decided above is the box's width: the
+            // lines broken inside it do not shrink it further (a max-width
+            // that wraps the text leaves the box at max-width, not at its
+            // widest line). A line that still overflows (an unbreakable
+            // word) widens it, as min-content would have.
             node->box.contentRect.width = clampInlineBlockWidth(
-                (maxContentW > 0) ? maxContentW : contentAvail);
+                std::max(contentAvail, maxContentW > contentAvail + kFitSlack
+                                           ? maxContentW : 0.0f));
         }
 
         return;

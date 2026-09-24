@@ -172,6 +172,34 @@ static void testHiddenSubtreeClearsBoxes() {
           "shown again, the button is laid out again");
 }
 
+// An auto-width inline-flex / inline-grid is an atomic inline and shrinks to
+// fit its content instead of filling the line.
+static void testInlineFlexShrinksToFit() {
+    printf("--- sizing: inline-flex / inline-grid shrink to fit ---\n");
+    SNode root; root.init();
+    SNode chip; chip.init("inline-flex");
+    SNode t; t.textNode("chip");
+    chip.addChild(&t); root.addChild(&chip);
+    SMetrics m;
+    layoutTree(&root, 800, m);
+    check(near(chip.box.contentRect.width, 40), "inline-flex is as wide as its text");
+
+    SNode root2; root2.init();
+    SNode g; g.init("inline-grid"); g.style_["grid-template-columns"] = "30px 50px";
+    SNode a; a.init(); SNode b; b.init();
+    g.addChild(&a); g.addChild(&b); root2.addChild(&g);
+    layoutTree(&root2, 800, m);
+    check(near(g.box.contentRect.width, 80), "inline-grid is as wide as its tracks");
+
+    // Still capped by the line it sits on.
+    SNode root3; root3.init();
+    SNode wide; wide.init("inline-flex"); wide.style_["flex-wrap"] = "wrap";
+    SNode t3; t3.textNode("aaaa bbbb cccc dddd");
+    wide.addChild(&t3); root3.addChild(&wide);
+    layoutTree(&root3, 100, m);
+    check(wide.box.contentRect.width <= 100.5f, "inline-flex never exceeds the line");
+}
+
 // Intrinsic sizes count letter-spacing the way layout does: one advance per
 // code point (not per byte), the trailing one included.
 static void testLetterSpacingIntrinsics() {
@@ -209,6 +237,7 @@ static void testLetterSpacingIntrinsics() {
 void testSizingFixes() {
     printf("=== Sizing fixes ===\n");
     testLetterSpacingIntrinsics();
+    testInlineFlexShrinksToFit();
     testHiddenSubtreeClearsBoxes();
     testPercentWidthColumnFlexItem();
     testInlineBlockMinMaxWidth();

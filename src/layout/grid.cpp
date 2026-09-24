@@ -736,6 +736,13 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     } else {
         containerWidth = availableWidth - node->box.margin.left - node->box.margin.right - paddingH - borderH;
         if (containerWidth < 0) containerWidth = 0;
+        // An auto-width inline-grid is an atomic inline and shrinks to fit.
+        if (styleVal(node, Prop::Display) == "inline-grid" &&
+            node->overrideContentWidth < 0.0f) {
+            float minC = computeMinContentWidth(node, metrics);
+            float maxC = computeMaxContentWidth(node, metrics);
+            containerWidth = std::min(maxC, std::max(minC, containerWidth));
+        }
     }
     // A parent flex algorithm resolved this box's used width already; a
     // percentage `width` must not be taken again against that result.

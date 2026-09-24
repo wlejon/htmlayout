@@ -82,6 +82,15 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     } else {
         containerMain = availableWidth - node->box.margin.left - node->box.margin.right - paddingH - borderH;
         if (containerMain < 0) containerMain = 0;
+        // An inline-level flex container is an atomic inline: with an auto
+        // width it shrinks to fit its content (CSS2 §10.3.9, Flexbox §9.2)
+        // rather than filling the line.
+        if (styleVal(node, Prop::Display) == "inline-flex" &&
+            node->overrideContentWidth < 0.0f) {
+            float minC = computeMinContentWidth(node, metrics);
+            float maxC = computeMaxContentWidth(node, metrics);
+            containerMain = std::min(maxC, std::max(minC, containerMain));
+        }
     }
 
     // Under `box-sizing: border-box` every specified box dimension — width,
