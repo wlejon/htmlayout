@@ -283,9 +283,26 @@ static void testListStyleShorthand() {
 static void testTransitionAnimation() {
     printf("--- Shorthand: transition/animation ---\n");
     auto r = expandShorthand("transition", "all 0.3s ease");
-    check(r.size() == 1 && r[0].property == "transition", "transition stored as-is");
+    check(r.size() == 6 && r[0].property == "transition" && r[0].value == "all 0.3s ease",
+          "transition keeps its full value");
+    auto val = [&](const char* p) {
+        for (auto& d : r) if (d.property == p) return d.value;
+        return std::string("<missing>");
+    };
+    check(val("transition-property") == "all" && val("transition-duration") == "0.3s" &&
+          val("transition-timing-function") == "ease" && val("transition-delay") == "0s" &&
+          val("transition-behavior") == "normal", "transition expands to its longhands");
+    r = expandShorthand("transition",
+                        "opacity 1s linear 200ms, display 1s allow-discrete, cubic-bezier(0, 0, 1, 1) 2s");
+    check(val("transition-property") == "opacity, display, all" &&
+          val("transition-duration") == "1s, 1s, 2s" &&
+          val("transition-timing-function") == "linear, ease, cubic-bezier(0, 0, 1, 1)" &&
+          val("transition-delay") == "200ms, 0s, 0s" &&
+          val("transition-behavior") == "normal, allow-discrete, normal",
+          "transition lists one entry per transition, allow-discrete included");
     r = expandShorthand("animation", "fadeIn 1s linear");
-    check(r.size() == 1 && r[0].property == "animation", "animation stored as-is");
+    check(r.size() == 9 && r[0].property == "animation" && val("animation-name") == "fadeIn",
+          "animation keeps its full value and expands to its longhands");
 }
 
 static void testFontFaceRule() {

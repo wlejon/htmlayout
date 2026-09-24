@@ -152,6 +152,7 @@ const std::vector<PropertyDef>& knownProperties() {
         {"transition-duration",   "0s",     false},
         {"transition-timing-function", "ease", false},
         {"transition-delay",      "0s",     false},
+        {"transition-behavior",   "normal", false},
         {"animation",             "none",   false},
         {"animation-name",        "none",   false},
         {"animation-duration",    "0s",     false},
@@ -849,6 +850,90 @@ std::vector<ExpandedDecl> expandAnimationShorthand(const std::string& value) {
     return out;
 }
 
+// transition: the full value (for getComputedStyle().transition) plus the five
+// longhands, each a comma list with one entry per transition. Expanding here is
+// what lets a later longhand (transition-behavior: allow-discrete after a
+// `transition`) override the shorthand's reset in cascade order.
+std::vector<ExpandedDecl> expandTransitionShorthand(const std::string& value) {
+    static const char* kLonghands[] = {
+        "transition-property", "transition-duration", "transition-timing-function",
+        "transition-delay", "transition-behavior",
+    };
+    std::vector<ExpandedDecl> out;
+    out.push_back({"transition", value});
+
+    std::string v = value;
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.erase(v.begin());
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+    std::string lower = v;
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower == "inherit" || lower == "initial" || lower == "unset" || lower == "revert" ||
+        lower == "revert-layer") {
+        for (const char* p : kLonghands) out.push_back({p, lower});
+        return out;
+    }
+
+    std::vector<std::vector<std::string>> items(1);
+    std::string tok;
+    int depth = 0;
+    auto flush = [&] {
+        if (!tok.empty()) items.back().push_back(tok);
+        tok.clear();
+    };
+    for (char c : v) {
+        if (c == '(') ++depth;
+        else if (c == ')') --depth;
+        if (depth == 0 && c == ',') { flush(); items.emplace_back(); continue; }
+        if (depth == 0 && std::isspace(static_cast<unsigned char>(c))) { flush(); continue; }
+        tok += c;
+    }
+    flush();
+
+    auto isTime = [](const std::string& t) {
+        char* end = nullptr;
+        std::strtod(t.c_str(), &end);
+        if (end == t.c_str()) return false;
+        std::string unit(end);
+        for (char& c : unit) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return unit == "s" || unit == "ms";
+    };
+    auto isEasing = [](const std::string& l) {
+        return l == "linear" || l == "ease" || l == "ease-in" || l == "ease-out" ||
+               l == "ease-in-out" || l == "step-start" || l == "step-end" ||
+               l.rfind("cubic-bezier(", 0) == 0 || l.rfind("steps(", 0) == 0 ||
+               l.rfind("linear(", 0) == 0;
+    };
+
+    std::string lists[5];
+    for (size_t i = 0; i < items.size(); ++i) {
+        std::string prop = "all", duration = "0s", easing = "ease", delay = "0s",
+                    behavior = "normal";
+        bool haveDuration = false, haveDelay = false, haveEasing = false,
+             haveProp = false, haveBehavior = false;
+        for (const std::string& t : items[i]) {
+            std::string l = t;
+            for (char& c : l) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (isTime(t)) {
+                if (!haveDuration) { duration = l; haveDuration = true; }
+                else if (!haveDelay) { delay = l; haveDelay = true; }
+            } else if (!haveEasing && isEasing(l)) {
+                easing = l; haveEasing = true;
+            } else if (!haveBehavior && (l == "normal" || l == "allow-discrete")) {
+                behavior = l; haveBehavior = true;
+            } else if (!haveProp) {
+                prop = l; haveProp = true;
+            }
+        }
+        const std::string vals[5] = {prop, duration, easing, delay, behavior};
+        for (int k = 0; k < 5; ++k) {
+            if (i) lists[k] += ", ";
+            lists[k] += vals[k];
+        }
+    }
+    for (int k = 0; k < 5; ++k) out.push_back({kLonghands[k], lists[k]});
+    return out;
+}
+
 }  // namespace
 
 std::vector<ExpandedDecl> expandShorthand(const std::string& property,
@@ -1276,10 +1361,9 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         return out;
     }
 
-    // transition shorthand — store full value, also set sub-properties from first transition
+    // transition shorthand: the full value plus the five longhands.
     if (property == "transition") {
-        // Keep the full value and set component properties for the first transition
-        return {{property, value}};
+        return expandTransitionShorthand(value);
     }
 
     // animation shorthand: the full value (for getComputedStyle().animation)
