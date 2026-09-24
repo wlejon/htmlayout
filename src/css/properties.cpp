@@ -2,6 +2,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <unordered_map>
 #include <unordered_set>
 #include <string_view>
@@ -744,6 +745,112 @@ bool isShorthandProperty(std::string_view property) {
     return kExpandable.find(property) != kExpandable.end();
 }
 
+namespace {
+
+// `animation` (CSS Animations 1 §3.1): comma-separated layers, each
+//   <time> || <easing-function> || <time> || <iteration-count> ||
+//   <direction> || <fill-mode> || <play-state> || [ none | <keyframes-name> ]
+// The first time is the duration, the second the delay; a keyword is taken
+// by the first longhand it fits, so the name is whatever is left. Tokens are
+// split at spaces and commas OUTSIDE parentheses, so cubic-bezier(0.4, 0,
+// 0.2, 1) and steps(4, end) stay one easing token.
+std::vector<ExpandedDecl> expandAnimationShorthand(const std::string& value) {
+    static const char* kLonghands[] = {
+        "animation-name", "animation-duration", "animation-timing-function",
+        "animation-delay", "animation-iteration-count", "animation-direction",
+        "animation-fill-mode", "animation-play-state",
+    };
+    std::vector<ExpandedDecl> out;
+    out.push_back({"animation", value});
+
+    std::string v = value;
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.erase(v.begin());
+    while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+    std::string lower = v;
+    for (char& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    if (lower == "inherit" || lower == "initial" || lower == "unset" || lower == "revert" ||
+        lower == "revert-layer") {
+        for (const char* p : kLonghands) out.push_back({p, lower});
+        return out;
+    }
+
+    // Layers, each a list of tokens.
+    std::vector<std::vector<std::string>> layers(1);
+    std::string tok;
+    int depth = 0;
+    auto flush = [&] {
+        if (!tok.empty()) layers.back().push_back(tok);
+        tok.clear();
+    };
+    for (char c : v) {
+        if (c == '(') ++depth;
+        else if (c == ')') --depth;
+        if (depth == 0 && c == ',') { flush(); layers.emplace_back(); continue; }
+        if (depth == 0 && std::isspace(static_cast<unsigned char>(c))) { flush(); continue; }
+        tok += c;
+    }
+    flush();
+
+    auto isTime = [](const std::string& t) {
+        char* end = nullptr;
+        std::strtod(t.c_str(), &end);
+        if (end == t.c_str()) return false;
+        std::string unit(end);
+        for (char& c : unit) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return unit == "s" || unit == "ms";
+    };
+    auto isNumber = [](const std::string& t) {
+        char* end = nullptr;
+        std::strtod(t.c_str(), &end);
+        return end != t.c_str() && *end == '\0';
+    };
+    auto isEasing = [](const std::string& l) {
+        return l == "linear" || l == "ease" || l == "ease-in" || l == "ease-out" ||
+               l == "ease-in-out" || l == "step-start" || l == "step-end" ||
+               l.rfind("cubic-bezier(", 0) == 0 || l.rfind("steps(", 0) == 0 ||
+               l.rfind("linear(", 0) == 0;
+    };
+
+    std::string lists[8];
+    for (size_t li = 0; li < layers.size(); ++li) {
+        std::string name = "none", duration = "0s", easing = "ease", delay = "0s",
+                    iter = "1", direction = "normal", fill = "none", play = "running";
+        bool haveDuration = false, haveDelay = false, haveEasing = false, haveIter = false,
+             haveDirection = false, haveFill = false, havePlay = false, haveName = false;
+        for (const std::string& t : layers[li]) {
+            std::string l = t;
+            for (char& c : l) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            if (isTime(t)) {
+                if (!haveDuration) { duration = l; haveDuration = true; }
+                else if (!haveDelay) { delay = l; haveDelay = true; }
+            } else if (!haveEasing && isEasing(l)) {
+                easing = l; haveEasing = true;
+            } else if (!haveIter && (l == "infinite" || isNumber(t))) {
+                iter = l; haveIter = true;
+            } else if (!haveDirection && (l == "normal" || l == "reverse" || l == "alternate" ||
+                                          l == "alternate-reverse")) {
+                direction = l; haveDirection = true;
+            } else if (!haveFill && (l == "none" || l == "forwards" || l == "backwards" ||
+                                     l == "both")) {
+                fill = l; haveFill = true;
+            } else if (!havePlay && (l == "running" || l == "paused")) {
+                play = l; havePlay = true;
+            } else if (!haveName) {
+                name = t; haveName = true;  // keyframes names keep their case
+            }
+        }
+        const std::string vals[8] = {name, duration, easing, delay, iter, direction, fill, play};
+        for (int k = 0; k < 8; ++k) {
+            if (li) lists[k] += ", ";
+            lists[k] += vals[k];
+        }
+    }
+    for (int k = 0; k < 8; ++k) out.push_back({kLonghands[k], lists[k]});
+    return out;
+}
+
+}  // namespace
+
 std::vector<ExpandedDecl> expandShorthand(const std::string& property,
                                            const std::string& value) {
     if (!isShorthandProperty(property))
@@ -1175,9 +1282,10 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         return {{property, value}};
     }
 
-    // animation shorthand — store full value
+    // animation shorthand: the full value (for getComputedStyle().animation)
+    // plus the eight longhands, each a comma list with one entry per layer.
     if (property == "animation") {
-        return {{property, value}};
+        return expandAnimationShorthand(value);
     }
 
     // columns shorthand: column-width column-count
