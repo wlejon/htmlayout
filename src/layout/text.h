@@ -47,6 +47,10 @@ struct TextRun {
     // The IFC line builder treats this like a <br>: terminate the
     // current line after this run regardless of available width.
     bool forceBreakAfter = false;
+    // Advance of preserved white space at the end of the run (white-space:
+    // pre-wrap). It hangs: a line may end with it past its edge, so it does
+    // not count when the line builder tests whether the run fits.
+    float hangWidth = 0.0f;
 };
 
 // Apply CSS text-transform ("uppercase" / "lowercase" / "capitalize"; anything
@@ -110,5 +114,29 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& text,
                                         float letterSpacing = 0,
                                         float wordSpacing = 0,
                                         const std::string& textTransform = "none");
+
+// Break white-space: pre-wrap text into its wrap segments, for a line builder
+// that places them itself: each source line is cut after every run of spaces
+// (and tabs), so a segment is a word followed by the white space after it —
+// the white space stays on the line it ends (it hangs there) and a soft wrap
+// lands after it. `hangWidth` is that trailing white space's advance. A
+// preserved newline marks the last segment of its source line
+// forceBreakAfter; an empty source line is an empty segment carrying the
+// break. Widths are taken in context (the whole source line shaped once), so
+// the segments of a line sum to the line.
+std::vector<TextRun> segmentPreservedText(const std::string& text,
+                                          const std::string& fontFamily,
+                                          float fontSize,
+                                          const std::string& fontWeight,
+                                          TextMetrics& metrics,
+                                          float letterSpacing = 0,
+                                          float wordSpacing = 0,
+                                          const std::string& textTransform = "none");
+
+// Measure `s` the way the text breaker measures a run: glyph advance plus one
+// letter-spacing slot per code point and word-spacing per space.
+float measureRunWidth(const std::string& s, const std::string& fontFamily,
+                      float fontSize, const std::string& fontWeight,
+                      TextMetrics& metrics, float letterSpacing, float wordSpacing);
 
 } // namespace htmlayout::layout

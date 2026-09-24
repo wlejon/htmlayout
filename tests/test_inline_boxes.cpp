@@ -209,8 +209,154 @@ static void testBlockInsideInlineStaysAtomic() {
     check(near(inner.box.contentRect.width, 50), "the block child keeps its width");
 }
 
+// white-space: pre-wrap wraps where it stands too: each word with the space
+// after it is a piece of the line, and the space hangs at a line end.
+static void testPreWrapWrapsInsideSpan() {
+    printf("--- inline boxes: pre-wrap text wraps inside a span ---\n");
+    INode block; block.init(); block.style_["width"] = "200px";
+    block.style_["white-space"] = "pre-wrap";
+    INode t1; t1.textNode("voice ");
+    INode sp; sp.span(); sp.style_["white-space"] = "pre-wrap";
+    INode t2; t2.textNode("aaaa bbbb cccc dddd");
+    sp.addChild(&t2);
+    block.addChild(&t1); block.addChild(&sp);
+    IMetrics m;
+    layoutTree(&block, 800, m);
+    const PlacedTextRun* a = runOf(t2, "aaaa");
+    const PlacedTextRun* c = runOf(t2, "cccc");
+    const PlacedTextRun* d = runOf(t2, "dddd");
+    check(a && c && d, "the span's words are placed");
+    if (!a || !c || !d) return;
+    check(near(a->x + sp.box.contentRect.x, 60) && near(a->y + sp.box.contentRect.y, 0),
+          "'aaaa' follows 'voice ' on line 1");
+    check(near(c->y + sp.box.contentRect.y, 0),
+          "'cccc ' stays on line 1, its space hanging at the edge");
+    check(near(d->x + sp.box.contentRect.x, 0) && near(d->y + sp.box.contentRect.y, 20),
+          "only 'dddd' wraps to line 2");
+    check(a->text == "aaaa " && a->srcStart == 0 && a->srcEnd == 5,
+          "a piece keeps its preserved space and source range");
+}
+
+// overflow-wrap: break-word moves a long word to its own line first (the
+// space before it is a break opportunity) and only then cuts it at the edge.
+static void testBreakWordInsideSpan() {
+    printf("--- inline boxes: overflow-wrap cuts a word inside a span ---\n");
+    INode block; block.init(); block.style_["width"] = "100px";
+    block.style_["overflow-wrap"] = "break-word";
+    INode t1; t1.textNode("ab ");
+    INode sp; sp.span(); sp.style_["overflow-wrap"] = "break-word";
+    INode t2; t2.textNode("cccccccccccccccc");
+    sp.addChild(&t2);
+    block.addChild(&t1); block.addChild(&sp);
+    IMetrics m;
+    layoutTree(&block, 800, m);
+    check(t2.box.textRuns.size() == 2, "the word is cut in two");
+    if (t2.box.textRuns.size() != 2) return;
+    const auto& r0 = t2.box.textRuns[0];
+    const auto& r1 = t2.box.textRuns[1];
+    float ox = sp.box.contentRect.x, oy = sp.box.contentRect.y;
+    check(near(r0.x + ox, 0) && near(r0.y + oy, 20) && near(r0.width, 100),
+          "its first piece fills line 2");
+    check(near(r1.x + ox, 0) && near(r1.y + oy, 40) && near(r1.width, 60),
+          "the rest is on line 3");
+    check(r0.srcStart == 0 && r0.srcEnd == 10 && r1.srcStart == 10 && r1.srcEnd == 16,
+          "the pieces cover the source in order");
+
+    // Not in a span, with text before it on the line and no break
+    // opportunity anywhere: cut at the edge of the line it starts on.
+    INode block2; block2.init(); block2.style_["width"] = "100px";
+    block2.style_["overflow-wrap"] = "break-word";
+    INode t3; t3.textNode("dddddddddddddddd");
+    block2.addChild(&t3);
+    layoutTree(&block2, 800, m);
+    check(t3.box.textRuns.size() == 2 && near(t3.box.textRuns[0].width, 100) &&
+          near(t3.box.textRuns[1].y, 20),
+          "a lone long word breaks at the line edge");
+}
+
+// word-break: break-all breaks between any two letters, so a word fills the
+// rest of the line it starts on.
+static void testBreakAllFillsLine() {
+    printf("--- inline boxes: break-all fills the line ---\n");
+    INode block; block.init(); block.style_["width"] = "100px";
+    block.style_["word-break"] = "break-all";
+    INode t1; t1.textNode("ab ");
+    INode sp; sp.span(); sp.style_["word-break"] = "break-all";
+    INode t2; t2.textNode("cccccccccccccccc");
+    sp.addChild(&t2);
+    block.addChild(&t1); block.addChild(&sp);
+    IMetrics m;
+    layoutTree(&block, 800, m);
+    check(t2.box.textRuns.size() == 2, "the word is cut in two");
+    if (t2.box.textRuns.size() != 2) return;
+    float ox = sp.box.contentRect.x, oy = sp.box.contentRect.y;
+    const auto& r0 = t2.box.textRuns[0];
+    const auto& r1 = t2.box.textRuns[1];
+    check(near(r0.x + ox, 30) && near(r0.y + oy, 0) && near(r0.width, 70),
+          "its first piece fills the rest of line 1");
+    check(near(r1.x + ox, 0) && near(r1.y + oy, 20) && near(r1.width, 90),
+          "the rest starts line 2");
+}
+
+// A block that mixes block-level and inline children lays each inline run
+// out in an anonymous block, through the same line builder: a span's text
+// wraps where it stands there too.
+static void testMixedBlockInlineWraps() {
+    printf("--- inline boxes: spans wrap inside an anonymous block ---\n");
+    INode block; block.init(); block.style_["width"] = "200px";
+    INode head; head.init(); head.style_["height"] = "10px";
+    INode t1; t1.textNode("voice ");
+    INode sp; sp.span(); sp.style_["padding-left"] = "4px";
+    INode t2; t2.textNode("aaaa bbbb cccc dddd");
+    sp.addChild(&t2);
+    block.addChild(&head); block.addChild(&t1); block.addChild(&sp);
+    IMetrics m;
+    layoutTree(&block, 800, m);
+    const PlacedTextRun* a = runOf(t2, "aaaa");
+    const PlacedTextRun* c = runOf(t2, "cccc");
+    check(a && c, "the span's words are placed");
+    if (!a || !c) return;
+    check(near(a->x + sp.box.contentRect.x, 64) && near(a->y + sp.box.contentRect.y, 10),
+          "'aaaa' follows 'voice ' and the span's padding on the first line");
+    check(near(c->x + sp.box.contentRect.x, 0) && near(c->y + sp.box.contentRect.y, 30),
+          "'cccc' (past the edge by the padding) wraps to the second line");
+    check(near(block.box.contentRect.height, 50), "the block holds both lines");
+}
+
+// A right-to-left inline element starts on the right: in a right-to-left
+// paragraph its padding-right sits beside its first word (rightmost) and its
+// padding-left beside its last, on the left.
+static void testRtlSpanPadding() {
+    printf("--- inline boxes: right-to-left span padding ---\n");
+    INode block; block.init(); block.style_["width"] = "400px";
+    block.style_["direction"] = "rtl";
+    block.style_["text-align"] = "start";
+    INode sp; sp.span(); sp.style_["direction"] = "rtl";
+    sp.style_["padding-left"] = "5px"; sp.style_["padding-right"] = "7px";
+    INode t; t.textNode("cd ef");
+    t.style_["direction"] = "rtl";   // a text node's style is its parent's
+    sp.addChild(&t);
+    block.addChild(&sp);
+    IMetrics m;
+    layoutTree(&block, 800, m);
+    const PlacedTextRun* cd = runOf(t, "cd");
+    const PlacedTextRun* ef = runOf(t, "ef");
+    check(cd && ef, "both words are placed");
+    if (!cd || !ef) return;
+    float ox = sp.box.contentRect.x;
+    check(near(ox, 343) && near(sp.box.contentRect.width, 50),
+          "the content box sits between the two paddings at the right edge");
+    check(near(ef->x + ox, 343), "the last word follows padding-left, on the left");
+    check(near(cd->x + ox, 373), "the first word ends at padding-right, on the right");
+}
+
 void testInlineBoxes() {
     printf("=== Inline boxes ===\n");
+    testPreWrapWrapsInsideSpan();
+    testBreakWordInsideSpan();
+    testBreakAllFillsLine();
+    testMixedBlockInlineWraps();
+    testRtlSpanPadding();
     testTextWrapsInsideSpan();
     testSpanPaddingAndCoordinates();
     testWhitespaceCollapsesAcrossSpan();

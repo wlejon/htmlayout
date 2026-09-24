@@ -555,4 +555,74 @@ std::vector<TextRun> breakTextIntoRuns(const std::string& srcText,
     return runs;
 }
 
+float measureRunWidth(const std::string& s, const std::string& fontFamily,
+                      float fontSize, const std::string& fontWeight,
+                      TextMetrics& metrics, float letterSpacing, float wordSpacing) {
+    float w = metrics.measureWidth(s, fontFamily, fontSize, fontWeight);
+    if (letterSpacing != 0 && !s.empty())
+        w += letterSpacing * static_cast<float>(utf8CodepointCount(s));
+    if (wordSpacing != 0) {
+        int nSpaces = 0;
+        for (char c : s)
+            if (c == ' ') ++nSpaces;
+        w += wordSpacing * static_cast<float>(nSpaces);
+    }
+    return w;
+}
+
+std::vector<TextRun> segmentPreservedText(const std::string& srcText,
+                                          const std::string& fontFamily,
+                                          float fontSize,
+                                          const std::string& fontWeight,
+                                          TextMetrics& metrics,
+                                          float letterSpacing,
+                                          float wordSpacing,
+                                          const std::string& textTransform) {
+    std::vector<TextRun> runs;
+    if (srcText.empty()) return runs;
+    const std::string text = applyTextTransform(srcText, textTransform);
+    const float lineH = metrics.naturalHeight(fontFamily, fontSize, fontWeight);
+    const bool contextual = (letterSpacing == 0 && wordSpacing == 0);
+    auto isBlank = [](char c) { return c == ' ' || c == '\t'; };
+
+    size_t cursor = 0;
+    while (cursor <= text.size()) {
+        size_t nl = text.find('\n', cursor);
+        size_t lineEnd = (nl == std::string::npos) ? text.size() : nl;
+        const std::string line = text.substr(cursor, lineEnd - cursor);
+        const int base = static_cast<int>(cursor);
+        auto width = [&](size_t a, size_t b) -> float {
+            if (a >= b) return 0.0f;
+            if (contextual)
+                return metrics.advanceBetween(line, static_cast<int>(a), static_cast<int>(b),
+                                              fontFamily, fontSize, fontWeight);
+            return measureRunWidth(line.substr(a, b - a), fontFamily, fontSize,
+                                   fontWeight, metrics, letterSpacing, wordSpacing);
+        };
+
+        const size_t firstRun = runs.size();
+        size_t p = 0;
+        while (p < line.size()) {
+            size_t q = p;
+            while (q < line.size() && !isBlank(line[q])) ++q;
+            size_t r = q;
+            while (r < line.size() && isBlank(line[r])) ++r;
+            TextRun run{line.substr(p, r - p), width(p, r), lineH,
+                        base + static_cast<int>(p), base + static_cast<int>(r)};
+            run.hangWidth = width(q, r);
+            run.canBreakBefore = runs.size() > firstRun;
+            run.canBreakAfter = r > q;
+            runs.push_back(std::move(run));
+            p = r;
+        }
+        if (nl != std::string::npos) {
+            if (runs.size() == firstRun)
+                runs.push_back({"", 0, lineH, base, static_cast<int>(lineEnd)});
+            runs.back().forceBreakAfter = true;
+        }
+        cursor = (nl == std::string::npos) ? text.size() + 1 : nl + 1;
+    }
+    return runs;
+}
+
 } // namespace htmlayout::layout

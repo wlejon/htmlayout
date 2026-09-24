@@ -738,12 +738,10 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
             // string measurement, so max-content must be reconstructed the same
             // way or a cell sized to it wraps its own text (see block.cpp's
             // word-mode item construction / measureWordModeIntrinsics).
+            // overflow-wrap / word-break do not change how a line is
+            // reconstructed: a word is only ever cut once it overflows.
             const std::string& wsMode = styleVal(node, Prop::WhiteSpace);
-            const std::string& oWrap  = styleVal(node, Prop::OverflowWrap);
-            const std::string& wBreak = styleVal(node, Prop::WordBreak);
-            bool wordMode = (wsMode.empty() || wsMode == "normal") &&
-                            !(oWrap == "break-word" || oWrap == "anywhere" ||
-                              wBreak == "break-all");
+            bool wordMode = wsMode.empty() || wsMode == "normal";
             float w;
             if (wordMode) {
                 float mn, mx;

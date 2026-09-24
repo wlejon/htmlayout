@@ -4,6 +4,9 @@
 // context). Internal to the layout library.
 
 #include "layout/box.h"
+#include <functional>
+#include <utility>
+#include <vector>
 
 namespace htmlayout::layout {
 
@@ -37,5 +40,29 @@ float insideMarkerInlineSize(LayoutNode* node, float fontSize, TextMetrics& metr
 // advances `cursorY` past the last line. See block_inline.cpp.
 void layoutBlockInlineContent(LayoutNode* node, float childAvailable, float fontSize,
                               TextMetrics& metrics, float& cursorY);
+
+// How a block formatting context hands an anonymous inline run (the inline
+// children between two block-level ones) to the same line builder.
+struct InlineRunEnv {
+    // The run's children, in order; null means all of the block's children.
+    const std::vector<LayoutNode*>* children = nullptr;
+    // The float-free band [left, right) at a line top `y` for a line about
+    // `h` tall, in the block's content coordinates. Null: [0, childAvailable).
+    std::function<std::pair<float, float>(float y, float h)> band;
+    // Places a float met inside the run with its margin-box top at `y`.
+    std::function<void(LayoutNode* flt, float y)> placeFloat;
+    // Called once, before the first line, when the run produces a line box
+    // (a line box resolves the pending collapsed margin above it).
+    std::function<void()> beforeLines;
+    // The run holds the block's first formatted line: text-indent and an
+    // inside list marker apply to it.
+    bool firstFormattedLine = true;
+    // An anonymous run: lines holding nothing are not placed, and the block's
+    // baseline is left to its formatting context.
+    bool anonymous = false;
+};
+
+void layoutInlineRun(LayoutNode* node, float childAvailable, float fontSize,
+                     TextMetrics& metrics, float& cursorY, const InlineRunEnv& env);
 
 } // namespace htmlayout::layout
