@@ -20,6 +20,14 @@ class Parser {
 public:
     explicit Parser(const std::vector<Token>& tokens) : m_tokens(tokens), m_pos(0) {}
 
+    // The @supports probes, for CSS.supports() (supportsCondition below).
+    static bool probeDeclaration(const std::string& prop, const std::string& value) {
+        return isDeclarationSupported(prop, value);
+    }
+    static bool probeCondition(const std::string& condition) {
+        return evaluateSupportsCondition(condition);
+    }
+
     Stylesheet parseStylesheet() {
         Stylesheet sheet;
         m_sheet = &sheet;
@@ -1064,6 +1072,20 @@ Stylesheet parse(const std::string& css) {
     auto tokens = tokenize(css);
     Parser parser(tokens);
     return parser.parseStylesheet();
+}
+
+bool supportsDeclaration(const std::string& property, const std::string& value) {
+    return Parser::probeDeclaration(property, value);
+}
+
+bool supportsCondition(const std::string& condition) {
+    if (Parser::probeCondition(condition)) return true;
+    // CSS.supports(conditionText) also accepts a bare declaration.
+    std::string t = condition;
+    while (!t.empty() && std::isspace((unsigned char)t.front())) t.erase(t.begin());
+    if (!t.empty() && t.front() != '(')
+        return Parser::probeCondition("(" + t + ")");
+    return false;
 }
 
 std::vector<Declaration> parseInlineStyle(const std::string& style) {

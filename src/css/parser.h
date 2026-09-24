@@ -139,4 +139,11 @@ std::string newAnonymousLayerName();
 // Parse an inline style string into declarations
 std::vector<Declaration> parseInlineStyle(const std::string& style);
 
+// CSS.supports(): the same probes @supports runs. supportsCondition takes a
+// <supports-condition> ("(display: grid) and (not (color: nonsense))"; a bare
+// declaration without parens is accepted too, as CSS.supports(text) does);
+// supportsDeclaration asks about one `property: value` pair.
+bool supportsCondition(const std::string& condition);
+bool supportsDeclaration(const std::string& property, const std::string& value);
+
 } // namespace htmlayout::css
