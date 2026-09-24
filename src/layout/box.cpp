@@ -311,6 +311,7 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
         if (dx != 0.0f || dy != 0.0f) {
             node->box.hitBounds.x += dx;
             node->box.hitBounds.y += dy;
+            node->box.scrollBounds = shifted(node->box.scrollBounds, dx, dy);
             node->escapeAbsBounds = shifted(node->escapeAbsBounds, dx, dy);
             node->escapeFixedBounds = shifted(node->escapeFixedBounds, dx, dy);
             node->hitBoundsOriginX = node->box.contentRect.x;
@@ -324,6 +325,7 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     node->escapeFixedBounds = {0.0f, 0.0f, -1.0f, -1.0f};
     if (styleVal(node, Prop::Display) == "none") {
         node->box.hitBounds = {0, 0, 0, 0};
+        node->box.scrollBounds = {0, 0, 0, 0};
         node->hitBoundsOriginX = node->box.contentRect.x;
         node->hitBoundsOriginY = node->box.contentRect.y;
         return {0, 0, 0, 0};
@@ -335,6 +337,8 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     float bw = node->box.fullWidth();
     float bh = node->box.fullHeight();
     float minX = bx, minY = by, maxX = bx + bw, maxY = by + bh;
+    // The same union for scrollBounds, less the unabsorbed fixed boxes.
+    float sMinX = minX, sMinY = minY, sMaxX = maxX, sMaxY = maxY;
 
     // Children live in this node's content space, shifted by its scroll offset —
     // the exact mapping hitTestRecursive uses (childOffset = absX - scroll).
@@ -375,17 +379,29 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
             minX = std::min(minX, r.x);           minY = std::min(minY, r.y);
             maxX = std::max(maxX, r.x + r.width); maxY = std::max(maxY, r.y + r.height);
         };
+        auto growScroll = [&](const Rect& r) {
+            if (r.width < 0.0f) return;
+            sMinX = std::min(sMinX, r.x);           sMinY = std::min(sMinY, r.y);
+            sMaxX = std::max(sMaxX, r.x + r.width); sMaxY = std::max(sMaxY, r.y + r.height);
+        };
 
         // Whatever this node clips never enlarges it (descendants still carry
         // their own hitBounds for pruning once the point is known to be inside).
         if (!clips) {
             if (cb.width > 0 || cb.height > 0) grow(lift(cb));
             grow(lift(absorbed));
+            // A fixed child still looking for its containing block is not
+            // document content; anything else scrolls with the document.
+            const Rect& cs = child->box.scrollBounds;
+            const bool fixedEscaping = cpos == "fixed" && !absorbsFixed;
+            if (!fixedEscaping && (cs.width > 0 || cs.height > 0)) growScroll(lift(cs));
+            growScroll(lift(absorbed));
         }
         // What escapes does enlarge it, clip or no clip — that is the whole
         // point, and the prune above consults exactly this rect.
         grow(lift(childAbs));
         grow(lift(childFixed));
+        growScroll(lift(childAbs));
         unionInto(escAbs, lift(childAbs));
         unionInto(escFixed, lift(childFixed));
     }
@@ -394,6 +410,7 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     node->escapeFixedBounds = escFixed;
 
     Rect bounds{minX, minY, maxX - minX, maxY - minY};
+    Rect scrollBounds{sMinX, sMinY, sMaxX - sMinX, sMaxY - sMinY};
 
     // Fold in this node's own transform — its whole box + subtree move together,
     // mirroring hitTestRecursive's forward transform about transform-origin.
@@ -406,20 +423,25 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
             css::Matrix2D toOrigin{1, 0, 0, 1, bx + ox, by + oy};
             css::Matrix2D fromOrigin{1, 0, 0, 1, -(bx + ox), -(by + oy)};
             css::Matrix2D full = toOrigin * mat * fromOrigin;
-            float cxs[4] = {bounds.x, bounds.x + bounds.width, bounds.x, bounds.x + bounds.width};
-            float cys[4] = {bounds.y, bounds.y, bounds.y + bounds.height, bounds.y + bounds.height};
-            float tMinX = 1e30f, tMinY = 1e30f, tMaxX = -1e30f, tMaxY = -1e30f;
-            for (int i = 0; i < 4; ++i) {
-                float tx = full.a * cxs[i] + full.c * cys[i] + full.e;
-                float ty = full.b * cxs[i] + full.d * cys[i] + full.f;
-                tMinX = std::min(tMinX, tx); tMinY = std::min(tMinY, ty);
-                tMaxX = std::max(tMaxX, tx); tMaxY = std::max(tMaxY, ty);
-            }
-            bounds = {tMinX, tMinY, tMaxX - tMinX, tMaxY - tMinY};
+            auto project = [&full](const Rect& r) -> Rect {
+                float cxs[4] = {r.x, r.x + r.width, r.x, r.x + r.width};
+                float cys[4] = {r.y, r.y, r.y + r.height, r.y + r.height};
+                float tMinX = 1e30f, tMinY = 1e30f, tMaxX = -1e30f, tMaxY = -1e30f;
+                for (int i = 0; i < 4; ++i) {
+                    float tx = full.a * cxs[i] + full.c * cys[i] + full.e;
+                    float ty = full.b * cxs[i] + full.d * cys[i] + full.f;
+                    tMinX = std::min(tMinX, tx); tMinY = std::min(tMinY, ty);
+                    tMaxX = std::max(tMaxX, tx); tMaxY = std::max(tMaxY, ty);
+                }
+                return {tMinX, tMinY, tMaxX - tMinX, tMaxY - tMinY};
+            };
+            bounds = project(bounds);
+            scrollBounds = project(scrollBounds);
         }
     }
 
     node->box.hitBounds = bounds;
+    node->box.scrollBounds = scrollBounds;
     // The box position these bounds were derived against, so a later pass that
     // skips this subtree can tell how far its parent has since moved it.
     node->hitBoundsOriginX = node->box.contentRect.x;
@@ -440,10 +462,32 @@ struct ClipEscape {
     bool sawFixedCB = false;
 };
 
+// The viewport's scroll offset, already in the point: where a fixed box whose
+// containing block is the viewport paints, relative to document space.
+struct HitViewport {
+    float scrollX = 0.0f;
+    float scrollY = 0.0f;
+};
+
 LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
                               float offsetX, float offsetY,
+                              const HitViewport& viewport, bool underFixedCB,
                               ClipEscape escape = {}) {
     if (!node) return nullptr;
+
+    // A fixed box against the viewport stays put while the document and its
+    // scrolling ancestors move: it sits at its ancestors' content origins
+    // summed (where layout placed it) plus the viewport scroll, not at the
+    // scroll-shifted offset the walk carried down.
+    if (!underFixedCB && styleVal(node, Prop::Position) == "fixed") {
+        float px = 0.0f, py = 0.0f;
+        for (LayoutNode* p = node->parent(); p; p = p->parent()) {
+            px += p->box.contentRect.x;
+            py += p->box.contentRect.y;
+        }
+        offsetX = px + viewport.scrollX;
+        offsetY = py + viewport.scrollY;
+    }
 
     // Descending past a clip the point is outside of: this box is reachable
     // only if it is the out-of-flow box that escaped it.
@@ -480,9 +524,12 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     // accumulated offset. If the point is outside it, nothing here can be hit —
     // skip the whole branch without the per-node alloc/sort/recursion below.
     // width < 0 is the "not computed" sentinel (e.g. hitTest without a layout
-    // pass); pruning is skipped then and the full walk runs as before.
+    // pass); pruning is skipped then and the full walk runs as before. So it
+    // is above a fixed box still looking for its containing block: that box
+    // is in hitBounds where layout put it, but it paints wherever the scroll
+    // offsets have since left it, so only its own bounds can rule it out.
     const Rect& hb = node->box.hitBounds;
-    if (hb.width >= 0.0f &&
+    if (hb.width >= 0.0f && node->escapeFixedBounds.width < 0.0f &&
         (x < hb.x + offsetX || x >= hb.x + offsetX + hb.width ||
          y < hb.y + offsetY || y >= hb.y + offsetY + hb.height))
         return nullptr;
@@ -551,6 +598,7 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     // visible content in the opposite direction).
     float childOffsetX = absX - node->scrollLeftPx();
     float childOffsetY = absY - node->scrollTopPx();
+    const bool childUnderFixedCB = underFixedCB || establishesFixedContainingBlock(node);
 
     // Fast path: when no child is positioned and every child's z-index is
     // auto/0 (the overwhelmingly common case), paint order == source order, so
@@ -571,7 +619,8 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
     if (!needsSort) {
         for (size_t i = children.size(); i-- > 0; ) {
             LayoutNode* hit = hitTestRecursive(children[i], testX, testY,
-                                                childOffsetX, childOffsetY, escape);
+                                                childOffsetX, childOffsetY,
+                                                viewport, childUnderFixedCB, escape);
             if (hit) return hit;
         }
         // No child hit — fall through to the self-test below.
@@ -606,7 +655,8 @@ LayoutNode* hitTestRecursive(LayoutNode* node, float x, float y,
 
     for (auto& zc : zChildren) {
         LayoutNode* hit = hitTestRecursive(zc.node, testX, testY,
-                                            childOffsetX, childOffsetY, escape);
+                                            childOffsetX, childOffsetY,
+                                            viewport, childUnderFixedCB, escape);
         if (hit) return hit;
     }
 
@@ -699,8 +749,10 @@ void applyOverflowClipping(LayoutNode* root) {
     applyOverflowClippingRecursive(root, false, nullptr);
 }
 
-LayoutNode* hitTest(LayoutNode* root, float x, float y) {
-    return hitTestRecursive(root, x, y, 0.0f, 0.0f);
+LayoutNode* hitTest(LayoutNode* root, float x, float y,
+                    float viewportScrollX, float viewportScrollY) {
+    return hitTestRecursive(root, x, y, 0.0f, 0.0f,
+                            HitViewport{viewportScrollX, viewportScrollY}, false);
 }
 
 LayoutNode* hitTestSubtree(LayoutNode* node, float x, float y) {
@@ -713,7 +765,7 @@ LayoutNode* hitTestSubtree(LayoutNode* node, float x, float y) {
         offX += p->box.contentRect.x;
         offY += p->box.contentRect.y;
     }
-    return hitTestRecursive(node, x, y, offX, offY);
+    return hitTestRecursive(node, x, y, offX, offY, HitViewport{}, false);
 }
 
 void markDirty(LayoutNode* node) {

@@ -148,6 +148,12 @@ struct LayoutBox {
     // "not computed" — hitTest then skips pruning and walks the whole tree.
     Rect hitBounds{0, 0, -1, -1};
 
+    // Scrollable overflow: hitBounds without the fixed-position boxes that
+    // reach this node unabsorbed. Those sit against the viewport, not in the
+    // document, so they must not stretch what the root scroller can scroll
+    // to. Same space and sentinel as hitBounds; computed by the same pass.
+    Rect scrollBounds{0, 0, -1, -1};
+
     // Full box dimensions including padding + border
     float fullWidth() const { return contentRect.width + padding.left + padding.right + border.left + border.right; }
     float fullHeight() const { return contentRect.height + padding.top + padding.bottom + border.top + border.bottom; }
@@ -748,7 +754,14 @@ void applyOverflowClipping(LayoutNode* root);
 
 // Hit test: find the deepest LayoutNode at a given point.
 // Returns null if the point is outside the root's box.
-LayoutNode* hitTest(LayoutNode* root, float x, float y);
+//
+// The point is in document space: the viewport's own scroll offset
+// (viewportScrollX/Y, the root scroller's) is already added in. A fixed box
+// whose containing block is the viewport does not move with that scroll, nor
+// with any scrolling ancestor, so it is tested where it paints: its
+// ancestors' content origins summed, plus the viewport scroll.
+LayoutNode* hitTest(LayoutNode* root, float x, float y,
+                    float viewportScrollX = 0.0f, float viewportScrollY = 0.0f);
 
 // Hit test one subtree on its own, as if nothing else were painted: `node` is
 // placed where layout put it (its ancestors' content origins summed, with no

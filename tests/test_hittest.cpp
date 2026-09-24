@@ -2,6 +2,7 @@
 #include "test_helpers.h"
 #include "layout/box.h"
 #include "layout/formatting_context.h"
+#include <cmath>
 #include <unordered_map>
 
 using namespace htmlayout::layout;
@@ -252,6 +253,49 @@ static void testHitFixedEscapesScrollingAncestor() {
           "an abspos escapes a static clipper, whose box is not its containing block");
 }
 
+static void testHitFixedStaysPutWhenViewportScrolls() {
+    printf("--- HitTest: a fixed box stays put when the viewport scrolls ---\n");
+    // The point is in document space (the viewport scroll added in). A fixed
+    // box against the viewport paints at its layout position plus that
+    // scroll, so that is where it takes clicks; the page content moves.
+    HitMockNode root; initBlock(root, "div");
+    root.style["width"] = "600px";
+
+    HitMockNode bar; initBlock(bar, "div");
+    bar.style["position"] = "fixed";
+    bar.style["left"] = "0px"; bar.style["top"] = "10px";
+    bar.style["width"] = "200px"; bar.style["height"] = "30px";
+
+    HitMockNode tall; initBlock(tall, "div");
+    tall.style["height"] = "3000px";
+
+    // A fixed box taller than the page: it sits in the viewport, so it must
+    // not stretch the page's scrollable overflow.
+    HitMockNode pole; initBlock(pole, "div");
+    pole.style["position"] = "fixed";
+    pole.style["left"] = "590px"; pole.style["top"] = "0px";
+    pole.style["width"] = "10px"; pole.style["height"] = "9000px";
+
+    root.addChild(&bar);
+    root.addChild(&tall);
+    root.addChild(&pole);
+
+    HitTextMetrics m;
+    layoutTree(&root, 600, m);
+
+    check(hitTest(&root, 100, 20) == &bar, "unscrolled, the bar is at its top");
+    check(hitTest(&root, 100, 520, 0.0f, 500.0f) == &bar,
+          "scrolled by 500, the bar is found 500 further down the document");
+    check(hitTest(&root, 100, 20, 0.0f, 500.0f) == &tall,
+          "and the page content now under its old place is what hits there");
+
+    const Rect& sb = root.box.scrollBounds;
+    check(sb.width >= 0.0f && std::abs(sb.y + sb.height - 3000.0f) < 0.5f,
+          "the scrollable overflow ends with the page, not the fixed pole");
+    const Rect& hb = root.box.hitBounds;
+    check(hb.y + hb.height > 8999.0f, "while the hit bounds still cover the pole");
+}
+
 // hitTestSubtree: one subtree tested on its own, where layout put it — the
 // query for a top-layer box, which no ancestor clips or covers.
 static void testHitSubtree() {
@@ -391,6 +435,7 @@ void testHitTest() {
     testHitWithPadding();
     testHitBodyOverflowPropagation();
     testHitFixedEscapesScrollingAncestor();
+    testHitFixedStaysPutWhenViewportScrolls();
     testHitSubtree();
     testHitBlockInInlineRegrow();
     testHitNull();
