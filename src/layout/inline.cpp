@@ -266,6 +266,25 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     float paddingH = node->box.padding.left + node->box.padding.right;
     float borderH = node->box.border.left + node->box.border.right;
 
+    // min-width / max-width as content-box limits (max wins over nothing,
+    // min wins over max, CSS2 §10.4).
+    auto clampInlineBlockWidth = [&](float w) {
+        const bool borderBox = styleVal(node, Prop::BoxSizing) == "border-box";
+        const std::string& maxV = styleVal(node, Prop::MaxWidth);
+        if (!maxV.empty() && maxV != "none" && maxV != "auto") {
+            float maxW = resolveLength(maxV, availableWidth, fontSize);
+            if (borderBox) maxW -= paddingH + borderH;
+            if (w > maxW) w = maxW;
+        }
+        const std::string& minV = styleVal(node, Prop::MinWidth);
+        if (!minV.empty() && minV != "auto" && minV != "none") {
+            float minW = resolveLength(minV, availableWidth, fontSize);
+            if (borderBox) minW -= paddingH + borderH;
+            if (w < minW) w = minW;
+        }
+        return w < 0.0f ? 0.0f : w;
+    };
+
     // Check for intrinsic size (replaced elements like <input>)
     float intrW = 0, intrH = 0;
     bool hasIntrinsic = node->intrinsicSize(intrW, intrH, availableWidth - paddingH - borderH);
@@ -308,18 +327,17 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
             // breaking horizontal flow of sibling inline-blocks.
             float maxContent = computeMaxContentWidth(node, metrics);
             float fitAvail = std::min(maxContent, contentAvail);
-            // Honor min-width so fit-content doesn't shrink below it.
-            const std::string& minWVal = styleVal(node, Prop::MinWidth);
-            if (!minWVal.empty() && minWVal != "auto") {
-                float minW = resolveLength(minWVal, availableWidth, fontSize);
-                if (styleVal(node, Prop::BoxSizing) == "border-box") {
-                    minW -= paddingH + borderH;
-                }
-                if (fitAvail < minW) fitAvail = minW;
-            }
             if (fitAvail < 0) fitAvail = 0;
             contentAvail = fitAvail;
             node->box.contentRect.width = fitAvail;
+        }
+        // min-width / max-width clamp the used content width of an
+        // inline-block whatever sized it (CSS2 §10.4); the lines inside are
+        // then broken against the clamped width.
+        if (display == "inline-block" && !hasIntrinsic) {
+            float clamped = clampInlineBlockWidth(node->box.contentRect.width);
+            node->box.contentRect.width = clamped;
+            contentAvail = clamped;
         }
 
         if (heightVal != "auto" && !heightVal.empty() && !heightPctIndefinite) {
@@ -790,7 +808,8 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
 
         if (widthVal == "auto" || widthVal.empty()) {
             // Shrink-wrap to content for inline-block with auto width
-            node->box.contentRect.width = (maxContentW > 0) ? maxContentW : contentAvail;
+            node->box.contentRect.width = clampInlineBlockWidth(
+                (maxContentW > 0) ? maxContentW : contentAvail);
         }
 
         return;
