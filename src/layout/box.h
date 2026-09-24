@@ -299,6 +299,11 @@ struct LayoutNode {
     // can still undo the flags it left on descendants whose boxes are reused.
     bool lineClamped = false;
 
+    // Whether text-overflow: ellipsis truncated one of this block's lines the
+    // last time it was laid out — same reason as lineClamped: the truncation
+    // edits descendants' boxes, which must be laid out afresh next time.
+    bool textOverflowed = false;
+
     // The box position box.hitBounds was last derived against. A pass that skips
     // this subtree (nothing in it laid out) compares it to the current position
     // to see how far the parent has moved the box, and translates the cached

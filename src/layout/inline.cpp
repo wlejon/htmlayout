@@ -246,8 +246,10 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         // Line clamping lives in the block engine, which counts the line
         // boxes it builds; a clamped inline-block (-webkit-inline-box
         // included) goes there too, as does one clamped last pass, whose
-        // clamp has to be undone.
-        if (!intrinsic && (hasBlockChild || lineClampApplies(node))) {
+        // clamp has to be undone. The text-overflow ellipsis works on the
+        // same line boxes, so an ellipsizing inline-block goes there too.
+        if (!intrinsic && (hasBlockChild || lineClampApplies(node) ||
+                           textOverflowApplies(node))) {
             layoutBlock(node, availableWidth, metrics);
             return;
         }

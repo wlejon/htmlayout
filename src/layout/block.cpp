@@ -353,6 +353,10 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // before the children are laid out; applied once they are placed.
     LineClampSpec lineClamp;
     const bool clampPass = beginLineClamp(node, lineClamp);
+    // text-overflow truncates overflowing lines once they are placed, the
+    // same way (after the clamp, on the lines it kept).
+    std::string textOverflowEllipsis;
+    const bool textOverflowPass = beginTextOverflow(node, textOverflowEllipsis);
 
     // Resolve margin, padding, border
     node->box.margin = resolveEdges(node, kMarginProps, availableWidth, fontSize);
@@ -2390,6 +2394,7 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     } // end BFC else block
 
     if (clampPass) cursorY = applyLineClamp(node, lineClamp, cursorY, metrics);
+    if (textOverflowPass) applyTextOverflow(node, textOverflowEllipsis, metrics);
 
     // Resolve height using available height from containing block
     float heightRef = node->availableHeight;

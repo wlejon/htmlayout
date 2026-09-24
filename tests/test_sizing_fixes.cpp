@@ -226,6 +226,57 @@ static void testFlexWrapExactFit() {
     check(near(c.box.contentRect.y, d.box.contentRect.y), "last-bit overshoot does not wrap");
 }
 
+
+// text-overflow: ellipsis truncates an overflowing line at the content edge.
+static void testTextOverflowEllipsis() {
+    printf("--- text-overflow: ellipsis ---\n");
+    SNode box; box.init(); box.style_["width"] = "120px";
+    box.style_["white-space"] = "nowrap";
+    box.style_["overflow"] = "hidden"; box.style_["overflow-x"] = "hidden";
+    box.style_["text-overflow"] = "ellipsis";
+    SNode t; t.textNode("ARDY Motion text to G1 skeleton motion");
+    box.addChild(&t);
+    SMetrics m;   // 10px per byte; the ellipsis is 3 bytes = 30px
+    layoutTree(&box, 800, m);
+    check(box.box.textTruncated, "the block is marked truncated");
+    float right = 0;
+    bool hasEllipsis = false;
+    for (auto& r : t.box.textRuns) {
+        right = std::max(right, r.x + r.width);
+        if (r.text.find("\xE2\x80\xA6") != std::string::npos) hasEllipsis = true;
+    }
+    check(hasEllipsis, "an ellipsis is drawn");
+    check(right <= 120.5f, "the truncated line ends inside the box");
+
+    // Fits: nothing happens.
+    SNode box2; box2.init(); box2.style_["width"] = "400px";
+    box2.style_["white-space"] = "nowrap";
+    box2.style_["overflow"] = "hidden"; box2.style_["overflow-x"] = "hidden";
+    box2.style_["text-overflow"] = "ellipsis";
+    SNode t2; t2.textNode("short");
+    box2.addChild(&t2);
+    layoutTree(&box2, 800, m);
+    check(!box2.box.textTruncated && t2.box.textRuns.size() == 1 &&
+          t2.box.textRuns[0].text == "short", "text that fits is untouched");
+
+    // overflow: visible never ellipsizes.
+    SNode box3; box3.init(); box3.style_["width"] = "50px";
+    box3.style_["white-space"] = "nowrap"; box3.style_["text-overflow"] = "ellipsis";
+    SNode t3; t3.textNode("much too long");
+    box3.addChild(&t3);
+    layoutTree(&box3, 800, m);
+    check(!box3.box.textTruncated, "overflow:visible does not ellipsize");
+
+    // Widened again: the truncation from last pass is undone.
+    box.style_["width"] = "600px";
+    markDirty(&box);
+    layoutTree(&box, 800, m);
+    std::string all;
+    for (auto& r : t.box.textRuns) all += r.text;
+    check(!box.box.textTruncated && all.find("\xE2\x80\xA6") == std::string::npos &&
+          all.find("motion") != std::string::npos, "relaid wider, the full text returns");
+}
+
 // Intrinsic sizes count letter-spacing the way layout does: one advance per
 // code point (not per byte), the trailing one included.
 static void testLetterSpacingIntrinsics() {
@@ -265,6 +316,7 @@ void testSizingFixes() {
     testLetterSpacingIntrinsics();
     testInlineFlexShrinksToFit();
     testFlexWrapExactFit();
+    testTextOverflowEllipsis();
     testHiddenSubtreeClearsBoxes();
     testPercentWidthColumnFlexItem();
     testInlineBlockMinMaxWidth();

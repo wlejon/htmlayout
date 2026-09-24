@@ -61,4 +61,21 @@ bool beginLineClamp(LayoutNode* node, LineClampSpec& spec);
 float applyLineClamp(LayoutNode* node, const LineClampSpec& spec,
                      float contentHeight, TextMetrics& metrics);
 
+// text-overflow (CSS Overflow 3) on a block container whose inline overflow
+// is not visible: each of its own line boxes whose content runs past the
+// line's end edge is truncated there with the ellipsis (`ellipsis` is U+2026,
+// a <string> is itself; `clip` does nothing), exactly as the line-clamp
+// ellipsis truncates the last kept line (see above), and
+// LayoutBox::textTruncated is set.
+//
+// Whether the node ellipsizes now or did on its last layout (so block layout
+// must lay it out, as for lineClampApplies).
+bool textOverflowApplies(LayoutNode* node);
+// Undoes last pass's truncation (marking descendants for relayout) and
+// returns true when applyTextOverflow() must run after the children are laid
+// out.
+bool beginTextOverflow(LayoutNode* node, std::string& ellipsisText);
+void applyTextOverflow(LayoutNode* node, const std::string& ellipsisText,
+                       TextMetrics& metrics);
+
 } // namespace htmlayout::layout

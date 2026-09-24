@@ -233,6 +233,61 @@ void walk(LayoutNode* n, float ox, float oy, ClampWalk& w) {
     }
 }
 
+// What sits on one line box of `n` — text runs and atomic inlines whose
+// vertical middle falls in [top, bottom) — collected into `w` the way walk()
+// collects the last kept line, but without cutting anything. Block-level
+// children own their own line boxes and are not entered.
+void gatherLine(LayoutNode* n, float ox, float oy, float top, float bottom,
+                ClampWalk& w) {
+    for (auto* c : getLayoutChildren(n)) {
+        if (c->isTextNode()) {
+            const auto& runs = c->box.textRuns;
+            for (size_t k = 0; k < runs.size(); k++) {
+                float mid = oy + runs[k].y + runs[k].height * 0.5f;
+                if (mid >= top && mid < bottom)
+                    w.lastLineRuns.push_back({c, k, n, ox, oy});
+            }
+            continue;
+        }
+        if (c->box.clampHidden) continue;
+        const std::string& d = styleVal(c, Prop::Display);
+        if (d == "none") continue;
+        const std::string& pos = styleVal(c, Prop::Position);
+        if (pos == "absolute" || pos == "fixed") continue;
+        bool inlineLevel = d == "inline" || d == "inline-block" ||
+                           d == "inline-flex" || d == "inline-grid" ||
+                           d == "inline-table";
+        if (!inlineLevel) continue;
+        const LayoutBox& b = c->box;
+        float cx = ox + b.contentRect.x;
+        float cy = oy + b.contentRect.y;
+        float iw = 0, ih = 0;
+        bool atomic = d != "inline" || c->intrinsicSize(iw, ih, b.contentRect.width);
+        if (!atomic) {
+            gatherLine(c, cx, cy, top, bottom, w);
+            continue;
+        }
+        float boxTop = cy - b.padding.top - b.border.top - b.margin.top;
+        float mid = boxTop + (b.fullHeight() + b.margin.top + b.margin.bottom) * 0.5f;
+        if (mid < top || mid >= bottom) continue;
+        float left = cx - b.padding.left - b.border.left - b.margin.left;
+        w.lastLineElems.push_back(
+            {c, left, left + b.fullWidth() + b.margin.left + b.margin.right});
+    }
+}
+
+// The text-overflow ellipsis string, or empty when none applies.
+std::string resolveTextOverflow(LayoutNode* node) {
+    const std::string& to = styleVal(node, Prop::TextOverflow);
+    if (to.empty() || to == "clip") return {};
+    const std::string& ovx = styleVal(node, Prop::OverflowX);
+    if (ovx.empty() || ovx == "visible") return {};
+    if (to == "ellipsis") return "\xE2\x80\xA6";
+    if (to.size() >= 2 && (to[0] == '"' || to[0] == '\'') && to.back() == to[0])
+        return to.substr(1, to.size() - 2);
+    return {};
+}
+
 // UTF-8: drop the last code point.
 void popCodePoint(std::string& s) {
     if (s.empty()) return;
@@ -502,6 +557,62 @@ float applyLineClamp(LayoutNode* node, const LineClampSpec& spec,
     node->box.textTruncated = true;
     node->lineClamped = true;
     return last.bottom;
+}
+
+bool textOverflowApplies(LayoutNode* node) {
+    return node->textOverflowed || !resolveTextOverflow(node).empty();
+}
+
+bool beginTextOverflow(LayoutNode* node, std::string& ellipsisText) {
+    ellipsisText = resolveTextOverflow(node);
+    if (node->textOverflowed) {
+        // Last pass cut runs short in reused descendant boxes: lay them out
+        // afresh, and drop an ellipsis the container itself carried.
+        node->textOverflowed = false;
+        auto& runs = node->box.textRuns;
+        runs.erase(std::remove_if(runs.begin(), runs.end(),
+                                  [](const PlacedTextRun& r) {
+                                      return r.srcStart == kContainerEllipsisSrc;
+                                  }),
+                   runs.end());
+        markDescendantsDirty(node);
+    }
+    return !ellipsisText.empty();
+}
+
+void applyTextOverflow(LayoutNode* node, const std::string& ellipsisText,
+                       TextMetrics& metrics) {
+    if (ellipsisText.empty()) return;
+    const bool rtl = styleVal(node, Prop::Direction) == "rtl";
+    LineClampSpec spec;
+    spec.ellipsisText = ellipsisText;
+    // placeEllipsis may add a run to the container, never a line box, so the
+    // list is stable while it is walked.
+    const auto lineBoxes = node->box.lineBoxes;
+    for (const auto& lb : lineBoxes) {
+        ClampLine line{lb.top, lb.top + lb.height, lb.left, lb.left + lb.width, node};
+        ClampWalk w;
+        w.container = node;
+        w.cutY = line.bottom;
+        w.lineTop = line.top;
+        gatherLine(node, 0.0f, 0.0f, line.top, line.bottom, w);
+        bool overflows = false;
+        auto past = [&](float l, float r) {
+            if (rtl ? l < line.left - kFitSlack : r > line.right + kFitSlack)
+                overflows = true;
+        };
+        for (const RunRef& ref : w.lastLineRuns) {
+            const PlacedTextRun& run = ref.text->box.textRuns[ref.index];
+            if (run.text.empty()) continue;
+            float l = ref.ox + run.x;
+            past(l, l + run.width);
+        }
+        for (const ElemRef& e : w.lastLineElems) past(e.left, e.right);
+        if (!overflows) continue;
+        placeEllipsis(w, line, spec, metrics);
+        node->box.textTruncated = true;
+        node->textOverflowed = true;
+    }
 }
 
 } // namespace htmlayout::layout
