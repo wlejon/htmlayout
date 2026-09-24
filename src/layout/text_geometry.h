@@ -37,9 +37,15 @@ bool getCaretRect(LayoutNode* root, LayoutNode* textNode, int srcOffset,
 // [startNode:startOff, endNode:endOff] in tree order. Returns absolute
 // coordinates. Empty when the range is collapsed or doesn't intersect any
 // placed text runs.
+//
+// `clipToOverflow` clips each rect to its nearest overflow-clipping ancestor
+// and drops the ones clipped away — what a painted highlight wants. Geometry
+// queries (Range.getClientRects) pass false: CSSOM reports the text's boxes
+// whether or not a scroller currently shows them.
 std::vector<Rect> getSelectionRects(LayoutNode* root,
                                     LayoutNode* startNode, int startOff,
                                     LayoutNode* endNode, int endOff,
-                                    TextMetrics& metrics);
+                                    TextMetrics& metrics,
+                                    bool clipToOverflow = true);
 
 } // namespace htmlayout::layout

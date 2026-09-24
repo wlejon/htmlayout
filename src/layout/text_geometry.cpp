@@ -162,6 +162,13 @@ void forEachNode(LayoutNode* root,
                  const std::function<void(const OffsetFrame&)>& fn,
                  float ox, float oy, const Rect& clip) {
     if (!root) return;
+    // A display:none subtree generates no boxes, but its nodes can still
+    // carry the text runs they were last laid out with. Those runs describe
+    // nothing on screen: a selection inside an element that was then hidden
+    // painted its old highlight at the origin, and hit tests snapped to text
+    // that is not there.
+    if (!root->isTextNode() && styleProp(root->computedStyle(), "display") == "none")
+        return;
     fn({root, ox, oy, clip});
     float childOx = ox + root->box.contentRect.x - root->scrollLeftPx();
     float childOy = oy + root->box.contentRect.y - root->scrollTopPx();
@@ -262,6 +269,11 @@ TextHit hitTestText(LayoutNode* root, float x, float y, TextMetrics& metrics,
     float bestDist2 = std::numeric_limits<float>::max();
 
     for (auto& e : entries) {
+        // Text under pointer-events:none is not a target for the pointer —
+        // the element hit test already looks through it, and a press must
+        // not place a caret in (or double-click-select) an overlay the user
+        // cannot point at.
+        if (styleProp(e.node->computedStyle(), "pointer-events") == "none") continue;
         for (auto& run : e.node->box.textRuns) {
             float rx = e.ox + run.x;
             float ry = e.oy + run.y;
@@ -352,7 +364,8 @@ bool getCaretRect(LayoutNode* root, LayoutNode* textNode, int srcOffset,
 std::vector<Rect> getSelectionRects(LayoutNode* root,
                                     LayoutNode* startNode, int startOff,
                                     LayoutNode* endNode, int endOff,
-                                    TextMetrics& metrics) {
+                                    TextMetrics& metrics,
+                                    bool clipToOverflow) {
     std::vector<Rect> out;
     std::vector<bool> bandRtl;       // parallel to out; direction of each band
     std::vector<bool> bandNeutral;   // and whether it was whitespace-only
@@ -426,7 +439,7 @@ std::vector<Rect> getSelectionRects(LayoutNode* root,
                 // Clip to the nearest scroll/overflow-hidden ancestor so text
                 // that is scrolled out of view (or lies outside a clipped
                 // container) doesn't bleed over neighboring UI.
-                Rect clipped = intersectRect(r, e.clip);
+                Rect clipped = clipToOverflow ? intersectRect(r, e.clip) : r;
                 if (clipped.width <= 0 || clipped.height <= 0) continue;
                 out.push_back(clipped);
                 bandRtl.push_back(band.rtl);
