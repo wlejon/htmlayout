@@ -416,9 +416,18 @@ static void testGridNegativeLine() {
     item.style_["grid-column-end"] = "-1";
     root.addChild(&item);
 
+    FGNode full; full.initGridItem();
+    full.style_["grid-column"] = "1 / -1";
+    root.addChild(&full);
+
     FGMetrics m;
     layoutTree(&root, 500, m);
-    check(true, "negative grid line number resolves");
+    // -2 / -1 count back from the last explicit line (4): the third column.
+    check(approx(item.box.contentRect.x, 200) && approx(item.box.contentRect.width, 100),
+          "grid-column -2 / -1 is the last column");
+    // 1 / -1 spans the whole explicit grid, not one column.
+    check(approx(full.box.contentRect.x, 0) && approx(full.box.contentRect.width, 300),
+          "grid-column 1 / -1 spans every explicit column");
 }
 
 static void testGridFixedHeight() {

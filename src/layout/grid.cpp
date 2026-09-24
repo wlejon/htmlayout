@@ -497,7 +497,10 @@ struct GridLineRef {
 
 // Returns positive for line numbers, negative for span counts (e.g., -2 = span 2), 0 for auto.
 // Named line references are stored in the name field of GridLineRef.
-GridLineRef parseGridLineRef(const std::string& val) {
+// A negative line number counts back from the end of the explicit grid
+// (CSS Grid §8.3: -1 is the last explicit line), so it resolves here against
+// `explicitTracks` into a positive line; it must not reach the span encoding.
+GridLineRef parseGridLineRef(const std::string& val, int explicitTracks) {
     if (val.empty() || val == "auto") return {0, ""};
     // "span" or "span N"
     if (val.size() >= 4 && val.substr(0, 4) == "span") {
@@ -514,14 +517,22 @@ GridLineRef parseGridLineRef(const std::string& val) {
         return {-n, ""};
     }
     // Try numeric line
-    try { return {std::stoi(val), ""}; } catch (...) {}
+    try {
+        int n = std::stoi(val);
+        if (n < 0) {
+            // Lines before the explicit grid would need implicit tracks
+            // added at the start; clamp to the first line instead.
+            n = explicitTracks + 2 + n;
+            if (n < 1) n = 1;
+        }
+        return {n, ""};
+    } catch (...) {}
     // Must be a named line reference
     return {GRID_LINE_NAMED, val};
 }
 
-// Legacy wrapper for backward compat in parseGridPlacement
-int parseGridLine(const std::string& val) {
-    return parseGridLineRef(val).value;
+int parseGridLine(const std::string& val, int explicitTracks) {
+    return parseGridLineRef(val, explicitTracks).value;
 }
 
 // Resolve a named line reference to a 1-based line number using the NamedLines map.
@@ -538,8 +549,9 @@ int resolveNamedLine(const GridLineRef& ref, const NamedLines& lineNames, int oc
 
 GridPlacement parseGridPlacement(const LayoutNode* node,
                                  const std::unordered_map<std::string, GridArea>& namedAreas,
-                                 const NamedLines& colLines = {},
-                                 const NamedLines& rowLines = {}) {
+                                 const NamedLines& colLines,
+                                 const NamedLines& rowLines,
+                                 int explicitCols, int explicitRows) {
     GridPlacement gp;
 
     // Check grid-area first (shorthand)
@@ -574,20 +586,20 @@ GridPlacement parseGridPlacement(const LayoutNode* node,
         while (!current.empty() && current.front() == ' ') current.erase(0, 1);
         if (!current.empty()) parts.push_back(current);
 
-        if (parts.size() >= 1) gp.rowStart = parseGridLine(parts[0]);
-        if (parts.size() >= 2) gp.colStart = parseGridLine(parts[1]);
-        if (parts.size() >= 3) gp.rowEnd = parseGridLine(parts[2]);
-        if (parts.size() >= 4) gp.colEnd = parseGridLine(parts[3]);
+        if (parts.size() >= 1) gp.rowStart = parseGridLine(parts[0], explicitRows);
+        if (parts.size() >= 2) gp.colStart = parseGridLine(parts[1], explicitCols);
+        if (parts.size() >= 3) gp.rowEnd = parseGridLine(parts[2], explicitRows);
+        if (parts.size() >= 4) gp.colEnd = parseGridLine(parts[3], explicitCols);
         return gp;
     }
 
     // Individual properties - resolve named lines
     auto resolveRow = [&](const std::string& val) {
-        auto ref = parseGridLineRef(val);
+        auto ref = parseGridLineRef(val, explicitRows);
         return resolveNamedLine(ref, rowLines);
     };
     auto resolveCol = [&](const std::string& val) {
-        auto ref = parseGridLineRef(val);
+        auto ref = parseGridLineRef(val, explicitCols);
         return resolveNamedLine(ref, colLines);
     };
     gp.rowStart = resolveRow(styleVal(node, Prop::GridRowStart));
@@ -791,7 +803,9 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (childPos == "absolute" || childPos == "fixed") continue;
         GridItem item;
         item.node = child;
-        item.placement = parseGridPlacement(child, namedAreas, colLineNames, rowLineNames);
+        item.placement = parseGridPlacement(child, namedAreas, colLineNames, rowLineNames,
+                                            static_cast<int>(colTracks.size()),
+                                            static_cast<int>(rowTracks.size()));
         item.row = -1; item.col = -1;
         item.rowSpan = 1; item.colSpan = 1;
         items.push_back(item);
