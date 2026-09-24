@@ -32,6 +32,40 @@ std::string trim(const std::string& s) {
     return s.substr(a, b - a + 1);
 }
 
+// Split a selector list at its top-level commas: not inside parentheses,
+// attribute brackets or quoted strings, and not an escaped comma, so
+// `[data-x="1,2"]` and `:is(a, b)` stay whole. Parts come back untrimmed.
+std::vector<std::string> splitTopLevelCommas(const std::string& text) {
+    std::vector<std::string> parts;
+    std::string current;
+    int parenDepth = 0;
+    int bracketDepth = 0;
+    char quote = 0;
+    for (size_t i = 0; i < text.size(); i++) {
+        char c = text[i];
+        if (c == '\\' && i + 1 < text.size()) {
+            current += c;
+            current += text[++i];
+            continue;
+        }
+        if (quote) {
+            if (c == quote) quote = 0;
+        } else if (c == '"' || c == '\'') quote = c;
+        else if (c == '[') bracketDepth++;
+        else if (c == ']') { if (bracketDepth > 0) bracketDepth--; }
+        else if (c == '(') parenDepth++;
+        else if (c == ')') parenDepth--;
+        else if (c == ',' && parenDepth == 0 && bracketDepth == 0) {
+            parts.push_back(std::move(current));
+            current.clear();
+            continue;
+        }
+        current += c;
+    }
+    parts.push_back(std::move(current));
+    return parts;
+}
+
 // Split a string by a delimiter (for class matching)
 std::vector<std::string> splitWhitespace(std::string_view s) {
     std::vector<std::string> parts;
@@ -377,24 +411,9 @@ private:
                 if (peek() == ')') advance();
 
                 // Parse as comma-separated compound selectors (like :is()/:where())
-                std::string current;
-                int pd = 0;
-                for (size_t j = 0; j < arg.size(); j++) {
-                    if (arg[j] == '(') pd++;
-                    else if (arg[j] == ')') pd--;
-                    else if (arg[j] == ',' && pd == 0) {
-                        std::string part = trim(current);
-                        if (!part.empty()) {
-                            SelectorParser subParser(part);
-                            ss.selectorListArg.push_back(subParser.parseCompound());
-                        }
-                        current.clear();
-                        continue;
-                    }
-                    current += arg[j];
-                }
-                std::string part = trim(current);
-                if (!part.empty()) {
+                for (const std::string& raw : splitTopLevelCommas(arg)) {
+                    std::string part = trim(raw);
+                    if (part.empty()) continue;
                     SelectorParser subParser(part);
                     ss.selectorListArg.push_back(subParser.parseCompound());
                 }
@@ -440,20 +459,7 @@ private:
                     }
                 };
 
-                // Split by comma (respecting parentheses)
-                std::string current;
-                int pd = 0;
-                for (size_t j = 0; j < arg.size(); j++) {
-                    if (arg[j] == '(') pd++;
-                    else if (arg[j] == ')') pd--;
-                    else if (arg[j] == ',' && pd == 0) {
-                        addPart(current);
-                        current.clear();
-                        continue;
-                    }
-                    current += arg[j];
-                }
-                addPart(current);
+                for (const std::string& raw : splitTopLevelCommas(arg)) addPart(raw);
             } else if (ss.value == "host" || ss.value == "host-context") {
                 // :host(selector) / :host-context(selector)
                 std::string arg;
@@ -989,26 +995,9 @@ Selector parseSelector(const std::string& text) {
 
 std::vector<Selector> parseSelectorList(const std::string& text) {
     std::vector<Selector> selectors;
-    // Split by comma (respecting parentheses)
-    std::string current;
-    int parenDepth = 0;
-    for (size_t i = 0; i < text.size(); i++) {
-        char c = text[i];
-        if (c == '(') parenDepth++;
-        else if (c == ')') parenDepth--;
-        else if (c == ',' && parenDepth == 0) {
-            std::string part = trim(current);
-            if (!part.empty()) {
-                selectors.push_back(parseSelector(part));
-            }
-            current.clear();
-            continue;
-        }
-        current += c;
-    }
-    std::string part = trim(current);
-    if (!part.empty()) {
-        selectors.push_back(parseSelector(part));
+    for (const std::string& raw : splitTopLevelCommas(text)) {
+        std::string part = trim(raw);
+        if (!part.empty()) selectors.push_back(parseSelector(part));
     }
     return selectors;
 }
