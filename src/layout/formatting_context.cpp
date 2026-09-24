@@ -1037,6 +1037,14 @@ static void claimLayoutNode(LayoutNode* node, float availableWidth) {
     if (auto* p = node->pseudoAfter())  markSubtreeDirty(p);
 }
 
+void claimForParentFlow(LayoutNode* node) {
+    if (!node) return;
+    // NaN keys: never equal, so the next pass cannot mistake this box for a
+    // reusable layoutNode() result.
+    claimLayoutNode(node, std::numeric_limits<float>::quiet_NaN());
+    buildStyleCache(node);
+}
+
 bool beginLayoutNode(LayoutNode* node, float availableWidth) {
     if (!node) return false;
     if (node->lastLayoutPass == currentLayoutPass()) return true;  // already ours

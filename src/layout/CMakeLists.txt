@@ -1,6 +1,7 @@
 add_library(htmlayout_layout STATIC
     box.cpp
     block.cpp
+    block_inline.cpp
     line_clamp.cpp
     inline.cpp
     flex.cpp

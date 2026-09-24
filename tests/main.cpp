@@ -29,6 +29,7 @@
 #include "test_line_clamp.h"
 #include "test_margin_collapse.h"
 #include "test_sizing_fixes.h"
+#include "test_inline_boxes.h"
 #include <cstdio>
 
 int g_passed = 0;
@@ -128,6 +129,7 @@ int main() {
     printf("\n");
 
     testSizingFixes();
+    testInlineBoxes();
     printf("\n");
 
     printf("=== Results: %d passed, %d failed ===\n", g_passed, g_failed);

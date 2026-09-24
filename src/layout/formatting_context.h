@@ -23,6 +23,13 @@ void layoutNode(LayoutNode* node, float availableWidth, TextMetrics& metrics);
 // definite cross axis, and layoutNode() clearing the box would throw that away.
 bool beginLayoutNode(LayoutNode* node, float availableWidth);
 
+// Claim `node` for this pass as part of its parent's flow: its box (and its
+// text children's) is cleared and the parent writes it — never layoutNode().
+// For an inline element flattened into its block's line boxes, whose geometry
+// is wherever those lines fall; it holds no subtree of its own to reuse, so it
+// is claimed afresh on every visit.
+void claimForParentFlow(LayoutNode* node);
+
 // Sentinel values for intrinsic sizing keywords. Valid CSS sizing values are
 // non-negative, so these specific negative values cannot collide with real lengths.
 constexpr float SIZING_MIN_CONTENT = -10.0f;
