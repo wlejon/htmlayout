@@ -53,6 +53,12 @@ struct TextRun {
 // else is a no-op) to an ASCII string in place of return. Must be applied
 // during layout — not just at paint — so measurement and line-breaking use the
 // glyphs that are actually rendered (e.g. "rendering" laid out as "RENDERING").
+// How many letter-spacing advances a string carries: one per code point,
+// the trailing one included (CSS Text §10.1, as Chromium measures it). Every
+// intrinsic-size measurement has to count the way the layout does, or a box
+// sized to its content is narrower or wider than the text it then holds.
+size_t letterSpacingSlots(const std::string& s);
+
 std::string applyTextTransform(const std::string& text,
                                const std::string& transform);
 

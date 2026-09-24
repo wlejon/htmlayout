@@ -369,8 +369,10 @@ static float measureUnbreakableRun(std::string_view text, bool collapse,
     }
     piece = applyTextTransform(piece, textTransform);
     float w = metrics.measureWidth(piece, fontFamily, fontSize, fontWeight);
-    if (letterSpacing != 0 && piece.size() > 1)
-        w += letterSpacing * static_cast<float>(piece.size() - 1);
+    // One advance per code point, the trailing one included — what
+    // breakTextIntoRuns gives the laid-out run.
+    if (letterSpacing != 0 && !piece.empty())
+        w += letterSpacing * static_cast<float>(letterSpacingSlots(piece));
     if (wordSpacing != 0 && spaceCount > 0)
         w += wordSpacing * static_cast<float>(spaceCount);
     return w;
@@ -555,7 +557,7 @@ static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
                         // narrower here than the item it becomes would let a box
                         // sized to min-content wrap its own widest word.
                         if (letterSpacing != 0 && !word.empty())
-                            w += letterSpacing * static_cast<float>(word.size());
+                            w += letterSpacing * static_cast<float>(letterSpacingSlots(word));
                         widestWord = std::max(widestWord, w);
                         word.clear();
                     }

@@ -64,6 +64,10 @@ std::vector<SourceWord> scanWords(const std::string& text) {
 
 } // namespace
 
+size_t letterSpacingSlots(const std::string& s) {
+    return utf8CodepointCount(s);
+}
+
 std::string applyTextTransform(const std::string& text,
                                const std::string& transform) {
     if (transform == "uppercase") {

@@ -172,8 +172,43 @@ static void testHiddenSubtreeClearsBoxes() {
           "shown again, the button is laid out again");
 }
 
+// Intrinsic sizes count letter-spacing the way layout does: one advance per
+// code point (not per byte), the trailing one included.
+static void testLetterSpacingIntrinsics() {
+    printf("--- sizing: letter-spacing in intrinsic widths ---\n");
+    SMetrics m;   // 10px per byte
+    SNode dots; dots.init(); dots.style_["letter-spacing"] = "2px";
+    SNode t; t.textNode("\xC2\xB7\xC2\xB7\xC2\xB7");   // three U+00B7, six bytes
+    dots.addChild(&t);
+    check(near(computeMinContentWidth(&dots, m), 66), "min-content: 3 code points of spacing");
+    check(near(computeMaxContentWidth(&dots, m), 66), "max-content agrees");
+
+    SNode nw; nw.init(); nw.style_["letter-spacing"] = "2px";
+    nw.style_["white-space"] = "nowrap";
+    SNode t2; t2.textNode("ab");
+    nw.addChild(&t2);
+    check(near(computeMaxContentWidth(&nw, m), 24), "nowrap max-content has the trailing slot");
+    check(near(computeMinContentWidth(&nw, m), 24), "nowrap min-content too");
+
+    // The blastgrid chip: a content-sized row in a centred column keeps its
+    // fixed-width dot whole when a sibling carries its own letter-spacing.
+    SNode col; col.init("flex");
+    col.style_["flex-direction"] = "column"; col.style_["align-items"] = "center";
+    SNode row; row.init("flex"); row.style_["column-gap"] = "7px";
+    SNode dot; dot.init("block"); dot.style_["width"] = "11px"; dot.style_["height"] = "11px";
+    SNode name; name.init(); SNode tn; tn.textNode("NAME"); name.addChild(&tn);
+    SNode wins; wins.init(); wins.style_["letter-spacing"] = "2px";
+    SNode tw; tw.textNode("\xC2\xB7\xC2\xB7\xC2\xB7"); wins.addChild(&tw);
+    row.addChild(&dot); row.addChild(&name); row.addChild(&wins);
+    col.addChild(&row);
+    layoutTree(&col, 800, m);
+    check(near(dot.box.contentRect.width, 11), "the dot keeps its 11px");
+    check(near(wins.box.contentRect.width, 66), "the spaced item is its content width");
+}
+
 void testSizingFixes() {
     printf("=== Sizing fixes ===\n");
+    testLetterSpacingIntrinsics();
     testHiddenSubtreeClearsBoxes();
     testPercentWidthColumnFlexItem();
     testInlineBlockMinMaxWidth();
