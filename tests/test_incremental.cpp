@@ -183,6 +183,7 @@ struct GridDoc {
     Node* root = nullptr;
     std::vector<Node*> cells;
     std::vector<Node*> texts;
+    std::vector<Node*> textParents;   // what to mark dirty when a text changes
 
     Node* alloc() {
         arena.push_back(std::make_unique<Node>());
@@ -191,7 +192,10 @@ struct GridDoc {
 };
 
 // root(block, 800px) > grid(2 equal columns) > cell(block, 5px padding) > text
-void buildGridDoc(GridDoc& d, const std::vector<std::string>& cellTexts) {
+// With `flexCards`, each cell is a column flex card instead:
+//   cell(flex column, 5px padding) > [ title(block) > text, fill(flex: 1) ]
+void buildGridDoc(GridDoc& d, const std::vector<std::string>& cellTexts,
+                  bool flexCards = false) {
     d.root = d.alloc();
     initNode(*d.root, "div", "block");
     d.root->style["width"] = "800px";
@@ -205,18 +209,37 @@ void buildGridDoc(GridDoc& d, const std::vector<std::string>& cellTexts) {
 
     for (const auto& s : cellTexts) {
         Node* cell = d.alloc();
-        initNode(*cell, "div", "block");
+        initNode(*cell, "div", flexCards ? "flex" : "block");
         cell->style["padding-top"] = "5px";
         cell->style["padding-bottom"] = "5px";
         grid->addChild(cell);
         d.cells.push_back(cell);
 
+        Node* holder = cell;
+        if (flexCards) {
+            cell->style["flex-direction"] = "column";
+            holder = d.alloc();
+            initNode(*holder, "div", "block");
+            cell->addChild(holder);
+        }
+
         Node* tx = d.alloc();
         tx->isText = true;
         tx->text = s;
         tx->style["font-size"] = "16px";
-        cell->addChild(tx);
+        holder->addChild(tx);
         d.texts.push_back(tx);
+        d.textParents.push_back(holder);
+
+        if (flexCards) {
+            Node* fill = d.alloc();
+            initNode(*fill, "div", "block");
+            fill->style["flex-grow"] = "1";
+            fill->style["flex-shrink"] = "1";
+            fill->style["flex-basis"] = "0%";
+            fill->style["height"] = "10px";
+            cell->addChild(fill);
+        }
     }
 }
 
@@ -245,20 +268,21 @@ bool boxesAgree(Node* a, Node* b, std::string& where) {
 // require the two to agree box for box.
 void checkGridMatchesFullLayout(const std::vector<std::string>& before,
                                 const std::vector<std::string>& after,
-                                size_t changed, const char* what) {
+                                size_t changed, const char* what,
+                                bool flexCards = false) {
     Metrics metrics;
     Viewport vp{800.0f, 600.0f};
 
     GridDoc incr;
-    buildGridDoc(incr, before);
+    buildGridDoc(incr, before, flexCards);
     layoutTree(incr.root, vp, metrics);
 
     incr.texts[changed]->text = after[changed];
-    markDirty(incr.cells[changed]);
+    markDirty(incr.textParents[changed]);
     layoutTree(incr.root, vp, metrics);
 
     GridDoc fresh;
-    buildGridDoc(fresh, after);
+    buildGridDoc(fresh, after, flexCards);
     layoutTree(fresh.root, vp, metrics);
 
     std::string where;
@@ -299,6 +323,16 @@ void testGridItemReuse() {
     checkGridMatchesFullLayout({short_, short_, tall, short_},
                                {short_, short_, short_, short_}, 2, "second row shrinks");
 
+    // Stretched column-flex cards with a flex:1 fill: when a row-mate makes
+    // the row taller (or shorter), the reused card's fill must follow the
+    // card's new stretched height, as it would in a fresh layout.
+    checkGridMatchesFullLayout({short_, short_, mid, short_},
+                               {short_, tall, mid, short_}, 1, "flex card: neighbour grows", true);
+    checkGridMatchesFullLayout({short_, tall, mid, short_},
+                               {short_, mid, mid, short_}, 1, "flex card: neighbour shrinks", true);
+    checkGridMatchesFullLayout({short_, tall, mid, short_},
+                               {short_, short_, mid, short_}, 1, "flex card: back to natural", true);
+
     // The reuse has to actually be happening, or the checks above pass vacuously.
     {
         Metrics metrics;
@@ -312,7 +346,10 @@ void testGridItemReuse() {
         layoutTree(d.root, vp, metrics);
         const auto& st = lastLayoutStats();
         check(st.reused > 0, "grid items are reused across passes");
-        check(st.laidOut < 5, "only the changed item's chain is laid out again");
+        // The changed item's chain, plus cell 1: the row shrank, so its
+        // stretched height changed, and a stretched item's contents are laid
+        // out against that height (a flex:1 or % child inside it must follow).
+        check(st.laidOut < 6, "only the changed item's chain and its stretched row-mate are laid out again");
     }
 }
 

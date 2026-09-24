@@ -1266,19 +1266,37 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 float naturalH = item.node->gridNaturalContentH;
                 if (std::isnan(naturalH)) naturalH = item.node->box.contentRect.height;
                 bool grew = (ch > naturalH + 0.01f);
+                // A reused item holds whatever height last pass stretched it
+                // to, its children distributed over that; the area may have
+                // changed since (grown or shrunk back) without the item itself
+                // changing. It goes through the keyed layout below too, which
+                // hands the cached box back when the height is the same.
+                const bool reused = item.node->lastLayoutPass != currentLayoutPass();
                 item.node->box.contentRect.height = ch;
                 // The earlier layoutNode pass ran without a definite height,
                 // so any flex/grid layout inside the item collapsed to content
                 // size.  Re-layout now that we have the stretched height so
                 // 1fr / flex:1 descendants can distribute the new space.
-                if (grew) {
+                if (grew || reused) {
                     float itemWidth = item.node->box.contentRect.width +
                         item.node->box.padding.left + item.node->box.padding.right +
                         item.node->box.border.left + item.node->box.border.right;
                     item.node->availableHeight = ch +
                         item.node->box.padding.top + item.node->box.padding.bottom +
                         item.node->box.border.top + item.node->box.border.bottom;
-                    layoutNode(item.node, itemWidth, metrics);
+                    // Claim the item before presetting the stretched height:
+                    // the height is the input its inner layout distributes,
+                    // and the first visit of a pass clears the box. An item
+                    // the measuring loop above reused (its cache was valid
+                    // for last pass's area) is claimed here for the first
+                    // time, so without this the preset was wiped and a
+                    // `flex: 1` child kept its old size when a neighbour made
+                    // the row taller. False means the cache is valid for
+                    // this very height, and the box already holds the answer.
+                    if (beginLayoutNode(item.node, itemWidth)) {
+                        item.node->box.contentRect.height = ch;
+                        layoutNode(item.node, itemWidth, metrics);
+                    }
                     // layoutNode may have overwritten contentRect.height with
                     // content size; restore the stretched value.
                     item.node->box.contentRect.height = ch;

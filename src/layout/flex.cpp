@@ -43,6 +43,10 @@ struct FlexItem {
     // flexing *starts*, this is what the item is *worth* to a container being
     // sized by what is in it. -1 = not measured (the two are the same).
     float contentMain = -1.0f;
+    // Row flex only: the item was laid out with its stretched height preset
+    // (a single line in a container of definite height), so its contents
+    // already fill the line and the stretch needs no second layout.
+    bool preStretched = false;
 };
 
 struct FlexLine {
@@ -50,6 +54,38 @@ struct FlexLine {
     float mainSize = 0;
     float crossSize = 0;
 };
+
+// CSS Flexbox §9.4 step 11: a stretched item's used cross size is definite,
+// and its contents are laid out again against it — so a `flex: 1` or `1fr`
+// inside a card stretched to a taller neighbour fills the card. Row flex
+// only (the cross size is the height). The measuring layout ran with the
+// height indefinite (unless the container's was definite, which preset it:
+// preStretched), so the item is laid out again when the stretch grew it past
+// that, or when its box is last pass's (reused), whose children were
+// distributed over whatever height it was stretched to then. The layout is
+// keyed on the stretched height (availableHeight), so a reused item whose
+// stretch has not changed is handed back as it is.
+void relayoutStretchedRowItem(FlexItem* item, float stretchCross, float vExtra,
+                              TextMetrics& metrics) {
+    LayoutNode* n = item->node;
+    if (item->preStretched) return;
+    const float naturalH = item->crossSize - n->box.margin.top - n->box.margin.bottom - vExtra;
+    const bool grew = stretchCross > naturalH + 0.01f;
+    const bool reused = n->lastLayoutPass != currentLayoutPass();
+    if (!grew && !reused) return;
+    // The measuring layout's keys: the flexed border-box width as the
+    // available width, the flexed content width as the override.
+    const float contentW = n->box.contentRect.width;
+    const float availW = item->finalMain;
+    n->availableHeight = stretchCross + vExtra;
+    n->overrideContentWidth = contentW;
+    if (beginLayoutNode(n, availW)) {
+        n->box.contentRect.height = stretchCross;
+        layoutNode(n, availW, metrics);
+    }
+    n->overrideContentWidth = -1.0f;
+    n->box.contentRect.width = contentW;
+}
 
 } // anonymous namespace
 
@@ -760,6 +796,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                             if (styleVal(item->node, Prop::BorderBottomStyle) != "none")
                                 bor += resolveLength(styleVal(item->node, Prop::BorderBottomWidth), mainAvailable, childFontSize);
                             preStretchH = containerCrossH - pad - bor;
+                            item->preStretched = preStretchH > 0;
                         }
                     }
                 }
@@ -1167,11 +1204,15 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 if (isRow) {
                     const std::string& h = styleVal(item->node, Prop::Height);
                     if (h == "auto" || h.empty()) {
+                        const auto& ib = item->node->box;
+                        const float vExtra = ib.padding.top + ib.padding.bottom +
+                                             ib.border.top + ib.border.bottom;
                         float stretchCross = line.crossSize -
-                            item->node->box.margin.top - item->node->box.margin.bottom -
-                            item->node->box.padding.top - item->node->box.padding.bottom -
-                            item->node->box.border.top - item->node->box.border.bottom;
-                        if (stretchCross > 0) item->node->box.contentRect.height = stretchCross;
+                            ib.margin.top - ib.margin.bottom - vExtra;
+                        if (stretchCross > 0) {
+                            relayoutStretchedRowItem(item, stretchCross, vExtra, metrics);
+                            item->node->box.contentRect.height = stretchCross;
+                        }
                     }
                 } else {
                     const std::string& w = styleVal(item->node, Prop::Width);
