@@ -737,6 +737,10 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         containerWidth = availableWidth - node->box.margin.left - node->box.margin.right - paddingH - borderH;
         if (containerWidth < 0) containerWidth = 0;
     }
+    // A parent flex algorithm resolved this box's used width already; a
+    // percentage `width` must not be taken again against that result.
+    if (node->overrideContentWidth >= 0.0f)
+        containerWidth = node->overrideContentWidth;
 
     // Parse gap
     float rowGap = resolveLength(styleVal(node, Prop::RowGap), containerWidth, fontSize);

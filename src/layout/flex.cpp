@@ -107,6 +107,12 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                            paddingH + borderH);
     if (minW >= 0 && containerMain < minW) containerMain = minW;
     if (maxW >= 0 && containerMain > maxW) containerMain = maxW;
+    // A parent flex/grid algorithm already resolved (and clamped) this box's
+    // used width and passes it as its content width, together with the box's
+    // border-box size as availableWidth. Re-resolving a percentage `width`
+    // against that would take the percentage twice (40% of 40%).
+    if (node->overrideContentWidth >= 0.0f)
+        containerMain = node->overrideContentWidth;
 
     // Flex properties
     const std::string& flexDir = styleVal(node, Prop::FlexDirection);

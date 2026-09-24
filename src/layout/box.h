@@ -234,8 +234,9 @@ struct LayoutNode {
 
     // Flexed used content width, set (>= 0) by a flex container before laying
     // out a row-direction item whose main size was grown/shrunk away from its
-    // style width. Block layout uses it in place of the resolved style width
-    // so the item's CHILDREN see the flexed size, not the specified one.
+    // style width. Block, flex and grid layout use it in place of the resolved
+    // style width so the item's CHILDREN see the flexed size, not the
+    // specified one (and a percentage width is not resolved a second time).
     // -1 means "no override". The flex container resets it after layout.
     float overrideContentWidth = -1.0f;
 

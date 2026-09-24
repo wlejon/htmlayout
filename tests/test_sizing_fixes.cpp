@@ -144,5 +144,6 @@ static void testInlineBlockMinMaxWidth() {
 
 void testSizingFixes() {
     printf("=== Sizing fixes ===\n");
+    testPercentWidthColumnFlexItem();
     testInlineBlockMinMaxWidth();
 }
