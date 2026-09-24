@@ -200,6 +200,32 @@ static void testInlineFlexShrinksToFit() {
     check(wide.box.contentRect.width <= 100.5f, "inline-flex never exceeds the line");
 }
 
+// A shrink-to-fit wrapping flex row sized to the exact sum of its items keeps
+// them on one line even when the float sums differ in the last bit.
+static void testFlexWrapExactFit() {
+    printf("--- sizing: flex-wrap exact fit ---\n");
+    SNode root; root.init();
+    SNode row; row.init("flex");
+    row.style_["flex-wrap"] = "wrap"; row.style_["column-gap"] = "20px";
+    row.style_["position"] = "absolute";
+    SNode a; a.init(); a.style_["width"] = "43.5177px";
+    SNode b; b.init(); b.style_["width"] = "48.9414px";
+    row.addChild(&a); row.addChild(&b); root.addChild(&row);
+    SMetrics m;
+    layoutTree(&root, 800, m);
+    check(near(a.box.contentRect.y, b.box.contentRect.y), "both items on one line");
+
+    // Pinned directly: a container a hair narrower than the float sum.
+    SNode row2; row2.init("flex");
+    row2.style_["flex-wrap"] = "wrap"; row2.style_["width"] = "112.459px";
+    row2.style_["column-gap"] = "20px";
+    SNode c; c.init(); c.style_["width"] = "43.5177px"; c.style_["flex-shrink"] = "0";
+    SNode d; d.init(); d.style_["width"] = "48.9414px"; d.style_["flex-shrink"] = "0";
+    row2.addChild(&c); row2.addChild(&d);
+    layoutTree(&row2, 800, m);
+    check(near(c.box.contentRect.y, d.box.contentRect.y), "last-bit overshoot does not wrap");
+}
+
 // Intrinsic sizes count letter-spacing the way layout does: one advance per
 // code point (not per byte), the trailing one included.
 static void testLetterSpacingIntrinsics() {
@@ -238,6 +264,7 @@ void testSizingFixes() {
     printf("=== Sizing fixes ===\n");
     testLetterSpacingIntrinsics();
     testInlineFlexShrinksToFit();
+    testFlexWrapExactFit();
     testHiddenSubtreeClearsBoxes();
     testPercentWidthColumnFlexItem();
     testInlineBlockMinMaxWidth();

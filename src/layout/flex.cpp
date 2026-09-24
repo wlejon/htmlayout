@@ -523,7 +523,11 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         for (size_t i = 0; i < items.size(); i++) {
             float itemOuter = items[i].hypotheticalMain + itemMarginMain(items[i]);
             float itemMain = itemOuter + (currentLine.items.empty() ? 0 : gapMain);
-            if (isWrap && !currentLine.items.empty() && lineMain + itemMain > mainAvailable) {
+            // A shrink-to-fit container is sized to the sum of these same
+            // items, added up in another order; a last-bit difference must not
+            // break the line (see kFitSlack).
+            if (isWrap && !currentLine.items.empty() &&
+                lineMain + itemMain > mainAvailable + kFitSlack) {
                 lines.push_back(std::move(currentLine));
                 currentLine = FlexLine{};
                 lineMain = 0;
