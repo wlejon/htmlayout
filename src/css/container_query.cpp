@@ -1,5 +1,6 @@
 #include "css/container_query.h"
 #include "css/tokenizer.h"
+#include "from_chars_compat.h"
 
 #include <algorithm>
 #include <cctype>
@@ -404,7 +405,7 @@ double containerFontSize(const ContainerQueryEnv& env) {
     const char* b = fs.data();
     const char* e = b + fs.size();
     while (b < e && std::isspace(static_cast<unsigned char>(*b))) b++;
-    auto [ptr, ec] = std::from_chars(b, e, v);
+    auto [ptr, ec] = htmlayout::from_chars_fp(b, e, v);
     if (ec != std::errc() || std::string_view(ptr, static_cast<size_t>(e - ptr)) != "px" ||
         !(v > 0))
         return 16.0;
