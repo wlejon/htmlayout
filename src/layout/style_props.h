@@ -111,6 +111,7 @@ namespace htmlayout::layout {
     X(RowGap,              "row-gap")               \
     X(ShapeOutside,        "shape-outside")         \
     X(Span,                "span")                  \
+    X(TableLayout,         "table-layout")          \
     X(TextAlign,           "text-align")            \
     X(TextIndent,          "text-indent")           \
     X(TextOverflow,        "text-overflow")         \

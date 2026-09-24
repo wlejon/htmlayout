@@ -226,6 +226,50 @@ static void testFlexWrapExactFit() {
     check(near(c.box.contentRect.y, d.box.contentRect.y), "last-bit overshoot does not wrap");
 }
 
+// table-layout: fixed sizes columns from <col> and the first row only.
+static void testTableLayoutFixed() {
+    printf("--- table-layout: fixed ---\n");
+    SNode wrap; wrap.init(); wrap.style_["width"] = "400px";
+    SNode table; table.init("table");
+    table.style_["width"] = "100%"; table.style_["table-layout"] = "fixed";
+    table.style_["border-collapse"] = "collapse";
+    table.style_["border-spacing"] = "0";
+    SNode col1; col1.init("table-column"); col1.tag = "col"; col1.style_["width"] = "100px";
+    SNode col2; col2.init("table-column"); col2.tag = "col";
+    SNode row; row.init("table-row"); row.tag = "tr";
+    SNode c1; c1.init("table-cell"); c1.tag = "td";
+    SNode c2; c2.init("table-cell"); c2.tag = "td"; c2.style_["white-space"] = "nowrap";
+    c2.style_["overflow"] = "hidden"; c2.style_["overflow-x"] = "hidden";
+    c2.style_["text-overflow"] = "ellipsis";
+    SNode t1; t1.textNode("a");
+    SNode t2; t2.textNode(std::string(200, 'x').c_str());
+    c1.addChild(&t1); c2.addChild(&t2);
+    row.addChild(&c1); row.addChild(&c2);
+    table.addChild(&col1); table.addChild(&col2); table.addChild(&row);
+    wrap.addChild(&table);
+    SMetrics m;
+    layoutTree(&wrap, 800, m);
+    check(near(table.box.fullWidth(), 400), "fixed table keeps its 100% width");
+    check(near(c1.box.fullWidth(), 100), "first column takes the <col> width");
+    check(near(c2.box.fullWidth(), 300), "second column takes the rest, not its content");
+    check(c2.box.textTruncated, "the nowrap cell's text is ellipsized");
+
+    // Without <col>, the first row's cell widths decide; later rows cannot.
+    SNode table2; table2.init("table");
+    table2.style_["width"] = "300px"; table2.style_["table-layout"] = "fixed";
+    table2.style_["border-spacing"] = "0";
+    SNode r1; r1.init("table-row"); SNode r2; r2.init("table-row");
+    SNode a1; a1.init("table-cell"); a1.style_["width"] = "50px";
+    SNode a2; a2.init("table-cell");
+    SNode b1; b1.init("table-cell"); b1.style_["width"] = "250px";
+    SNode b2; b2.init("table-cell");
+    r1.addChild(&a1); r1.addChild(&a2); r2.addChild(&b1); r2.addChild(&b2);
+    table2.addChild(&r1); table2.addChild(&r2);
+    layoutTree(&table2, 800, m);
+    check(near(a1.box.fullWidth(), 50) && near(b1.box.fullWidth(), 50),
+          "first row's width sets the column");
+    check(near(a2.box.fullWidth(), 250), "the other column gets the rest");
+}
 
 // text-overflow: ellipsis truncates an overflowing line at the content edge.
 static void testTextOverflowEllipsis() {
@@ -316,6 +360,7 @@ void testSizingFixes() {
     testLetterSpacingIntrinsics();
     testInlineFlexShrinksToFit();
     testFlexWrapExactFit();
+    testTableLayoutFixed();
     testTextOverflowEllipsis();
     testHiddenSubtreeClearsBoxes();
     testPercentWidthColumnFlexItem();

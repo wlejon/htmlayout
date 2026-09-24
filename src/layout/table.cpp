@@ -587,6 +587,72 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
     return ts;
 }
 
+// A width, in px, from a <col> / <colgroup> / first-row cell `width` under
+// the fixed table layout: lengths as given, percentages of the table's
+// content width. Negative for auto.
+float fixedWidthOf(LayoutNode* n, float tableWidth, float fontSize) {
+    if (!n) return -1.0f;
+    const std::string& w = styleVal(n, Prop::Width);
+    if (w.empty() || w == "auto") return -1.0f;
+    return resolveLength(w, tableWidth, fontSize);
+}
+
+// The fixed table layout (CSS2 §17.5.2.1): column widths come from the
+// <col> elements and the first row's cells alone, never from cell content,
+// and the columns left over share what remains of the table width equally.
+// `tableContentWidth` is widened when the specified columns need more.
+std::vector<float> fixedLayoutColumnWidths(const TableStructure& ts,
+                                           float& tableContentWidth) {
+    const size_t numCols = ts.numCols;
+    const float insets = ts.collapseInset.left + ts.collapseInset.right;
+    std::vector<float> w(numCols, -1.0f);
+
+    // 1. A column element with a width sets the column's width.
+    for (size_t c = 0; c < numCols && c < ts.colInfos.size(); c++) {
+        const ColInfo& ci = ts.colInfos[c];
+        float v = fixedWidthOf(ci.colNode, tableContentWidth, ts.fontSize);
+        if (v < 0) v = fixedWidthOf(ci.colGroupNode, tableContentWidth, ts.fontSize);
+        if (v >= 0) w[c] = v;
+    }
+    // 2. Otherwise a first-row cell with a width sets it (split evenly over
+    //    the columns a spanning cell covers).
+    for (const CellInfo& ci : ts.cellInfos) {
+        if (ci.gridRow != 0) continue;
+        float cfs = cellFontSize(ci.node, ts.fontSize);
+        float v = fixedWidthOf(ci.node, tableContentWidth, cfs);
+        if (v < 0) continue;
+        if (styleVal(ci.node, Prop::BoxSizing) != "border-box")
+            v += cellPadBorderH(ts, ci);
+        v -= ts.borderSpacingH * static_cast<float>(ci.colspan - 1);
+        float per = std::max(0.0f, v) / static_cast<float>(ci.colspan);
+        for (size_t c = ci.gridCol; c < ci.gridCol + ci.colspan && c < numCols; c++)
+            if (w[c] < 0) w[c] = per;
+    }
+    // 3. The remaining columns divide the rest of the table width equally.
+    float available = tableContentWidth - ts.totalSpacing - insets;
+    float fixedSum = 0.0f;
+    size_t autoCols = 0;
+    for (float v : w) {
+        if (v >= 0) fixedSum += v; else ++autoCols;
+    }
+    float rest = available - fixedSum;
+    if (autoCols > 0) {
+        float each = std::max(0.0f, rest) / static_cast<float>(autoCols);
+        for (float& v : w) if (v < 0) v = each;
+    } else if (rest > 0 && fixedSum > 0) {
+        // Every column is specified and they fall short of the table width:
+        // the extra is spread over them in proportion.
+        for (float& v : w) v += rest * (v / fixedSum);
+    } else if (rest > 0) {
+        for (float& v : w) v = available / static_cast<float>(numCols);
+    }
+    // The table is at least as wide as its specified columns.
+    float needed = ts.totalSpacing + insets;
+    for (float v : w) needed += v;
+    if (needed > tableContentWidth) tableContentWidth = needed;
+    return w;
+}
+
 } // anonymous namespace
 
 void computeTableIntrinsicWidths(LayoutNode* node, TextMetrics& metrics,
@@ -695,8 +761,14 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     float prefTable = ts.maxContent;
     float minTable  = ts.minContent;
 
+    // table-layout: fixed only takes effect on a table whose width is not
+    // auto (CSS2 §17.5.2); cell content then never sizes a column.
+    const bool fixedLayout = !widthAuto && styleVal(node, Prop::TableLayout) == "fixed";
+
     // If width is auto, shrink-to-fit: min(available, max-content), floored at min-content.
-    if (widthAuto) {
+    if (fixedLayout) {
+        // Sized below, from the columns alone.
+    } else if (widthAuto) {
         tableContentWidth = std::min(availContent, prefTable);
         tableContentWidth = std::max(tableContentWidth, minTable);
     } else {
@@ -826,6 +898,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         float scale = available / used;
         for (size_t c = 0; c < numCols; c++) colWidths[c] *= scale;
     }
+    if (fixedLayout) colWidths = fixedLayoutColumnWidths(ts, tableContentWidth);
 
     // Phase 2: Layout cells with final widths and determine row heights
     std::vector<float> rowHeights(numRows, 0.0f);
