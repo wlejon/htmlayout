@@ -186,6 +186,52 @@ void testNestingCascade() {
     }
 }
 
+// @starting-style (CSS Transitions 2 §3.1): top level and nested in a style
+// rule, its rules match only in a starting-style resolve, in their ordinary
+// cascade position.
+void testStartingStyle() {
+    printf("--- @starting-style ---\n");
+    MockElement a; a.tag = "div"; a.classes = "a";
+
+    auto s = parse(".a { opacity: 1 } @starting-style { .a { opacity: 0 } }");
+    check(s.rules.size() == 2 && !s.rules[0].startingStyle && s.rules[1].startingStyle,
+          "a top-level block's rules are marked");
+    Cascade c;
+    c.addStylesheet(s);
+    check(c.usesStartingStyle(), "the cascade knows it holds some");
+    check(c.resolve(a)["opacity"] == "1", "an ordinary resolve ignores them");
+    check(c.resolve(a, {}, nullptr, true)["opacity"] == "0", "a starting-style resolve applies them");
+
+    auto n = parse(".a { width: 10px; @starting-style { width: 0px } height: 5px }");
+    Cascade cn;
+    cn.addStylesheet(n);
+    check(cn.resolve(a)["width"] == "10px", "nested: ordinary resolve keeps the rule's value");
+    check(cn.resolve(a, {}, nullptr, true)["width"] == "0px",
+          "nested: the block's declarations apply to the enclosing selector");
+    check(cn.resolve(a, {}, nullptr, true)["height"] == "5px",
+          "nested: the declarations after it are ordinary");
+
+    // Ordinary precedence: a more specific plain rule still wins.
+    Cascade cp;
+    cp.addStylesheet(parse("div.a { opacity: 1 } @starting-style { .a { opacity: 0 } }"));
+    check(cp.resolve(a, {}, nullptr, true)["opacity"] == "1",
+          "a starting-style rule of lower specificity loses");
+
+    // Inside @media and @layer too.
+    Cascade cm;
+    cm.addStylesheet(parse("@media (min-width: 1px) { @starting-style { .a { opacity: 0 } } }"
+                           "@layer l { @starting-style { .a { color: red } } }"));
+    check(cm.resolve(a)["opacity"] != "0" && cm.resolve(a)["color"] != "red",
+          "@media / @layer: an ordinary resolve ignores them");
+    check(cm.resolve(a, {}, nullptr, true)["opacity"] == "0" &&
+              cm.resolve(a, {}, nullptr, true)["color"] == "red",
+          "@media / @layer: a starting-style resolve applies them");
+
+    Cascade none;
+    none.addStylesheet(parse(".a { opacity: 1 }"));
+    check(!none.usesStartingStyle(), "a sheet without any does not report one");
+}
+
 const LayerBlock* findLayer(const Stylesheet& s, const char* name) {
     for (auto& lb : s.layerBlocks)
         if (lb.name == name) return &lb;
@@ -403,4 +449,5 @@ void testNesting() {
     testMediaInContainer();
     testTopLevelAmpersand();
     testHostileNesting();
+    testStartingStyle();
 }

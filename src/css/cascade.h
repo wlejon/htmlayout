@@ -138,9 +138,17 @@ public:
     // Only matches rules whose scope matches the element's scope.
     // parentStyle: the computed style of the parent element (for inheritance).
     //   Pass nullptr for root elements.
+    // startingStyle: resolve the element's starting style (CSS Transitions 2
+    // §3.1) — the rules inside @starting-style blocks match too, in their
+    // ordinary cascade position. Otherwise those rules never match.
     ComputedStyle resolve(const ElementRef& elem,
                           const std::string& inlineStyle = {},
-                          const ComputedStyle* parentStyle = nullptr) const;
+                          const ComputedStyle* parentStyle = nullptr,
+                          bool startingStyle = false) const;
+
+    // True if any added rule came from an @starting-style block, so a
+    // consumer can skip the starting-style resolve on pages with none.
+    bool usesStartingStyle() const { return usesStartingStyle_; }
 
     // Resolve computed style for a pseudo-element (::before or ::after).
     // Returns an empty style if no rules target this pseudo-element.
@@ -272,6 +280,9 @@ private:
         // Container queries: the rule applies only while every one holds,
         // each against its own query container (nested @container rules).
         std::vector<ContainerQuery> containerQueries;
+        // From an @starting-style block: matches only in a starting-style
+        // resolve (Rule::startingStyle).
+        bool startingStyle = false;
         // Pre-classified selector type (avoids scanning simples per-element)
         bool isHostSelector = false;
         bool isSlottedSelector = false;
@@ -534,6 +545,7 @@ private:
     size_t nextOrder_ = 0;
     bool usesHover_ = false;  // any rule uses :hover (set in classifyLastRule)
     bool usesContainers_ = false; // any @container rule added
+    bool usesStartingStyle_ = false; // any @starting-style rule added
     bool usesForcedInherit_ = false; // any `inherit` on a non-inherited property
     bool usesHas_ = false;           // any rule uses :has()
     // Class names appearing in a non-subject compound of some selector — the

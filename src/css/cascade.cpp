@@ -370,6 +370,10 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
         for (auto& sel : selectors) {
             rules_.push_back({std::move(sel), p.rule->declarations, scope, nextOrder_++,
                               p.layerIdx, origin, queries});
+            if (p.rule->startingStyle) {
+                rules_.back().startingStyle = true;
+                usesStartingStyle_ = true;
+            }
             classifyLastRule();
         }
     }
@@ -452,7 +456,8 @@ static bool cascadesBefore(const M& a, const M& b) {
 
 ComputedStyle Cascade::resolve(const ElementRef& elem,
                                 const std::string& inlineStyle,
-                                const ComputedStyle* parentStyle) const {
+                                const ComputedStyle* parentStyle,
+                                bool startingStyle) const {
     // 1. Collect all matching rules whose scope matches the element's scope.
     //    Use pointers to avoid copying property/value strings from Declaration objects.
     struct MatchedDecl {
@@ -577,6 +582,7 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
 
     for (size_t ruleIdx : candidates) {
         const auto& rule = rules_[ruleIdx];
+        if (rule.startingStyle && !startingStyle) continue;
         // Container queries (nested @container rules each add one).
         if (!rule.containerQueries.empty() &&
             !containerQueriesHold(elem, rule.containerQueries, /*fromSelf=*/false, parentStyle)) {
@@ -1082,6 +1088,8 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
     if (bucket == pseudoRules_.end()) return {};
 
     auto applies = [&](const ScopedRule& rule) {
+        // Pseudo-elements have no starting style here.
+        if (rule.startingStyle) return false;
         if (rule.scope != nullptr && rule.scope != elem.scope()) return false;
         // The selector with the pseudo-element already stripped from its
         // subject (classifyLastRule); an empty subject matches everything.
@@ -1191,6 +1199,7 @@ void Cascade::clear() {
     nextOrder_ = 0;
     usesHover_ = false;
     usesContainers_ = false;
+    usesStartingStyle_ = false;
     usesForcedInherit_ = false;
     usesHas_ = false;
     ancestorClasses_.clear();

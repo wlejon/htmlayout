@@ -36,7 +36,8 @@ public:
         while (!atEnd()) {
             if (peek().type == TokenType::AtKeyword) {
                 const std::string& kw = peek().value;
-                if (kw == "media" || kw == "supports" || kw == "layer" || kw == "container") {
+                if (kw == "media" || kw == "supports" || kw == "layer" || kw == "container" ||
+                    kw == "starting-style") {
                     // @media blocks land in sheet.mediaBlocks, @layer in
                     // sheet.layerBlocks, @container in sheet.containerBlocks;
                     // a true @supports contributes its rules straight to
@@ -139,6 +140,7 @@ private:
         std::string layer;                              // its full name
         std::vector<ContainerQuery> containers;         // enclosing @container queries
         bool dead = false;                              // inside a false @supports
+        bool startingStyle = false;                     // inside @starting-style
     };
 
     // Parse a block body (the '{' consumed) into a new ContainerBlock whose
@@ -162,6 +164,7 @@ private:
         inner.layer = layer;
         inner.containers = std::move(queries);
         inner.dead = s.dead;
+        inner.startingStyle = s.startingStyle;
         parseBody(inner, parents, selText);
         if (!cb.rules.empty()) m_sheet->containerBlocks.push_back(std::move(cb));
     }
@@ -173,6 +176,7 @@ private:
 
     void emit(Scope& s, Rule rule) {
         rule.sourcePos = m_nextSourcePos++;
+        rule.startingStyle = s.startingStyle;
         s.rules->push_back(std::move(rule));
     }
 
@@ -347,6 +351,18 @@ private:
             parseLayerAtRule(s, parents, selText);
             return;
         }
+        if (name == "starting-style") {
+            // A rule list at the top level, declarations for the enclosing
+            // selector when nested in a style rule; either way its rules sit
+            // where the block does, marked so only a starting-style resolve
+            // matches them.
+            std::string prelude;
+            if (!collectPrelude(prelude)) return;
+            Scope inner = s;
+            inner.startingStyle = true;
+            parseBody(inner, parents, selText);
+            return;
+        }
         // @layer / @container inside a false @supports, @charset, unknown
         // at-rules: skipped.
         consumeAtRule();
@@ -382,6 +398,7 @@ private:
         Scope inner{&lb.rules, &lb.mediaBlocks, s.mediaConds};
         inner.inLayer = true;
         inner.layer = lb.name;
+        inner.startingStyle = s.startingStyle;
         if (s.mediaConds.empty()) {
             parseBody(inner, parents, selText);
         } else {

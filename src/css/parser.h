@@ -26,6 +26,12 @@ struct Rule {
     // @media) between two plain rules, so the cascade orders by this rather
     // than by which list a rule sits in. 0 for rules not built by parse().
     size_t sourcePos = 0;
+    // Inside an @starting-style block (CSS Transitions 2 §3.1), at any depth
+    // or nested in a style rule. Such a rule applies only when the cascade
+    // resolves an element's starting style (Cascade::resolve's startingStyle
+    // argument), the style a transition runs from when the element has no
+    // before-change style: its first style, or its first after display:none.
+    bool startingStyle = false;
 };
 
 // A @media block: condition + contained rules
