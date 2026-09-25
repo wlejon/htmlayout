@@ -368,8 +368,11 @@ Matrix3D parseTransform3D(std::string_view val, float refW, float refH) {
             float ry = 0;
             if (!nextIsClose(val, pos))
                 ry = parseAngleRad(val, pos);
-            // Combined skew: skewX(rx) then skewY(ry).
-            m = mat3D_skewY(ry) * mat3D_skewX(rx);
+            // skew(ax, ay) is the single matrix [1 tan(ax); tan(ay) 1]
+            // (CSS Transforms 1), not skewY(ay)·skewX(ax): that product
+            // adds tan(ax)·tan(ay) to the y scale.
+            m.m[4] = std::tan(rx);
+            m.m[1] = std::tan(ry);
         } else if (func == "perspective") {
             m = mat3D_perspective(parseLengthPx(val, pos));
         } else if (func == "matrix") {

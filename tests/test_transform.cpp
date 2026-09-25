@@ -259,11 +259,22 @@ static void testParseTransform3D() {
     m = parseTransform3D("skewY(45deg)", 100, 100);
     check(approx(m.m[1], 1, 1e-3f), "skewY 3d");
 
+    // skew(ax, ay) is the single matrix [1 tan(ax); tan(ay) 1]; the y
+    // scale stays 1 (skewY·skewX would make it 1 + tan(ax)·tan(ay)).
     m = parseTransform3D("skew(45deg, 30deg)", 100, 100);
-    check(true, "skew 3d two-arg parses");
+    check(approx(m.m[0], 1, 1e-4f) && approx(m.m[4], 1, 1e-4f)
+       && approx(m.m[1], std::tan(3.14159265f / 6), 1e-4f)
+       && approx(m.m[5], 1, 1e-4f), "skew 3d two-arg is one matrix");
 
     m = parseTransform3D("skew(45deg)", 100, 100);
-    check(true, "skew 3d one-arg parses");
+    check(approx(m.m[4], 1, 1e-4f) && approx(m.m[1], 0, 1e-4f)
+       && approx(m.m[5], 1, 1e-4f), "skew 3d one-arg");
+
+    {
+        Matrix2D m2 = parseTransform("skew(45deg, 30deg)", 100, 100);
+        check(mat2Eq(m2, 1, std::tan(3.14159265f / 6), 1, 1, 0, 0, 1e-4f),
+              "skew(45,30) 2d is one matrix");
+    }
 
     m = parseTransform3D("perspective(200px)", 100, 100);
     check(approx(m.m[11], -1.0f/200.0f), "perspective 3d");
