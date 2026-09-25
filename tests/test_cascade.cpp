@@ -282,6 +282,41 @@ static void testMediaQueries() {
                              {1024, 768, "screen", "dark"}) == true,
           "@media: prefers-color-scheme combines with type and width");
 
+    // resolution / device-pixel-ratio against MediaContext::resolution (dppx)
+    MediaContext hidpi{1024, 768, "screen", "light", 2.0f};
+    MediaContext lodpi{1024, 768, "screen", "light", 1.0f};
+    check(evaluateMediaQuery("(resolution: 2dppx)", hidpi) == true,
+          "@media: resolution:2dppx matches a 2x context");
+    check(evaluateMediaQuery("(resolution: 2dppx)", lodpi) == false,
+          "@media: resolution:2dppx does not match a 1x context");
+    check(evaluateMediaQuery("(resolution: 2x)", hidpi) == true,
+          "@media: the x unit is dppx");
+    check(evaluateMediaQuery("(min-resolution: 192dpi)", hidpi) == true,
+          "@media: min-resolution in dpi (96dpi = 1dppx)");
+    check(evaluateMediaQuery("(min-resolution: 192dpi)", lodpi) == false,
+          "@media: min-resolution:192dpi fails at 1x");
+    check(evaluateMediaQuery("(max-resolution: 1.5dppx)", lodpi) == true,
+          "@media: max-resolution matches below the bound");
+    check(evaluateMediaQuery("(max-resolution: 1.5dppx)", hidpi) == false,
+          "@media: max-resolution fails above the bound");
+    check(evaluateMediaQuery("(-webkit-min-device-pixel-ratio: 2)", hidpi) == true,
+          "@media: -webkit-min-device-pixel-ratio matches at 2x");
+    check(evaluateMediaQuery("(-webkit-min-device-pixel-ratio: 2)", lodpi) == false,
+          "@media: -webkit-min-device-pixel-ratio fails at 1x");
+    check(evaluateMediaQuery("(-webkit-device-pixel-ratio: 1)", lodpi) == true,
+          "@media: -webkit-device-pixel-ratio exact match");
+    check(evaluateMediaQuery("(resolution >= 2dppx)", hidpi) == true,
+          "@media: range syntax on resolution");
+    check(evaluateMediaQuery("(resolution >= 2dppx)", lodpi) == false,
+          "@media: range syntax on resolution fails at 1x");
+    check(evaluateMediaQuery("(1dppx < resolution <= 2dppx)", hidpi) == true,
+          "@media: chained range on resolution");
+    check(evaluateMediaQuery("(resolution: 2dppx)", {1024, 768, "screen"}) == false,
+          "@media: default context is 1dppx");
+    check(evaluateMediaQuery("(min-resolution: 2dppx), (-webkit-min-device-pixel-ratio: 2)",
+                             hidpi) == true,
+          "@media: the usual retina query list matches at 2x");
+
     // Cascade-level: a dark context includes @media (prefers-color-scheme: dark) blocks
     auto schemeSheet = parse(
         "div { color: black; }\n"

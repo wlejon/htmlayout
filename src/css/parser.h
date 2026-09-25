@@ -129,6 +129,7 @@ struct MediaContext {
     float viewportHeight = 0;
     std::string mediaType = "screen"; // "screen", "print", "all"
     std::string colorScheme = "light"; // "light" or "dark" — (prefers-color-scheme)
+    float resolution = 1.0f;           // device pixels per CSS px, in dppx — (resolution)
 };
 
 // Evaluate whether a @media condition string matches the given context

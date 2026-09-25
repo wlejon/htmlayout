@@ -1,6 +1,7 @@
 add_library(htmlayout_css STATIC
     tokenizer.cpp
     parser.cpp
+    media_query.cpp
     selector.cpp
     cascade.cpp
     container_query.cpp
