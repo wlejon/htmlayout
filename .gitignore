@@ -1,9 +1,7 @@
-build/
-build-release/
 .vs/
 *.user
 CMakeSettings.json
 
 # Perf/parity scratch: built binaries, worktrees, raw timings, profile builds.
 .ab/
-build-prof/
+build*/
