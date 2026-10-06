@@ -6,7 +6,9 @@
 
 A standalone C++20 library for CSS parsing, selector matching, style cascade, and box layout. Designed to be embedded in applications that need CSS styling and layout without the overhead of a full browser engine.
 
-htmlayout does **not** own the DOM, render anything, or run JavaScript. You provide the DOM tree and text measurement; htmlayout computes styles and positioned boxes.
+htmlayout does **not** own the DOM, render anything, or run JavaScript. You provide the DOM tree and text measurement; htmlayout computes styles and positioned boxes. For HTML parsing it bundles the gumbo HTML5 parser (`third_party/gumbo`, the `gumbo` CMake target), which a consumer can use to build its DOM; the library itself never calls it.
+
+htmlayout is the layout engine of [bro](https://github.com/wlejon/bro), an HTML/CSS app runtime, and one of the engine libraries in the [bro ecosystem](https://github.com/wlejon/bro/blob/main/docs/ecosystem.md). It depends on no other repository there and has no JavaScript binding; bro wraps it in its own DOM. It is plain portable C++20 with no platform code, built and tested on Windows, Linux and macOS.
 
 ## Features
 
@@ -91,7 +93,7 @@ ctest --test-dir build -C Debug --output-on-failure
 ./build/tests/htmlayout_test             # Linux
 ```
 
-The suite is a single assertion-driven executable — currently 1,925 checks
+The suite is a single assertion-driven executable — over 2,700 checks
 across tokenizer, parser, selectors, cascade, every formatting context, hit
 testing, bidi, text geometry, and incremental relayout.
 
@@ -138,8 +140,8 @@ cmake --build build-release --config Release --target htmlayout_bench
 
 `tools/ab.sh` runs a baseline and the working tree interleaved (min-of-N, built
 in a detached git worktree so nothing touches your checkout), and
-`tools/parity.sh` diffs both halves against Chromium through the `bro` parity
-harness — the check for rewrites that produce subtly wrong layout rather than
+`tools/parity.sh` builds bro against both and diffs each against Chromium
+through [broparity](https://github.com/wlejon/broparity) — the check for rewrites that produce subtly wrong layout rather than
 failing tests.
 
 ## Usage
