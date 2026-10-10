@@ -55,6 +55,19 @@ struct LayoutBox {
     // For overflow:auto/scroll elements, scrollHeight = naturalHeight.
     float naturalHeight = 0;
 
+    // The horizontal counterpart of naturalHeight: how far this box's content
+    // reaches to the right of its content-box left edge, never less than
+    // contentRect.width. Scrollable overflow in CSS Overflow 3 terms — the
+    // in-flow children's margin boxes, every descendant box that is not clipped
+    // by a scroll container below this one, and the absolutely positioned boxes
+    // whose containing block is this box or lies inside it (fixed boxes still
+    // looking for the viewport are left out). Independent of this box's own
+    // scroll offset. For overflow:auto/scroll elements,
+    // scrollWidth = naturalWidth + horizontal padding. Computed by the
+    // post-order hit-bounds pass at the end of layoutTree(), so it covers every
+    // layout mode (block, flex, grid, table) and the absolute pass.
+    float naturalWidth = 0;
+
     // Pure flow height of the content (line-box stack / block-children
     // extent), BEFORE any explicit height / min-max override — unlike
     // naturalHeight, which folds contentRect.height in. Table cells center

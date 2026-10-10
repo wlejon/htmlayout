@@ -419,6 +419,117 @@ static void testHitBlockInInlineRegrow() {
           "and hittable in the part that only exists after the regrow");
 }
 
+// A node that scrolls its content horizontally, as a consumer's scroll
+// container does.
+struct ScrollMockNode : public HitMockNode {
+    float scrollLeft = 0.0f;
+    float scrollLeftPx() const override { return scrollLeft; }
+};
+
+static void testNaturalWidthWideChild() {
+    printf("--- naturalWidth: a wide in-flow child ---\n");
+    HitMockNode root; initBlock(root, "div");
+    root.style["width"] = "800px";
+
+    ScrollMockNode scroller; initBlock(scroller, "div");
+    scroller.style["width"] = "300px"; scroller.style["height"] = "100px";
+    scroller.style["overflow-x"] = "auto";
+    scroller.style["padding-left"] = "10px"; scroller.style["padding-right"] = "10px";
+
+    HitMockNode wide; initBlock(wide, "div");
+    wide.style["width"] = "2000px"; wide.style["height"] = "50px";
+    wide.style["margin-left"] = "5px";
+
+    scroller.addChild(&wide);
+    root.addChild(&scroller);
+
+    HitTextMetrics m;
+    layoutTree(&root, 800, m);
+    check(std::abs(scroller.box.naturalWidth - 2005.0f) < 0.5f,
+          "the scroller's content reaches the wide child's margin box (5 + 2000)");
+    check(std::abs(wide.box.naturalWidth - 2000.0f) < 0.5f,
+          "a box with no overflow reports its own content width");
+    check(std::abs(root.box.naturalWidth - 800.0f) < 0.5f,
+          "the scroller clips, so the wide child does not widen the root");
+
+    // The child goes away: the extent falls back to the scroller's own width.
+    wide.style["width"] = "100px";
+    markDirty(&wide);
+    layoutTree(&root, 800, m);
+    check(std::abs(scroller.box.naturalWidth - 300.0f) < 0.5f,
+          "content that fits leaves naturalWidth at contentRect.width");
+
+    // Without a clip the wide child is the root's scrollable overflow too.
+    wide.style["width"] = "2000px";
+    scroller.style["overflow-x"] = "visible";
+    markSubtreeDirty(&root);
+    layoutTree(&root, 800, m);
+    check(root.box.naturalWidth > 2000.0f,
+          "a visible-overflow box passes its wide content up to its ancestor");
+}
+
+static void testNaturalWidthAbsoluteCells() {
+    printf("--- naturalWidth: absolutely positioned cells in a relative spacer ---\n");
+    // The virtual-list shape: a relative spacer sized to the whole content,
+    // and absolutely positioned cells placed inside it.
+    HitMockNode root; initBlock(root, "div");
+    root.style["width"] = "800px";
+
+    ScrollMockNode scroller; initBlock(scroller, "div");
+    scroller.style["width"] = "300px"; scroller.style["height"] = "100px";
+    scroller.style["overflow"] = "auto";
+
+    HitMockNode spacer; initBlock(spacer, "div");
+    spacer.style["position"] = "relative";
+    spacer.style["width"] = "1000px"; spacer.style["height"] = "50px";
+
+    HitMockNode cellA; initBlock(cellA, "div");
+    cellA.style["position"] = "absolute";
+    cellA.style["left"] = "500px"; cellA.style["top"] = "0px";
+    cellA.style["width"] = "100px"; cellA.style["height"] = "50px";
+
+    // A cell past the spacer's end still counts: its containing block (the
+    // spacer) is inside the scroller.
+    HitMockNode cellB; initBlock(cellB, "div");
+    cellB.style["position"] = "absolute";
+    cellB.style["left"] = "1900px"; cellB.style["top"] = "0px";
+    cellB.style["width"] = "100px"; cellB.style["height"] = "50px";
+
+    // A fixed box is placed against the viewport, not the scroller's content.
+    HitMockNode pinned; initBlock(pinned, "div");
+    pinned.style["position"] = "fixed";
+    pinned.style["left"] = "5000px"; pinned.style["top"] = "0px";
+    pinned.style["width"] = "10px"; pinned.style["height"] = "10px";
+
+    spacer.addChild(&cellA);
+    spacer.addChild(&cellB);
+    scroller.addChild(&spacer);
+    scroller.addChild(&pinned);
+    root.addChild(&scroller);
+
+    HitTextMetrics m;
+    layoutTree(&root, 800, m);
+    check(std::abs(scroller.box.naturalWidth - 2000.0f) < 0.5f,
+          "the scroller's extent covers the abspos cell past the spacer, not the fixed box");
+
+    // Scrolled by 500, the cell at 500 sits at the scroller's left edge, and
+    // hit testing maps the point through the scroll offset.
+    scroller.scrollLeft = 500.0f;
+    layoutTree(&root, 800, m);
+    check(hitTest(&root, 50, 25) == &cellA, "scrollLeft 500 brings the 500px cell under x=50");
+    check(hitTest(&root, 150, 25) == &spacer, "and the spacer past it");
+
+    // The scroller itself positioned: the cells' containing block is the
+    // scroller, which absorbs them directly.
+    scroller.scrollLeft = 0.0f;
+    scroller.style["position"] = "relative";
+    spacer.style["position"] = "static";
+    markSubtreeDirty(&root);
+    layoutTree(&root, 800, m);
+    check(std::abs(scroller.box.naturalWidth - 2000.0f) < 0.5f,
+          "cells positioned against the scroller itself count too");
+}
+
 static void testHitNull() {
     printf("--- HitTest: null ---\n");
     check(hitTest(nullptr, 50, 50) == nullptr, "null root returns null");
@@ -438,5 +549,7 @@ void testHitTest() {
     testHitFixedStaysPutWhenViewportScrolls();
     testHitSubtree();
     testHitBlockInInlineRegrow();
+    testNaturalWidthWideChild();
+    testNaturalWidthAbsoluteCells();
     testHitNull();
 }

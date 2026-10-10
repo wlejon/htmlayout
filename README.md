@@ -247,6 +247,9 @@ applyOverflowClipping(rootNode);
 // box.contentRect  — {x, y, width, height}
 // box.margin, box.padding, box.border — edge sizes
 // box.naturalHeight — pre-clamp content height (scroll extent)
+// box.naturalWidth  — how far content reaches right of the content box:
+//                     in-flow margin boxes, unclipped descendants and abspos
+//                     boxes whose containing block is inside (scroll extent)
 // box.textTruncated — true if text-overflow:ellipsis truncated this node, or
 //                     line-clamp cut lines off this block container
 // box.clampHidden   — past a line-clamp container's clamp point: laid out, but

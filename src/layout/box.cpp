@@ -340,10 +340,6 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     // The same union for scrollBounds, less the unabsorbed fixed boxes.
     float sMinX = minX, sMinY = minY, sMaxX = maxX, sMaxY = maxY;
 
-    // Children live in this node's content space, shifted by its scroll offset —
-    // the exact mapping hitTestRecursive uses (childOffset = absX - scroll).
-    float childOffX = node->box.contentRect.x - node->scrollLeftPx();
-    float childOffY = node->box.contentRect.y - node->scrollTopPx();
     bool clips = clipsHitTesting(node);
     // Which escaping descendants stop here: this node is the containing block
     // an absolutely positioned box was looking for if it is positioned at all
@@ -352,8 +348,23 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     const bool absorbsFixed = establishesFixedContainingBlock(node);
     const bool absorbsAbs = absorbsFixed || isPositionedNode(node);
 
-    Rect escAbs{0.0f, 0.0f, -1.0f, -1.0f};      // still travelling up, in our space
+    // Everything the children contribute is gathered in this node's own content
+    // space first (unscrolled), and lifted into the parent's space once at the
+    // end. Lifting is a pure translation, so the union is the same either way —
+    // but this node's own scrollable extent (naturalWidth) has to be known
+    // before its scroll offset can be clamped against it, and scrollLeftPx()
+    // clamps against naturalWidth.
+    Rect growAcc{0.0f, 0.0f, -1.0f, -1.0f};     // hitBounds contribution
+    Rect scrollAcc{0.0f, 0.0f, -1.0f, -1.0f};   // scrollBounds contribution
+    Rect escAbs{0.0f, 0.0f, -1.0f, -1.0f};      // still travelling up
     Rect escFixed{0.0f, 0.0f, -1.0f, -1.0f};
+    // This node's own scrollable overflow: how far right its content reaches.
+    float contentRight = 0.0f;
+    auto reachRight = [&contentRight](const Rect& r) {
+        if (r.width < 0.0f) return;
+        contentRight = std::max(contentRight, r.x + r.width);
+    };
+    auto nonEmpty = [](const Rect& r) { return r.width > 0 || r.height > 0; };
 
     for (auto* child : node->children()) {
         Rect cb = computeSubtreeHitBounds(child);   // in our content space
@@ -373,41 +384,59 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
         if (absorbsAbs)   { unionInto(absorbed, childAbs);   childAbs = {0, 0, -1, -1}; }
         if (absorbsFixed) { unionInto(absorbed, childFixed); childFixed = {0, 0, -1, -1}; }
 
-        auto lift = [&](const Rect& r) { return shifted(r, childOffX, childOffY); };
-        auto grow = [&](const Rect& r) {
-            if (r.width < 0.0f) return;
-            minX = std::min(minX, r.x);           minY = std::min(minY, r.y);
-            maxX = std::max(maxX, r.x + r.width); maxY = std::max(maxY, r.y + r.height);
-        };
-        auto growScroll = [&](const Rect& r) {
-            if (r.width < 0.0f) return;
-            sMinX = std::min(sMinX, r.x);           sMinY = std::min(sMinY, r.y);
-            sMaxX = std::max(sMaxX, r.x + r.width); sMaxY = std::max(sMaxY, r.y + r.height);
-        };
+        // A fixed child still looking for its containing block is not
+        // document content; anything else scrolls with the document.
+        const Rect& cs = child->box.scrollBounds;
+        const bool fixedEscaping = cpos == "fixed" && !absorbsFixed;
+        const bool outOfFlow = cpos == "absolute" || cpos == "fixed";
 
         // Whatever this node clips never enlarges it (descendants still carry
         // their own hitBounds for pruning once the point is known to be inside).
         if (!clips) {
-            if (cb.width > 0 || cb.height > 0) grow(lift(cb));
-            grow(lift(absorbed));
-            // A fixed child still looking for its containing block is not
-            // document content; anything else scrolls with the document.
-            const Rect& cs = child->box.scrollBounds;
-            const bool fixedEscaping = cpos == "fixed" && !absorbsFixed;
-            if (!fixedEscaping && (cs.width > 0 || cs.height > 0)) growScroll(lift(cs));
-            growScroll(lift(absorbed));
+            if (nonEmpty(cb)) unionInto(growAcc, cb);
+            unionInto(growAcc, absorbed);
+            if (!fixedEscaping && nonEmpty(cs)) unionInto(scrollAcc, cs);
+            unionInto(scrollAcc, absorbed);
         }
         // What escapes does enlarge it, clip or no clip — that is the whole
         // point, and the prune above consults exactly this rect.
-        grow(lift(childAbs));
-        grow(lift(childFixed));
-        growScroll(lift(childAbs));
-        unionInto(escAbs, lift(childAbs));
-        unionInto(escFixed, lift(childFixed));
+        unionInto(growAcc, childAbs);
+        unionInto(growAcc, childFixed);
+        unionInto(scrollAcc, childAbs);
+        unionInto(escAbs, childAbs);
+        unionInto(escFixed, childFixed);
+
+        // Scrollable overflow of this node, clip or no clip (it is what a clip
+        // scrolls through): the child's own scrollable overflow and anything
+        // positioned against this node, plus an in-flow child's margin box.
+        // (A display:none child's bounds come back empty; only its stale
+        // margin box needs keeping out.)
+        if (!fixedEscaping && nonEmpty(cs)) reachRight(cs);
+        reachRight(absorbed);
+        if (!outOfFlow && !child->isTextNode() && styleVal(child, Prop::Display) != "none")
+            reachRight(child->box.marginBox());
     }
 
-    node->escapeAbsBounds = escAbs;
-    node->escapeFixedBounds = escFixed;
+    node->box.naturalWidth = std::max(node->box.contentRect.width, contentRight);
+
+    // Children live in this node's content space, shifted by its scroll offset —
+    // the exact mapping hitTestRecursive uses (childOffset = absX - scroll).
+    const float childOffX = node->box.contentRect.x - node->scrollLeftPx();
+    const float childOffY = node->box.contentRect.y - node->scrollTopPx();
+    auto lift = [&](const Rect& r) { return shifted(r, childOffX, childOffY); };
+    if (growAcc.width >= 0.0f) {
+        const Rect g = lift(growAcc);
+        minX = std::min(minX, g.x);           minY = std::min(minY, g.y);
+        maxX = std::max(maxX, g.x + g.width); maxY = std::max(maxY, g.y + g.height);
+    }
+    if (scrollAcc.width >= 0.0f) {
+        const Rect s = lift(scrollAcc);
+        sMinX = std::min(sMinX, s.x);           sMinY = std::min(sMinY, s.y);
+        sMaxX = std::max(sMaxX, s.x + s.width); sMaxY = std::max(sMaxY, s.y + s.height);
+    }
+
+    node->escapeAbsBounds = lift(escAbs);
+    node->escapeFixedBounds = lift(escFixed);
 
     Rect bounds{minX, minY, maxX - minX, maxY - minY};
     Rect scrollBounds{sMinX, sMinY, sMaxX - sMinX, sMaxY - sMinY};
