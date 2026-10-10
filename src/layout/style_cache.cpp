@@ -56,12 +56,28 @@ static const std::string* layoutDisplay(const std::string* v) {
 }
 
 const std::string& styleValLive(const LayoutNode* node, Prop p) {
+    // A dirty node is one this pass is going to lay out, so beginLayoutNode()
+    // is going to project its style anyway: project it now, at the first read,
+    // and serve this read and the rest from the array. Where that matters is a
+    // subtree laid out for the first time — a flex container reads flex-grow,
+    // flex-basis, margins and min sizes off every item before it lays the item
+    // out, and a fresh row of five columns paid ~40 hashed reads an element for
+    // it. A clean node is only glanced at (the reasoning in style_cache.h) and
+    // stays on the live map. Text nodes are never laid out on their own and
+    // keep their dirty flag, so they are left out.
+    if (g_passActive && node->box.dirty && !node->isTextNode()) {
+        buildStyleCache(node);
+        return *node->styleCache->slot[size_t(p)];
+    }
     const std::string& v = styleVal(node->computedStyle(), kPropNames[size_t(p)]);
     return p == Prop::Display ? *layoutDisplay(&v) : v;
 }
 
 void buildStyleCache(const LayoutNode* node) {
     if (!g_passActive) return;  // nothing outside a pass may trust a cache anyway
+    // Already projected this pass (a first read of a dirty node got here before
+    // beginLayoutNode did): a style cannot change while a pass runs.
+    if (node->styleCachePass == currentLayoutPass() && node->styleCache) return;
 
     auto& cache = node->styleCache;
     if (!cache) cache = std::make_unique<NodeStyleCache>();
