@@ -99,6 +99,16 @@ struct ElementRef {
     virtual bool computedStyleValue(std::string_view /*property*/, std::string& /*out*/) const {
         return false;
     }
+
+    // Every attribute the element carries, name and value (the `style`
+    // attribute need not be included: the cascade takes inline style as its
+    // own argument). The cascade reads a few attributes as style input (the
+    // SVG presentation attributes, a table cell's colspan); enumerating the
+    // two or three an element actually has is far cheaper than asking for
+    // each of the thirty-odd names it would otherwise probe. Return false when
+    // the consumer cannot enumerate, and the cascade asks per name instead.
+    using AttributeVisitor = void (*)(void* ctx, std::string_view name, std::string_view value);
+    virtual bool forEachAttribute(AttributeVisitor /*fn*/, void* /*ctx*/) const { return false; }
 };
 
 // ---- Internal selector representation ----

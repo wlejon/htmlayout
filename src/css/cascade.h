@@ -158,6 +158,46 @@ public:
                           const ComputedStyle* parentStyle = nullptr,
                           bool startingStyle = false) const;
 
+    // resolve() in its two halves, for a consumer that caches styles.
+    //
+    // matchRules() is the selector half: the rules `elem` matches, as indices
+    // in source order (the same order resolve() applies them in), container
+    // queries and scope included. Everything a selector can observe (the
+    // element's tag, id, classes, attributes, state, position, ancestors,
+    // siblings) is decided here, so its output is the whole of what the
+    // stylesheet says about the element.
+    //
+    // resolveMatched() is the value half: the computed style those rules give
+    // with this inline style under this parent. Its result depends on nothing
+    // else about the element EXCEPT the attributes the cascade reads as style
+    // input (SVG presentation attributes, table span attributes), which
+    // readsElementAttributes() reports. So two elements with equal rule lists,
+    // equal inline style, parents whose inherited values are equal, and no
+    // such attributes get equal computed styles: that is the contract a style
+    // sharing cache keys on. The indices stay valid until the next
+    // addStylesheet() or clear().
+    void matchRules(const ElementRef& elem, const ComputedStyle* parentStyle,
+                    bool startingStyle, std::vector<uint32_t>& out) const;
+    ComputedStyle resolveMatched(const ElementRef& elem, const std::vector<uint32_t>& rules,
+                                 const std::string& inlineStyle,
+                                 const ComputedStyle* parentStyle) const;
+    // Does resolveMatched() read any of this element's attributes (it carries
+    // an SVG presentation attribute, or is a table cell/column, whose span
+    // attributes surface as style)?
+    bool readsElementAttributes(const ElementRef& elem) const;
+
+    // What resolveMatched() reads of the PARENT style: the properties this
+    // names (the inherited ones, the internal font-size keyword, `display` for
+    // blockification) and the custom properties the parent hands down
+    // (varsForChildren()) — but only while the sheet forces no `inherit` onto
+    // a non-inherited property (usesForcedInherit()); then any parent property
+    // may be read.
+    static bool parentPropertyIsRead(std::string_view name);
+
+    // Bumped by every addStylesheet() and clear(): a style cached under one
+    // generation (or a rule list from matchRules()) is stale under another.
+    uint64_t generation() const { return generation_; }
+
     // True if any added rule came from an @starting-style block, so a
     // consumer can skip the starting-style resolve on pages with none.
     bool usesStartingStyle() const { return usesStartingStyle_; }
@@ -307,6 +347,10 @@ private:
         Selector pseudoSelector;
         bool declaresContent = false;
     };
+    // Does `rule` (its scope, and its selector) match `elem`? Starting-style
+    // and container-query gates are the caller's.
+    bool ruleMatchesElement(const ScopedRule& rule, const ElementRef& elem) const;
+
     // Does this simple selector (or anything nested in its :not()/:is()/
     // :where()/:has()/:host() args) use the :hover pseudo-class?
     static bool simpleMentionsHover(const SimpleSelector& s) {
@@ -555,6 +599,7 @@ private:
     bool hoverDescUniversal_ = false;      // a hover-descendant subject requires no name
     bool hoverSiblings_ = false;           // a :hover reaches its subject through + or ~
     size_t nextOrder_ = 0;
+    uint64_t generation_ = 0;
     bool usesHover_ = false;  // any rule uses :hover (set in classifyLastRule)
     bool usesContainers_ = false; // any @container rule added
     bool usesStartingStyle_ = false; // any @starting-style rule added

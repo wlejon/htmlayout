@@ -227,6 +227,7 @@ void Cascade::setImportResolver(BasedImportResolver resolver) {
 
 void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
                              const MediaContext* media, Origin origin) {
+    ++generation_;
     // Process @import rules first (imported rules precede this sheet in source order)
     if (importResolver_) {
         for (auto& imp : sheet.imports) {
@@ -507,110 +508,129 @@ static bool cascadesBefore(const M& a, const M& b) {
     return a.order < b.order;
 }
 
+namespace {
+
+// The attributes the cascade reads as style input. SVG presentation attributes
+// (fill="red", stroke-width="2", ...) are the lowest-priority style source;
+// their names are their CSS property names.
+constexpr std::string_view kSvgPresAttrs[] = {
+    "fill", "fill-opacity", "fill-rule",
+    "stroke", "stroke-opacity", "stroke-width",
+    "stroke-linecap", "stroke-linejoin", "stroke-miterlimit",
+    "stroke-dasharray", "stroke-dashoffset",
+    "clip-rule", "clip-path", "paint-order", "color", "opacity",
+    "stop-color", "stop-opacity",
+    "font-family", "font-size", "font-weight", "font-style",
+    "text-anchor", "dominant-baseline", "alignment-baseline",
+    "baseline-shift",
+    "marker-start", "marker-mid", "marker-end",
+};
+// `direction` and `unicode-bidi` are presentation attributes only on SVG text
+// content elements. Unlike the names above they collide with nothing in HTML
+// *because* HTML spells the same idea `dir` — so seeding them unconditionally
+// would invent a `<div direction="rtl">` that no browser honours.
+constexpr std::string_view kSvgTextPresAttrs[] = {"direction", "unicode-bidi"};
+constexpr std::string_view kSvgTextTags[] = {"text", "tspan", "textpath", "tref", "altglyph"};
+
+bool equalsLowerAscii(std::string_view s, std::string_view lower) {
+    if (s.size() != lower.size()) return false;
+    for (size_t i = 0; i < s.size(); i++)
+        if (std::tolower(static_cast<unsigned char>(s[i])) != lower[i]) return false;
+    return true;
+}
+
+bool isSvgTextTag(std::string_view tag) {
+    for (std::string_view t : kSvgTextTags)
+        if (equalsLowerAscii(tag, t)) return true;
+    return false;
+}
+
+bool isPresAttr(std::string_view name, bool svgText) {
+    for (std::string_view a : kSvgPresAttrs)
+        if (a == name) return true;
+    if (svgText)
+        for (std::string_view a : kSvgTextPresAttrs)
+            if (a == name) return true;
+    return false;
+}
+
+bool isTableSpanTag(std::string_view tag) {
+    return equalsLowerAscii(tag, "td") || equalsLowerAscii(tag, "th") ||
+           equalsLowerAscii(tag, "col") || equalsLowerAscii(tag, "colgroup");
+}
+
+// The element's presentation attributes, name and value, in kSvgPresAttrs
+// order (then the SVG text ones) — the order the per-name probe produced, so
+// the cascade sees them exactly as before whichever way they were found.
+void collectPresentationAttrs(const ElementRef& elem,
+                              std::vector<std::pair<std::string_view, std::string_view>>& out) {
+    const bool svgText = isSvgTextTag(elem.tagName());
+    struct Ctx { std::vector<std::pair<std::string_view, std::string_view>>* out; bool svgText; };
+    Ctx ctx{&out, svgText};
+    const bool enumerated = elem.forEachAttribute(
+        [](void* c, std::string_view name, std::string_view value) {
+            auto* x = static_cast<Ctx*>(c);
+            if (!value.empty() && isPresAttr(name, x->svgText)) x->out->push_back({name, value});
+        },
+        &ctx);
+    if (enumerated) {
+        if (out.size() > 1) {
+            auto rank = [](std::string_view n) {
+                size_t i = 0;
+                for (std::string_view a : kSvgPresAttrs) { if (a == n) return i; ++i; }
+                for (std::string_view a : kSvgTextPresAttrs) { if (a == n) return i; ++i; }
+                return i;
+            };
+            std::sort(out.begin(), out.end(),
+                      [&](const auto& a, const auto& b) { return rank(a.first) < rank(b.first); });
+        }
+        return;
+    }
+    for (std::string_view attr : kSvgPresAttrs) {
+        std::string_view v = elem.getAttribute(attr);
+        if (!v.empty()) out.push_back({attr, v});
+    }
+    if (svgText) {
+        for (std::string_view attr : kSvgTextPresAttrs) {
+            std::string_view v = elem.getAttribute(attr);
+            if (!v.empty()) out.push_back({attr, v});
+        }
+    }
+}
+
+} // namespace
+
+bool Cascade::readsElementAttributes(const ElementRef& elem) const {
+    if (isTableSpanTag(elem.tagName())) return true;
+    std::vector<std::pair<std::string_view, std::string_view>> pres;
+    collectPresentationAttrs(elem, pres);
+    return !pres.empty();
+}
+
+bool Cascade::parentPropertyIsRead(std::string_view name) {
+    return name == "display" || name == "-hl-font-size-keyword" || isInherited(name);
+}
+
 ComputedStyle Cascade::resolve(const ElementRef& elem,
                                 const std::string& inlineStyle,
                                 const ComputedStyle* parentStyle,
                                 bool startingStyle) const {
-    // 1. Collect all matching rules whose scope matches the element's scope.
-    //    Use pointers to avoid copying property/value strings from Declaration objects.
-    struct MatchedDecl {
-        const std::string* property;
-        const std::string* value;
-        bool important;
-        uint32_t specificity;
-        size_t order;
-        bool isInline;  // inline style has highest author specificity
-        int layerOrder;  // -1 = unlayered, >=0 = layer index
-        Origin origin;
-    };
+    std::vector<uint32_t> rules;
+    matchRules(elem, parentStyle, startingStyle, rules);
+    return resolveMatched(elem, rules, inlineStyle, parentStyle);
+}
 
-    std::vector<MatchedDecl> matched;
-
-    // 0. SVG presentation attributes (fill="red", stroke-width="2", ...) are the
-    //    lowest-priority style source: they beat inheritance (they enter the
-    //    cascade as a real declaration) but lose to any author rule or inline
-    //    style. Seed them at specificity 0 and push them FIRST so stable_sort
-    //    keeps them earliest among equal-specificity declarations (a universal
-    //    author rule still wins). Attribute names match their CSS property names
-    //    1:1. presDecls must outlive the apply pass — MatchedDecl holds pointers.
-    std::vector<Declaration> presDecls;
-    {
-        static const char* const kSvgPresAttrs[] = {
-            "fill", "fill-opacity", "fill-rule",
-            "stroke", "stroke-opacity", "stroke-width",
-            "stroke-linecap", "stroke-linejoin", "stroke-miterlimit",
-            "stroke-dasharray", "stroke-dashoffset",
-            "clip-rule", "clip-path", "paint-order", "color", "opacity",
-            "stop-color", "stop-opacity",
-            "font-family", "font-size", "font-weight", "font-style",
-            "text-anchor", "dominant-baseline", "alignment-baseline",
-            "baseline-shift",
-            "marker-start", "marker-mid", "marker-end",
-        };
-        static const char* const kSvgTextPresAttrs[] = {
-            "direction", "unicode-bidi",
-        };
-        // `direction` and `unicode-bidi` are presentation attributes only on
-        // SVG text content elements. Unlike the names above they collide with
-        // nothing in HTML *because* HTML spells the same idea `dir` — so
-        // seeding them unconditionally would invent a `<div direction="rtl">`
-        // that no browser honours. Gate them on the tags that can carry them.
-        static const char* const kSvgTextTags[] = {
-            "text", "tspan", "textpath", "tref", "altglyph",
-        };
-        bool isSvgTextTag = false;
-        {
-            std::string_view tag = elem.tagName();
-            for (const char* t : kSvgTextTags) {
-                if (tag.size() == std::string_view(t).size() &&
-                    std::equal(tag.begin(), tag.end(), t,
-                               [](char a, char b) {
-                                   return std::tolower(static_cast<unsigned char>(a)) ==
-                                          std::tolower(static_cast<unsigned char>(b));
-                               })) {
-                    isSvgTextTag = true;
-                    break;
-                }
-            }
-        }
-
-        for (const char* attr : kSvgPresAttrs) {
-            std::string_view v = elem.getAttribute(attr);
-            if (v.empty()) continue;
-            std::string value(v);
-            // SVG lengths are unitless user units (= px). font-size is resolved
-            // as a CSS <length>, where a bare number is invalid-at-computed-
-            // value-time and would reset to `medium`; append px so e.g.
-            // font-size="34" computes to 34px like Chromium.
-            if (std::string_view(attr) == "font-size") {
-                const char* b = value.c_str();
-                char* e = nullptr;
-                std::strtod(b, &e);
-                if (e != b && *e == '\0') value += "px";
-            }
-            presDecls.push_back({std::string(attr), std::move(value), false});
-        }
-        if (isSvgTextTag) {
-            for (const char* attr : kSvgTextPresAttrs) {
-                std::string_view v = elem.getAttribute(attr);
-                if (v.empty()) continue;
-                presDecls.push_back({std::string(attr), std::string(v), false});
-            }
-        }
-        for (auto& decl : presDecls) {
-            matched.push_back({
-                &decl.property, &decl.value, /*important=*/false,
-                /*specificity=*/0, /*order=*/0, /*isInline=*/false,
-                /*layerOrder=*/-1, Origin::Author
-            });
-        }
-    }
-
-    // 1a. Candidate rules: everything in the buckets this element's id, classes
-    //     and tag name can reach, plus the rules that require no name at all.
-    //     Sorted back into source order so `matched` is built exactly as a scan
-    //     of every rule would have built it — the stable_sort below leans on it.
-    std::vector<size_t> candidates = universalRules_;
+void Cascade::matchRules(const ElementRef& elem, const ComputedStyle* parentStyle,
+                         bool startingStyle, std::vector<uint32_t>& out) const {
+    out.clear();
+    // Candidate rules: everything in the buckets this element's id, classes
+    // and tag name can reach, plus the rules that require no name at all.
+    // Sorted back into source order so the matched list is exactly what a
+    // scan of every rule would have built — resolveMatched()'s stable_sort
+    // leans on it.
+    std::vector<size_t> candidates;
+    candidates.reserve(universalRules_.size() + 32);
+    candidates.assign(universalRules_.begin(), universalRules_.end());
     auto addBucket = [&](const RuleBuckets& buckets, std::string_view key) {
         if (key.empty() || buckets.empty()) return;
         auto it = buckets.find(key);
@@ -630,8 +650,10 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             pos = end;
         }
     }
-    addBucket(tagRules_, toLowerKey(elem.tagName()));
+    if (!tagRules_.empty()) addBucket(tagRules_, toLowerKey(elem.tagName()));
     std::sort(candidates.begin(), candidates.end());
+    // A class listed twice (`class="a a"`) reaches its bucket twice.
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
 
     for (size_t ruleIdx : candidates) {
         const auto& rule = rules_[ruleIdx];
@@ -641,91 +663,129 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
             !containerQueriesHold(elem, rule.containerQueries, /*fromSelf=*/false, parentStyle)) {
             continue;
         }
+        if (ruleMatchesElement(rule, elem)) out.push_back(static_cast<uint32_t>(ruleIdx));
+    }
+}
 
-        // Use pre-classified selector type flags (set at insertion time)
-        bool isHostSelector = rule.isHostSelector;
-        bool isSlottedSelector = rule.isSlottedSelector;
-        bool isPartSelector = rule.isPartSelector;
-
-        if (isHostSelector) {
-            // :host rules are scoped to a shadow root. They match the host element
-            // whose shadowRoot() equals the rule's scope.
-            if (rule.scope == nullptr) continue;  // :host must be in a shadow stylesheet
-            // Simple :host (no descendants): elem IS the host
-            // :host with descendants (e.g. :host([attr]) .child): elem is inside the shadow tree
-            bool hasDescendant = rule.selector.chain.entries.size() > 1;
-            if (hasDescendant) {
-                if (elem.scope() != rule.scope) continue;
-            } else {
-                if (elem.shadowRoot() != rule.scope) continue;
-            }
-        } else if (isSlottedSelector) {
-            // ::slotted rules are in the shadow scope. They match light DOM children
-            // that are distributed into a slot inside that shadow tree.
-            if (rule.scope == nullptr) continue;
-            // The element must be slotted into this shadow tree
-            auto* slot = elem.assignedSlot();
-            if (!slot) continue;
-            if (slot->scope() != rule.scope) continue;
-        } else if (isPartSelector) {
-            // ::part rules are in the outer scope. They target elements inside a shadow tree
-            // by their part name. The rule scope should be the outer scope (document or parent shadow).
-            // The element must be inside a shadow tree and expose a part name.
-            if (elem.scope() == nullptr) continue;  // element must be in a shadow scope
-            if (rule.scope != nullptr) continue;     // ::part rules come from outer/document scope
-            // Check part name match
-            std::string_view partName = elem.partName();
-            if (partName.empty()) continue;
+bool Cascade::ruleMatchesElement(const ScopedRule& rule, const ElementRef& elem) const {
+    if (rule.isHostSelector) {
+        // :host rules are scoped to a shadow root. They match the host element
+        // whose shadowRoot() equals the rule's scope.
+        if (rule.scope == nullptr) return false;  // :host must be in a shadow stylesheet
+        // Simple :host (no descendants): elem IS the host
+        // :host with descendants (e.g. :host([attr]) .child): elem is inside the shadow tree
+        bool hasDescendant = rule.selector.chain.entries.size() > 1;
+        if (hasDescendant) {
+            if (elem.scope() != rule.scope) return false;
         } else {
-            // Scope check: null-scope rules (UA defaults) apply everywhere;
-            // non-null-scope rules only match elements in their shadow root
-            if (rule.scope != nullptr && rule.scope != elem.scope()) continue;
+            if (elem.shadowRoot() != rule.scope) return false;
         }
-
-        // For :host selectors, match directly (the :host pseudo-class handles the logic)
-        if (isHostSelector) {
-            if (!rule.selector.matches(elem)) continue;
-        } else if (isSlottedSelector) {
-            // Match the ::slotted() argument against the element
-            bool slottedMatch = true;
-            for (auto& s : rule.selector.chain.entries[0].compound.simples) {
-                if (s.type == SimpleSelectorType::PseudoElement && s.value == "slotted") {
-                    // Match the slotted argument selectors
-                    for (auto& inner : s.slottedArg) {
-                        if (!matchSimple(inner, elem)) { slottedMatch = false; break; }
-                    }
-                    break;
-                }
+        // The :host pseudo-class handles the rest.
+        return rule.selector.matches(elem);
+    }
+    if (rule.isSlottedSelector) {
+        // ::slotted rules are in the shadow scope. They match light DOM children
+        // that are distributed into a slot inside that shadow tree.
+        if (rule.scope == nullptr) return false;
+        auto* slot = elem.assignedSlot();
+        if (!slot || slot->scope() != rule.scope) return false;
+        // Match the ::slotted() argument against the element
+        for (auto& s : rule.selector.chain.entries[0].compound.simples) {
+            if (s.type == SimpleSelectorType::PseudoElement && s.value == "slotted") {
+                for (auto& inner : s.slottedArg)
+                    if (!matchSimple(inner, elem)) return false;
+                break;
             }
-            if (!slottedMatch) continue;
-        } else if (isPartSelector) {
-            // Match the ::part(name) against the element's part name
-            bool partMatch = false;
-            for (auto& s : rule.selector.chain.entries[0].compound.simples) {
-                if (s.type == SimpleSelectorType::PseudoElement && s.value == "part") {
-                    // Check if element's part name list contains the target part name
-                    std::string elemParts(elem.partName());
-                    std::istringstream iss(elemParts);
-                    std::string p;
-                    while (iss >> p) {
-                        if (p == s.partArg) { partMatch = true; break; }
-                    }
-                    break;
-                }
-            }
-            if (!partMatch) continue;
-
-            // Also match other selectors in the chain (e.g., "my-element::part(foo)")
-            if (rule.selector.chain.entries.size() > 1) {
-                // The ancestor part of the chain must match the host element
-                // For now, skip complex chains and just match
-            }
-        } else {
-            // Normal selector match
-            if (!rule.selector.matches(elem)) continue;
         }
+        return true;
+    }
+    if (rule.isPartSelector) {
+        // ::part rules are in the outer scope. They target elements inside a
+        // shadow tree by their part name.
+        if (elem.scope() == nullptr) return false;  // element must be in a shadow scope
+        if (rule.scope != nullptr) return false;     // ::part rules come from outer/document scope
+        std::string_view partName = elem.partName();
+        if (partName.empty()) return false;
+        // The element's part name list must contain the target part name.
+        // (The ancestor part of a chain, "my-element::part(foo)", is not
+        // matched against the host.)
+        for (auto& s : rule.selector.chain.entries[0].compound.simples) {
+            if (s.type == SimpleSelectorType::PseudoElement && s.value == "part") {
+                std::string elemParts(partName);
+                std::istringstream iss(elemParts);
+                std::string p;
+                while (iss >> p)
+                    if (p == s.partArg) return true;
+                return false;
+            }
+        }
+        return false;
+    }
+    // Scope check: null-scope rules (UA defaults) apply everywhere;
+    // non-null-scope rules only match elements in their shadow root
+    if (rule.scope != nullptr && rule.scope != elem.scope()) return false;
+    return rule.selector.matches(elem);
+}
 
-        // Add all declarations from this rule (by pointer, no string copies)
+ComputedStyle Cascade::resolveMatched(const ElementRef& elem, const std::vector<uint32_t>& rules,
+                                      const std::string& inlineStyle,
+                                      const ComputedStyle* parentStyle) const {
+    // 1. The matched declarations, by pointer: nothing is copied from the rules.
+    struct MatchedDecl {
+        const std::string* property;
+        const std::string* value;
+        bool important;
+        uint32_t specificity;
+        size_t order;
+        bool isInline;  // inline style has highest author specificity
+        int layerOrder;  // -1 = unlayered, >=0 = layer index
+        Origin origin;
+    };
+    std::vector<MatchedDecl> matched;
+    {
+        size_t n = 0;
+        for (uint32_t ruleIdx : rules) n += rules_[ruleIdx].declarations.size();
+        matched.reserve(n + 8);
+    }
+
+    // 0. SVG presentation attributes (fill="red", stroke-width="2", ...) are the
+    //    lowest-priority style source: they beat inheritance (they enter the
+    //    cascade as a real declaration) but lose to any author rule or inline
+    //    style. Seed them at specificity 0 and push them FIRST so stable_sort
+    //    keeps them earliest among equal-specificity declarations (a universal
+    //    author rule still wins). Attribute names match their CSS property names
+    //    1:1. presDecls must outlive the apply pass — MatchedDecl holds pointers.
+    std::vector<Declaration> presDecls;
+    {
+        std::vector<std::pair<std::string_view, std::string_view>> attrs;
+        collectPresentationAttrs(elem, attrs);
+        presDecls.reserve(attrs.size());
+        for (auto& [name, v] : attrs) {
+            std::string value(v);
+            // SVG lengths are unitless user units (= px). font-size is resolved
+            // as a CSS <length>, where a bare number is invalid-at-computed-
+            // value-time and would reset to `medium`; append px so e.g.
+            // font-size="34" computes to 34px like Chromium.
+            if (name == "font-size") {
+                const char* b = value.c_str();
+                char* e = nullptr;
+                std::strtod(b, &e);
+                if (e != b && *e == '\0') value += "px";
+            }
+            presDecls.push_back({std::string(name), std::move(value), false});
+        }
+        for (auto& decl : presDecls) {
+            matched.push_back({
+                &decl.property, &decl.value, /*important=*/false,
+                /*specificity=*/0, /*order=*/0, /*isInline=*/false,
+                /*layerOrder=*/-1, Origin::Author
+            });
+        }
+    }
+
+    // 1a. The matched rules' declarations, in source order.
+    for (uint32_t ruleIdx : rules) {
+        const auto& rule = rules_[ruleIdx];
         for (auto& decl : rule.declarations) {
             matched.push_back({
                 &decl.property, &decl.value, decl.important,
@@ -1211,6 +1271,7 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
 }
 
 void Cascade::clear() {
+    ++generation_;
     rules_.clear();
     keyframes_.clear();
     fontFaces_.clear();
