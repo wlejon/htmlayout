@@ -244,6 +244,10 @@ const std::vector<PropertyDef>& knownProperties() {
         {"mix-blend-mode",    "normal",     false},
         {"isolation",         "auto",       false},
         {"object-fit",        "fill",       false},
+        // CSS Images 3: how a scaled image is sampled, and whether a photo's
+        // EXIF orientation turns it upright. Both inherit.
+        {"image-rendering",   "auto",       true},
+        {"image-orientation", "from-image", true},
         {"object-position",   "50% 50%",    false},
         {"resize",            "none",       false},
         {"user-select",       "auto",       false},
