@@ -1,5 +1,6 @@
 #include "layout/text_geometry.h"
 #include "layout/box.h"
+#include "css/font_features.h"
 #include <algorithm>
 #include <cctype>
 #include <functional>
@@ -27,6 +28,7 @@ struct FontKey {
     std::string family = "sans-serif";
     float       size = 16;
     std::string weight = "400";
+    std::string_view features;   // css::internFontFeatures; process-lifetime
 };
 
 FontKey resolveFont(LayoutNode* textNode) {
@@ -34,6 +36,8 @@ FontKey resolveFont(LayoutNode* textNode) {
     if (!textNode) return fk;
     // Text nodes inherit their parent's computed style through the adapter.
     const auto& style = textNode->computedStyle();
+    fk.features = css::internFontFeatures(styleProp(style, "font-variant-numeric"),
+                                          styleProp(style, "font-feature-settings"));
     const std::string& fam = styleProp(style, "font-family");
     if (!fam.empty()) fk.family = fam;
     const std::string& sz = styleProp(style, "font-size");
@@ -87,6 +91,7 @@ int srcOffsetAtX(const PlacedTextRun& run, float x, TextMetrics& metrics,
     if (local >= run.width) return run.srcEnd;
     if (run.text.empty()) return run.srcStart;
 
+    FontFeatureScope features(metrics, fk.features);
     const int displayByte = metrics.offsetAtCaretX(run.text, local,
                                                    fk.family, fk.size, fk.weight);
     return displayToSrc(run, displayByte);
@@ -106,7 +111,8 @@ TextMetrics::CaretXPair caretsAtSrcOffset(const PlacedTextRun& run, int srcOffse
     if (run.text.empty() || run.srcEnd == run.srcStart) return out;
 
     const int displayByte = srcToDisplay(run, srcOffset);
-    TextMetrics::CaretXPair c = metrics.caretXAtOffset(run.text, displayByte,
+    FontFeatureScope features(metrics, fk.features);
+    TextMetrics::CaretXPair c =metrics.caretXAtOffset(run.text, displayByte,
                                                        fk.family, fk.size, fk.weight);
     c.primary.x += run.x;
     c.secondary.x += run.x;
@@ -428,6 +434,7 @@ std::vector<Rect> getSelectionRects(LayoutNode* root,
             // vanishes.
             const int dStart = srcToDisplay(shifted, clippedStart);
             const int dEnd   = srcToDisplay(shifted, clippedEnd);
+            FontFeatureScope features(metrics, fk.features);
             for (const auto& band : metrics.selectionBoxes(
                      shifted.text, std::min(dStart, dEnd), std::max(dStart, dEnd),
                      fk.family, fk.size, fk.weight)) {

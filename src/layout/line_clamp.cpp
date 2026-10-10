@@ -307,16 +307,20 @@ struct Font {
     const std::string* family;
     const std::string* weight;
     float size;
+    std::string_view features;
 };
 
 Font fontOf(LayoutNode* n) {
     float fs = resolveLength(styleVal(n, Prop::FontSize), 16.0f, 16.0f);
     if (fs <= 0.0f) fs = 16.0f;
-    return {&styleVal(n, Prop::FontFamily), &styleVal(n, Prop::FontWeight), fs};
+    return {&styleVal(n, Prop::FontFamily), &styleVal(n, Prop::FontWeight), fs,
+            fontFeaturesOf(n)};
 }
 
 float measure(TextMetrics& m, const std::string& s, const Font& f) {
-    return s.empty() ? 0.0f : m.measureWidth(s, *f.family, f.size, *f.weight);
+    if (s.empty()) return 0.0f;
+    FontFeatureScope features(m, f.features);
+    return m.measureWidth(s, *f.family, f.size, *f.weight);
 }
 
 // Put the ellipsis at the inline-end of the last kept line (css-overflow-4

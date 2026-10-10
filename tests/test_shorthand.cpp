@@ -3,6 +3,10 @@
 #include "css/parser.h"
 #include "css/cascade.h"
 #include "css/properties.h"
+#include "css/font_features.h"
+
+#include <cctype>
+#include <string>
 
 using namespace htmlayout::css;
 
@@ -188,16 +192,72 @@ static void testGap() {
 static void testFont() {
     printf("--- Shorthand: font ---\n");
     auto r = expandShorthand("font", "italic bold 16px/1.5 Arial, sans-serif");
-    check(r.size() == 5, "font -> 5 longhands");
+    check(r.size() == 6, "font -> 6 longhands");
     check(r[0].property == "font-style" && r[0].value == "italic", "font: style=italic");
     check(r[1].property == "font-weight" && r[1].value == "bold", "font: weight=bold");
     check(r[2].property == "font-size" && r[2].value == "16px", "font: size=16px");
     check(r[3].property == "line-height" && r[3].value == "1.5", "font: line-height=1.5");
     check(r[4].property == "font-family", "font: family property");
+    check(r[5].property == "font-variant-numeric" && r[5].value == "normal",
+          "font: resets font-variant-numeric");
 
     auto r2 = expandShorthand("font", "14px monospace");
     check(r2[2].value == "14px", "font simple: size=14px");
     check(r2[4].value == "monospace", "font simple: family=monospace");
+
+    // A CSS-wide keyword sets every longhand to itself — `font: inherit` is
+    // NOT a font-size of "inherit" over a default sans-serif family.
+    for (const char* kw : {"inherit", "initial", "unset", "INHERIT"}) {
+        auto rk = expandShorthand("font", kw);
+        std::string lower = kw;
+        for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        bool all = rk.size() == 6;
+        for (auto& d : rk) all = all && d.value == lower;
+        check(all, (std::string("font: ") + kw + " sets every longhand to the keyword").c_str());
+        bool hasFamily = false;
+        for (auto& d : rk) hasFamily = hasFamily || d.property == "font-family";
+        check(hasFamily, (std::string("font: ") + kw + " covers font-family").c_str());
+    }
+}
+
+static void testFontFeatures() {
+    printf("--- Font features: font-variant-numeric / font-feature-settings ---\n");
+    check(resolveFontFeatures("normal", "normal").empty(), "features: normal/normal -> none");
+    check(resolveFontFeatures("", "").empty(), "features: empty -> none");
+    check(internFontFeatures("normal", "normal").empty(), "features: interned normal -> none");
+    check(resolveFontFeatures("tabular-nums", "normal") == "tnum=1", "features: tabular-nums");
+    check(resolveFontFeatures("proportional-nums", "normal") == "pnum=1", "features: proportional-nums");
+    check(resolveFontFeatures("slashed-zero tabular-nums oldstyle-nums", "normal") ==
+          "onum=1,tnum=1,zero=1", "features: several groups, sorted by tag");
+    check(resolveFontFeatures("lining-nums diagonal-fractions", "") == "frac=1,lnum=1",
+          "features: lining + diagonal fractions");
+    check(resolveFontFeatures("tabular-nums proportional-nums", "").empty(),
+          "features: two values of one group is invalid");
+    check(resolveFontFeatures("tabular-nums bogus", "").empty(),
+          "features: an unknown keyword is invalid");
+    check(resolveFontFeatures("normal", "\"tnum\"") == "tnum=1", "settings: bare tag is on");
+    check(resolveFontFeatures("normal", "'tnum' on, \"ss01\" 2, \"liga\" off") ==
+          "liga=0,ss01=2,tnum=1", "settings: on / integer / off");
+    check(resolveFontFeatures("tabular-nums", "\"tnum\" 0") == "tnum=0",
+          "settings override font-variant-numeric");
+    check(resolveFontFeatures("normal", "\"tnu\"").empty(), "settings: 3-char tag is invalid");
+    check(resolveFontFeatures("normal", "tnum").empty(), "settings: unquoted tag is invalid");
+    check(resolveFontFeatures("normal", "\"tnum\" -1").empty(), "settings: negative is invalid");
+    check(resolveFontFeatures("normal", "\"tnum\",").empty(), "settings: trailing comma is invalid");
+    std::string_view a = internFontFeatures("tabular-nums", "normal");
+    std::string_view b = internFontFeatures("tabular-nums", "normal");
+    check(a == "tnum=1" && a.data() == b.data(), "features: interned view is stable");
+
+    // Both properties inherit.
+    Cascade cascade;
+    cascade.addStylesheet(parse(".p { font-variant-numeric: tabular-nums;"
+                                " font-feature-settings: \"zero\"; }"));
+    MockElement parent; parent.tag = "div"; parent.classes = "p";
+    MockElement child; child.tag = "span";
+    auto ps = cascade.resolve(parent);
+    auto cs = cascade.resolve(child, {}, &ps);
+    check(cs["font-variant-numeric"] == "tabular-nums", "font-variant-numeric inherits");
+    check(cs["font-feature-settings"] == "\"zero\"", "font-feature-settings inherits");
 }
 
 static void testListStyle() {
@@ -292,6 +352,7 @@ void testShorthand() {
     testFlexFlow();
     testGap();
     testFont();
+    testFontFeatures();
     testListStyle();
     testNotRecognized();
     testInCascade();

@@ -1,4 +1,5 @@
 #include "layout/style_cache.h"
+#include "css/font_features.h"
 #include "css/properties.h"
 #include "layout/style_util.h"
 #include <unordered_map>
@@ -85,6 +86,12 @@ void buildStyleCache(const LayoutNode* node) {
     disp = layoutDisplay(disp);
 
     node->styleCachePass = currentLayoutPass();
+}
+
+std::string_view fontFeaturesOf(const LayoutNode* node) {
+    if (!node) return {};
+    return css::internFontFeatures(styleVal(node, Prop::FontVariantNumeric),
+                                   styleVal(node, Prop::FontFeatureSettings));
 }
 
 } // namespace htmlayout::layout

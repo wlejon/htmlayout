@@ -217,6 +217,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
     if (fontSize <= 0) fontSize = 16.0f;
     const std::string& fontFamily = styleVal(node, Prop::FontFamily);
     const std::string& fontWeight = styleVal(node, Prop::FontWeight);
+    FontFeatureScope features(metrics, fontFeaturesOf(node));
     const std::string& whiteSpace = styleVal(node, Prop::WhiteSpace);
     const std::string& textAlign = styleVal(node, Prop::TextAlign);
     const std::string& lineHeightVal = styleVal(node, Prop::LineHeight);

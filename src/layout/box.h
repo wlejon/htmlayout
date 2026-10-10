@@ -424,6 +424,23 @@ struct TextMetrics {
     // thing layout asks anyone to do, so this is the number that explains a pass
     // whose cost the node counts alone do not.
     uint64_t measureCalls = 0;
+
+    // The OpenType features in effect for the width and caret queries that
+    // follow: font-variant-numeric + font-feature-settings in the canonical
+    // form of css::resolveFontFeatures ("tnum=1,zero=1"), empty for none.
+    //
+    // Context rather than a parameter of every query, because it is constant
+    // over everything layout measures for one box's text and the queries'
+    // signatures are what every consumer (and every test double) implements.
+    // Layout sets it with FontFeatureScope around measuring a box's text, from
+    // fontFeaturesOf(box); a consumer that shapes with features reads it, and
+    // one that does not can ignore it. A tabular run has to measure tabular,
+    // or text aligned by its measured width drifts from the glyphs painted.
+    // The view must stay valid while it is set (fontFeaturesOf's views are
+    // interned for the life of the process). Vertical metrics never depend on
+    // it.
+    std::string_view fontFeatures;
+
     virtual float measureWidth(std::string_view text,
                                 std::string_view fontFamily,
                                 float fontSize,
@@ -727,6 +744,26 @@ protected:
         return i;
     }
 };
+
+// Sets TextMetrics::fontFeatures for its lifetime and restores what was there,
+// so a nested box's text measures with its own features and its parent's
+// measurements after it see the parent's again.
+class FontFeatureScope {
+public:
+    FontFeatureScope(TextMetrics& m, std::string_view features)
+        : m_(m), prev_(m.fontFeatures) { m_.fontFeatures = features; }
+    ~FontFeatureScope() { m_.fontFeatures = prev_; }
+    FontFeatureScope(const FontFeatureScope&) = delete;
+    FontFeatureScope& operator=(const FontFeatureScope&) = delete;
+private:
+    TextMetrics& m_;
+    std::string_view prev_;
+};
+
+// The resolved OpenType features of a box's text (font-variant-numeric +
+// font-feature-settings, css::internFontFeatures): empty for none, and the
+// view lives for the process.
+std::string_view fontFeaturesOf(const LayoutNode* node);
 
 // Viewport dimensions for layout
 struct Viewport {

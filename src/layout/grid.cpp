@@ -744,6 +744,17 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             containerWidth = std::min(maxC, std::max(minC, containerWidth));
         }
     }
+    // min/max-width, which name the border box under box-sizing: border-box.
+    const bool borderBoxSizing = styleVal(node, Prop::BoxSizing) == "border-box";
+    {
+        auto toContent = [&](float v) {
+            return (borderBoxSizing && v >= 0) ? std::max(0.0f, v - paddingH - borderH) : v;
+        };
+        const float minW = toContent(resolveDim(styleVal(node, Prop::MinWidth), availableWidth, fontSize));
+        const float maxW = toContent(resolveDim(styleVal(node, Prop::MaxWidth), availableWidth, fontSize));
+        if (maxW >= 0 && containerWidth > maxW) containerWidth = maxW;
+        if (minW >= 0 && containerWidth < minW) containerWidth = minW;
+    }
     // A parent flex algorithm resolved this box's used width already; a
     // percentage `width` must not be taken again against that result.
     if (node->overrideContentWidth >= 0.0f)
@@ -1380,6 +1391,19 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         if (node->box.contentRect.height < 0) node->box.contentRect.height = 0;
     } else {
         node->box.contentRect.height = naturalH;
+    }
+    // min/max-height (border box under border-box sizing). A percentage
+    // against an indefinite containing block is 'none'/'auto', not 0.
+    {
+        auto clampVal = [&](const std::string& v) {
+            if (node->availableHeight <= 0.0f && !v.empty() && v.back() == '%') return -1.0f;
+            float r = resolveDim(v, node->availableHeight, fontSize);
+            return (borderBoxSizing && r >= 0) ? std::max(0.0f, r - paddingV - borderV) : r;
+        };
+        const float minH = clampVal(styleVal(node, Prop::MinHeight));
+        const float maxH = clampVal(styleVal(node, Prop::MaxHeight));
+        if (maxH >= 0 && node->box.contentRect.height > maxH) node->box.contentRect.height = maxH;
+        if (minH >= 0 && node->box.contentRect.height < minH) node->box.contentRect.height = minH;
     }
 
     node->box.naturalHeight = std::max(naturalH, node->box.contentRect.height);

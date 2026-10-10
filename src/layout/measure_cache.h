@@ -36,18 +36,18 @@ public:
                        float size, std::string_view weight) override {
         measureCalls++;
         layoutStatsMut().textMeasures++;
-        if (auto it = widths_.find(TextKeyRef{text, family, size, weight});
+        if (auto it = widths_.find(TextKeyRef{text, family, size, weight, fontFeatures});
             it != widths_.end())
             return it->second;
         layoutStatsMut().textShaped++;
-        float w = inner_.measureWidth(text, family, size, weight);
+        float w = inner().measureWidth(text, family, size, weight);
         // A document with unboundedly many distinct words still only has as many
         // as it has words, and the map dies with the pass — the cap is a backstop
         // against a pathological one, not an eviction policy. Past it, everything
         // still works, it just goes to the shaper.
         if (widths_.size() < kMaxWidths)
             widths_.emplace(TextKey{std::string(text), std::string(family), size,
-                                    std::string(weight)}, w);
+                                    std::string(weight), std::string(fontFeatures)}, w);
         return w;
     }
 
@@ -81,15 +81,15 @@ public:
     bool clusterAware() const override { return inner_.clusterAware(); }
     CaretXPair caretXAtOffset(std::string_view t, int off, std::string_view f,
                               float s, std::string_view w) override {
-        return inner_.caretXAtOffset(t, off, f, s, w);
+        return inner().caretXAtOffset(t, off, f, s, w);
     }
     int offsetAtCaretX(std::string_view t, float x, std::string_view f,
                        float s, std::string_view w) override {
-        return inner_.offsetAtCaretX(t, x, f, s, w);
+        return inner().offsetAtCaretX(t, x, f, s, w);
     }
     ClusterSpan clusterRangeAt(std::string_view t, int off, std::string_view f,
                                float s, std::string_view w) override {
-        return inner_.clusterRangeAt(t, off, f, s, w);
+        return inner().clusterRangeAt(t, off, f, s, w);
     }
     // Same reasoning, and the one this class originally forgot. advanceBetween
     // is asked for a slice of a shaping the consumer already has, so it can
@@ -100,7 +100,7 @@ public:
     float advanceBetween(std::string_view t, int startByte, int endByte,
                          std::string_view f, float s,
                          std::string_view w) override {
-        return inner_.advanceBetween(t, startByte, endByte, f, s, w);
+        return inner().advanceBetween(t, startByte, endByte, f, s, w);
     }
 
     // Bidi. Forwarded for the same reason as the caret queries — the base
@@ -128,7 +128,13 @@ public:
         }
     }
 
-    TextMetrics& inner() { return inner_; }
+    // The consumer, with this pass's font-feature context handed down: layout
+    // sets the context on the cache, and the widths it forwards must be shaped
+    // with it.
+    TextMetrics& inner() {
+        inner_.fontFeatures = fontFeatures;
+        return inner_;
+    }
 
 private:
     static constexpr size_t kMaxWidths = 1 << 16;
@@ -137,15 +143,19 @@ private:
     // Owning key and a non-owning probe of it. Heterogeneous lookup (is_transparent
     // below) is the whole point: a hit must not build a std::string out of a word
     // it already has a string_view of — that would trade shaping for allocating.
+    // Widths also depend on the font-feature context (TextMetrics::fontFeatures);
+    // the font-keyed vertical metrics below do not.
     struct TextKey {
         std::string text, family;
         float size;
         std::string weight;
+        std::string features;
     };
     struct TextKeyRef {
         std::string_view text, family;
         float size;
         std::string_view weight;
+        std::string_view features;
     };
     struct FontKey {
         std::string family;
@@ -169,27 +179,32 @@ private:
 
     struct TextHash {
         using is_transparent = void;
+        // No features (nearly every key) hashes exactly as before.
+        static size_t withFeatures(size_t h, std::string_view ft) {
+            return ft.empty() ? h : mix(h, std::hash<std::string_view>{}(ft));
+        }
         size_t operator()(const TextKey& k) const {
-            return hashOf(k.text, k.family, k.size, k.weight);
+            return withFeatures(hashOf(k.text, k.family, k.size, k.weight), k.features);
         }
         size_t operator()(const TextKeyRef& k) const {
-            return hashOf(k.text, k.family, k.size, k.weight);
+            return withFeatures(hashOf(k.text, k.family, k.size, k.weight), k.features);
         }
     };
     struct TextEq {
         using is_transparent = void;
         static bool eq(const TextKey& a, std::string_view t, std::string_view f,
-                       float s, std::string_view w) {
-            return a.size == s && a.text == t && a.family == f && a.weight == w;
+                       float s, std::string_view w, std::string_view ft) {
+            return a.size == s && a.text == t && a.family == f && a.weight == w &&
+                   a.features == ft;
         }
         bool operator()(const TextKey& a, const TextKey& b) const {
-            return eq(a, b.text, b.family, b.size, b.weight);
+            return eq(a, b.text, b.family, b.size, b.weight, b.features);
         }
         bool operator()(const TextKey& a, const TextKeyRef& b) const {
-            return eq(a, b.text, b.family, b.size, b.weight);
+            return eq(a, b.text, b.family, b.size, b.weight, b.features);
         }
         bool operator()(const TextKeyRef& a, const TextKey& b) const {
-            return eq(b, a.text, a.family, a.size, a.weight);
+            return eq(b, a.text, a.family, a.size, a.weight, a.features);
         }
     };
     struct FontHash {

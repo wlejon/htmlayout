@@ -79,6 +79,10 @@ const std::vector<PropertyDef>& knownProperties() {
         {"font-size",         "16px",      true},
         {"font-weight",       "normal",    true},
         {"font-style",        "normal",    true},
+        // OpenType feature selection (css/font_features.h resolves both into
+        // one feature list); measurement and paint shape with it.
+        {"font-variant-numeric",  "normal", true},
+        {"font-feature-settings", "normal", true},
         {"line-height",       "normal",    true},
         {"text-align",        "start",     true},
         {"text-indent",       "0",         true},
@@ -1274,6 +1278,19 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
 
     if (property == "font") {
         std::vector<ExpandedDecl> out;
+        // A CSS-wide keyword sets every longhand to itself (CSS Cascade 4
+        // §7.3) — `button { font: inherit }` inherits family, size, weight,
+        // style and line-height alike.
+        if (parts.size() == 1) {
+            std::string kw = asciiLower(parts[0]);
+            if (kw == "inherit" || kw == "initial" || kw == "unset" || kw == "revert" ||
+                kw == "revert-layer") {
+                for (const char* p : {"font-style", "font-weight", "font-size", "line-height",
+                                      "font-family", "font-variant-numeric"})
+                    out.push_back({p, kw});
+                return out;
+            }
+        }
         std::string fontStyle = "normal", fontWeight = "normal",
                     fontSize = "16px", lineHeight = "normal", fontFamily;
 
@@ -1304,6 +1321,9 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         out.push_back({"font-size", fontSize});
         out.push_back({"line-height", lineHeight});
         out.push_back({"font-family", fontFamily});
+        // The shorthand resets every font-variant-* longhand (CSS Fonts 4
+        // §2.8); font-feature-settings is not one of its subproperties.
+        out.push_back({"font-variant-numeric", "normal"});
         return out;
     }
 

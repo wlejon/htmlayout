@@ -106,6 +106,14 @@ enum class Origin { UserAgent, Author };
 // The consumer is responsible for file I/O, URL resolution, etc.
 using ImportResolver = std::function<std::string(const std::string& url)>;
 
+// Base-aware @import resolver: `baseUrl` is the importing sheet's
+// Stylesheet::baseUrl (empty for a sheet the consumer gave no base). Returns
+// the CSS text and sets `importedBaseUrl` to the base the imported sheet's
+// own relative URLs resolve against (its nested @imports, its @font-face
+// srcs).
+using BasedImportResolver = std::function<std::string(
+    const std::string& url, const std::string& baseUrl, std::string& importedBaseUrl)>;
+
 // A cascade context resolves which CSS rules apply to which elements.
 // It supports scoping for shadow DOM: rules in a shadow scope only match
 // elements in that same scope.
@@ -123,6 +131,10 @@ public:
     // When set, addStylesheet() will automatically resolve and inline imports.
     // Each URL is resolved at most once (cached by URL string).
     void setImportResolver(ImportResolver resolver);
+    // Same, resolving each @import against the importing sheet's base (so
+    // `@import "b.css"` inside /ui/css/a.css loads /ui/css/b.css). Replaces
+    // any resolver set before.
+    void setImportResolver(BasedImportResolver resolver);
 
     // Add a stylesheet to a given scope.
     // scope = nullptr means document-level (global).
@@ -553,7 +565,7 @@ private:
     std::unordered_set<std::string> ancestorClasses_;
 
     // @import resolution
-    ImportResolver importResolver_;
+    BasedImportResolver importResolver_;
     std::unordered_set<std::string> loadedImports_;
 
     // Layer ordering: layerNames_ maps a layer's index (declaration order,

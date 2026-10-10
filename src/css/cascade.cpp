@@ -216,6 +216,12 @@ bool Cascade::evaluateContainerQuery(const ElementRef& elem, const ContainerQuer
 }
 
 void Cascade::setImportResolver(ImportResolver resolver) {
+    if (!resolver) { importResolver_ = nullptr; return; }
+    importResolver_ = [r = std::move(resolver)](const std::string& url, const std::string&,
+                                                std::string&) { return r(url); };
+}
+
+void Cascade::setImportResolver(BasedImportResolver resolver) {
     importResolver_ = std::move(resolver);
 }
 
@@ -224,18 +230,24 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
     // Process @import rules first (imported rules precede this sheet in source order)
     if (importResolver_) {
         for (auto& imp : sheet.imports) {
-            if (loadedImports_.count(imp.url)) continue;
-            loadedImports_.insert(imp.url);
+            // The same relative URL from sheets in different directories
+            // names different files, so the base is part of the key.
+            std::string importKey = sheet.baseUrl.empty() ? imp.url
+                                                          : sheet.baseUrl + '\n' + imp.url;
+            if (loadedImports_.count(importKey)) continue;
+            loadedImports_.insert(std::move(importKey));
 
             // Check media condition on the import
             if (!imp.mediaCondition.empty() && media) {
                 if (!evaluateMediaQuery(imp.mediaCondition, *media)) continue;
             }
 
-            std::string css = importResolver_(imp.url);
+            std::string importedBase;
+            std::string css = importResolver_(imp.url, sheet.baseUrl, importedBase);
             if (css.empty()) continue;
 
             Stylesheet imported = parse(css);
+            imported.baseUrl = std::move(importedBase);
 
             // If import specifies a layer, wrap all imported rules in that
             // layer; a bare `layer` is an anonymous one, which the parser
@@ -273,6 +285,8 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
     // Store @font-face rules
     for (auto& ff : sheet.fontFaces) {
         fontFaces_.push_back(ff);
+        // src resolves against the declaring sheet, not the document.
+        if (fontFaces_.back().baseUrl.empty()) fontFaces_.back().baseUrl = sheet.baseUrl;
     }
 
     // Store @keyframes rules

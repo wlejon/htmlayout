@@ -61,7 +61,9 @@ namespace htmlayout::layout {
     X(FlexWrap,            "flex-wrap")             \
     X(Float,               "float")                 \
     X(FontFamily,          "font-family")           \
+    X(FontFeatureSettings, "font-feature-settings") \
     X(FontSize,            "font-size")             \
+    X(FontVariantNumeric,  "font-variant-numeric")  \
     X(FontWeight,          "font-weight")           \
     X(GridArea,            "grid-area")             \
     X(GridAutoColumns,     "grid-auto-columns")     \

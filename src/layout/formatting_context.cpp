@@ -486,6 +486,7 @@ static float computeMinContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
     if (fontSize <= 0.0f) fontSize = 16.0f;
     const std::string& fontFamily = styleVal(node, Prop::FontFamily);
     const std::string& fontWeight = styleVal(node, Prop::FontWeight);
+    FontFeatureScope features(metrics, fontFeaturesOf(node));
     // letter-spacing inflates per-char width; the inline layout in text.cpp
     // adds it once per character, so intrinsic measurement must match or
     // parents grant too little width and force unwanted wraps.
@@ -675,6 +676,7 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
     if (fontSize <= 0.0f) fontSize = 16.0f;
     const std::string& fontFamily = styleVal(node, Prop::FontFamily);
     const std::string& fontWeight = styleVal(node, Prop::FontWeight);
+    FontFeatureScope features(metrics, fontFeaturesOf(node));
     // letter-spacing / word-spacing inflate the laid-out width; intrinsic
     // measurement must match what text.cpp will produce or callers wrap.
     float letterSpacing = resolveLength(styleVal(node, Prop::LetterSpacing), 0, fontSize);

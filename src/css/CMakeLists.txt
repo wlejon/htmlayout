@@ -6,6 +6,7 @@ add_library(htmlayout_css STATIC
     cascade.cpp
     container_query.cpp
     properties.cpp
+    font_features.cpp
     ua_stylesheet.cpp
     color.cpp
     color_calc.cpp

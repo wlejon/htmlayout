@@ -199,13 +199,17 @@ InlineCtx makeCtx(LayoutNode* box, float fontSize, TextMetrics& metrics) {
     c.fontSize = fontSize;
     c.family = &styleVal(box, Prop::FontFamily);
     c.weight = &styleVal(box, Prop::FontWeight);
+    c.features = fontFeaturesOf(box);
     c.whiteSpace = &styleVal(box, Prop::WhiteSpace);
     c.transform = &styleVal(box, Prop::TextTransform);
     // A collapsed space between words carries letter-spacing after it plus
     // word-spacing.
     c.ls = resolveLength(styleVal(box, Prop::LetterSpacing), 0, fontSize);
     c.ws = resolveLength(styleVal(box, Prop::WordSpacing), 0, fontSize);
-    c.spaceWidth = metrics.measureWidth(" ", *c.family, fontSize, *c.weight) + c.ls + c.ws;
+    {
+        FontFeatureScope features(metrics, c.features);
+        c.spaceWidth = metrics.measureWidth(" ", *c.family, fontSize, *c.weight) + c.ls + c.ws;
+    }
     const std::string& oWrap = styleVal(box, Prop::OverflowWrap);
     const std::string& wBreak = styleVal(box, Prop::WordBreak);
     if (wBreak == "break-all") c.breakMode = 2;
@@ -272,6 +276,7 @@ void ItemCollector::forcedBreak(LayoutNode* child, const InlineCtx& c, LayoutNod
 // spaces between them items of their own.
 void ItemCollector::collapsingText(LayoutNode* child, const InlineCtx& c,
                                    const std::string& piece, int srcBase) {
+    FontFeatureScope features(metrics, c.features);
     auto runs = breakTextIntoRuns(piece, 0.5f, *c.family, c.fontSize, *c.weight,
                                   "normal", metrics, "normal", "normal",
                                   c.ls, c.ws, *c.transform);
@@ -292,6 +297,7 @@ void ItemCollector::text(LayoutNode* child, const InlineCtx& c) {
     child->box.textRuns.clear();
     const std::string src(child->textContent());
     const std::string& ws = *c.whiteSpace;
+    FontFeatureScope features(metrics, c.features);
 
     if (ws == "pre-wrap" || ws == "break-spaces") {
         auto runs = segmentPreservedText(src, *c.family, c.fontSize, *c.weight, metrics,
@@ -398,6 +404,7 @@ void ItemCollector::emitRun(LayoutNode* child, const InlineCtx& c, const TextRun
     it.breakMode = wraps ? c.breakMode : 0;
     it.family = c.family;
     it.weight = c.weight;
+    it.features = c.features;
     it.fontSize = c.fontSize;
     it.ls = c.ls;
     it.ws = c.ws;
@@ -673,6 +680,7 @@ bool splitTextItem(std::vector<IFCItem>& items, size_t i, float maxWidth,
     // one that is not. Widths grow with the cut, so walk until one overflows.
     size_t best = 0, first = 0;
     float bestW = 0;
+    FontFeatureScope features(metrics, it.features);
     for (size_t k = firstSolid + utf8Len(t, firstSolid); k < t.size(); k += utf8Len(t, k)) {
         if (isBlank(t[k])) continue;
         float w = measureRunWidth(t.substr(0, k), *it.family, it.fontSize, *it.weight,

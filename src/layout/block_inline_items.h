@@ -85,6 +85,7 @@ struct IFCItem {
     // The run's font, for measuring the pieces of a cut.
     const std::string* family = nullptr;
     const std::string* weight = nullptr;
+    std::string_view features;   // fontFeaturesOf(): interned, process-lifetime
     float fontSize = 0, ls = 0, ws = 0;
 };
 
@@ -100,6 +101,7 @@ struct InlineCtx {
     float fontSize = 16.0f;
     const std::string* family = nullptr;
     const std::string* weight = nullptr;
+    std::string_view features;   // fontFeaturesOf(box); see TextMetrics::fontFeatures
     const std::string* whiteSpace = nullptr;
     const std::string* transform = nullptr;
     float ls = 0, ws = 0;

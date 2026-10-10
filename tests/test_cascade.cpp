@@ -689,6 +689,67 @@ static void testImportNestedImports() {
     check(style["font-size"] == "18px", "nested import: font-size from b.css");
 }
 
+// A sheet's relative URLs resolve against the sheet: nested @imports go to the
+// base-aware resolver with the importing sheet's base, and each @font-face
+// rule carries the base of the sheet that declared it.
+static void testImportAndFontFaceBase() {
+    printf("--- Cascade: @import / @font-face resolve against their sheet ---\n");
+    Cascade cascade;
+    std::vector<std::pair<std::string, std::string>> asked;  // (base, url)
+    cascade.setImportResolver([&](const std::string& url, const std::string& base,
+                                  std::string& importedBase) -> std::string {
+        asked.push_back({base, url});
+        if (base == "/ui" && url == "css/a.css") {
+            importedBase = "/ui/css";
+            return "@import \"b.css\";\n"
+                   "@font-face { font-family: A; src: url(\"../fonts/a.ttf\"); }";
+        }
+        if (base == "/ui/css" && url == "b.css") {
+            importedBase = "/ui/css";
+            return "@font-face { font-family: B; font-weight: 700; src: url(b.ttf); }";
+        }
+        return "";
+    });
+    Stylesheet sheet = parse("@import \"css/a.css\";\n"
+                             "@font-face { font-family: Top; src: url(top.ttf); }");
+    sheet.baseUrl = "/ui";
+    cascade.addStylesheet(sheet);
+    // A sheet with no base (an inline <style>): its rules have none either.
+    cascade.addStylesheet(parse("@font-face { font-family: Inline; src: url(i.ttf); }"));
+
+    check(asked.size() == 2 && asked[0].first == "/ui" && asked[1].first == "/ui/css",
+          "base-aware import: each @import is resolved against the importing sheet");
+    auto& ff = cascade.fontFaces();
+    auto baseOf = [&](const char* family) -> std::string {
+        for (auto& f : ff) if (f.family == family) return f.baseUrl;
+        return "<missing>";
+    };
+    check(baseOf("A") == "/ui/css", "font-face from an imported sheet carries its base");
+    check(baseOf("B") == "/ui/css", "font-face from a nested import carries its base");
+    check(baseOf("Top") == "/ui", "font-face from the linked sheet carries its base");
+    check(baseOf("Inline").empty(), "font-face from a base-less sheet has none");
+    for (auto& f : ff)
+        if (f.family == "B") check(f.weight == 700 && f.src == "b.ttf", "font-face B parsed");
+}
+
+// `font: inherit` takes every font longhand from the parent.
+static void testFontShorthandInherit() {
+    printf("--- Cascade: font: inherit ---\n");
+    Cascade cascade;
+    cascade.addStylesheet(parse("button { font-family: system-ui; font-size: 13.333px; }"),
+                          nullptr, nullptr, Origin::UserAgent);
+    cascade.addStylesheet(parse(".p { font: 600 20px/30px Inter, sans-serif; }"
+                                "button { font: inherit; }"));
+    MockElement p; p.tag = "div"; p.classes = "p";
+    MockElement b; b.tag = "button"; b.parentElem = &p;
+    auto ps = cascade.resolve(p);
+    auto bs = cascade.resolve(b, {}, &ps);
+    check(bs["font-family"] == ps["font-family"], "font: inherit takes the parent's family");
+    check(bs["font-size"] == "20px", "font: inherit takes the parent's size");
+    check(bs["font-weight"] == ps["font-weight"], "font: inherit takes the parent's weight");
+    check(bs["line-height"] == ps["line-height"], "font: inherit takes the parent's line-height");
+}
+
 static void testImportSourceOrder() {
     printf("--- Cascade: @import source order (imported rules come first) ---\n");
     Cascade cascade;
@@ -1154,6 +1215,8 @@ void testCascade() {
     testImportCaching();
     testImportNestedImports();
     testImportSourceOrder();
+    testImportAndFontFaceBase();
+    testFontShorthandInherit();
     testImportWithMediaCondition();
     testImportLayers();
     testAnonymousLayers();

@@ -255,6 +255,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
             const std::string& fontFamily = styleVal(node, Prop::FontFamily);
             const std::string& fontWeight = styleVal(node, Prop::FontWeight);
+            FontFeatureScope features(metrics, fontFeaturesOf(node));
             // Measure the text-transformed glyphs (matches paint + breakTextIntoRuns).
             std::string shaped = applyTextTransform(std::string(text), styleVal(node, Prop::TextTransform));
             float textW = metrics.measureWidth(shaped, fontFamily, fontSize, fontWeight);
@@ -963,6 +964,19 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             // place items in the cross axis instead of collapsing to 0.
             crossAvailable = node->box.contentRect.height;
         }
+        // Auto height, sized by its lines — but min-height floors that size
+        // (§9.4 step 15), and the floored size is what the lines are aligned
+        // in: a `min-height: 52px; align-items: center` row centres its items
+        // in the 52px box, not at the top of a content-sized line.
+        if (crossAvailable < 0) {
+            const std::string& minHVal = styleVal(node, Prop::MinHeight);
+            const bool pctIndefinite = node->availableHeight <= 0.0f && !minHVal.empty() &&
+                                       minHVal.back() == '%';
+            const float minH = toContent(pctIndefinite ? -1.0f
+                                             : resolveDim(minHVal, node->availableHeight, fontSize),
+                                         paddingV + borderV);
+            if (minH >= 0 && totalLineCross + totalLineGaps < minH) crossAvailable = minH;
+        }
     } else {
         crossAvailable = containerMain; // for column flex, cross = width
     }
@@ -1089,8 +1103,9 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         // else flex-start: mainCursor = 0
 
         if (isReverse) {
-            // Reverse the item positions
-            mainCursor = mainAvailable;
+            // Reverse the item positions: they pack from the main-end, so the
+            // justify-content offset is measured back from it.
+            mainCursor = mainAvailable - mainCursor;
         }
 
         for (size_t i = 0; i < line.items.size(); i++) {
@@ -1278,7 +1293,13 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             }
         }
 
-        if (mainCursor > maxMainExtent) maxMainExtent = mainCursor;
+        // The extent the line covers from the main-start edge. A reversed
+        // line runs back from the main-end, so its cursor finishes at the
+        // start of what it covers: the extent is what lies past it. Taking
+        // the cursor itself made every auto-height column-reverse container
+        // zero tall.
+        const float lineExtent = isReverse ? mainAvailable - mainCursor : mainCursor;
+        if (lineExtent > maxMainExtent) maxMainExtent = lineExtent;
         crossCursor += line.crossSize + crossGapAdjusted;
     }
 
@@ -1320,10 +1341,14 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     };
     const std::string& minHVal = styleVal(node, Prop::MinHeight);
     const std::string& maxHVal = styleVal(node, Prop::MaxHeight);
-    float minH = pctAgainstIndefiniteH(minHVal) ? -1.0f
-                 : resolveDim(minHVal, node->availableHeight, fontSize);
-    float maxH = pctAgainstIndefiniteH(maxHVal) ? -1.0f
-                 : resolveDim(maxHVal, node->availableHeight, fontSize);
+    // De-border-boxed like the main-size clamp above: the height clamped
+    // here is the content box's.
+    float minH = toContent(pctAgainstIndefiniteH(minHVal) ? -1.0f
+                               : resolveDim(minHVal, node->availableHeight, fontSize),
+                           paddingV + borderV);
+    float maxH = toContent(pctAgainstIndefiniteH(maxHVal) ? -1.0f
+                               : resolveDim(maxHVal, node->availableHeight, fontSize),
+                           paddingV + borderV);
     if (minH >= 0.0f && node->box.contentRect.height < minH) node->box.contentRect.height = minH;
     if (maxH >= 0.0f && node->box.contentRect.height > maxH) node->box.contentRect.height = maxH;
 

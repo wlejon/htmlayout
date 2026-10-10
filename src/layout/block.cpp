@@ -287,9 +287,16 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
     }
 
-    // Apply min/max-width constraints
-    float minW = resolveDimension(styleVal(node, Prop::MinWidth), availableWidth, fontSize);
-    float maxW = resolveDimension(styleVal(node, Prop::MaxWidth), availableWidth, fontSize);
+    // Apply min/max-width constraints. Under box-sizing: border-box they name
+    // the border box, while contentWidth is the content box.
+    const bool borderBoxSizing = styleVal(node, Prop::BoxSizing) == "border-box";
+    auto widthToContent = [&](float v) {
+        return (borderBoxSizing && v >= 0.0f) ? std::max(0.0f, v - paddingH - borderH) : v;
+    };
+    float minW = widthToContent(
+        resolveDimension(styleVal(node, Prop::MinWidth), availableWidth, fontSize));
+    float maxW = widthToContent(
+        resolveDimension(styleVal(node, Prop::MaxWidth), availableWidth, fontSize));
     if (minW >= 0.0f && contentWidth < minW) contentWidth = minW;
     if (maxW >= 0.0f && contentWidth > maxW) contentWidth = maxW;
 
@@ -1064,6 +1071,14 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                  : resolveDimension(minHVal, heightRef, fontSize);
     float maxH = pctAgainstIndefiniteH(maxHVal) ? -1.0f
                  : resolveDimension(maxHVal, heightRef, fontSize);
+    // Under box-sizing: border-box they name the border box; the height
+    // clamped here is the content box's.
+    if (styleVal(node, Prop::BoxSizing) == "border-box") {
+        const float edgesV = node->box.padding.top + node->box.padding.bottom +
+                             node->box.border.top + node->box.border.bottom;
+        if (minH >= 0.0f) minH = std::max(0.0f, minH - edgesV);
+        if (maxH >= 0.0f) maxH = std::max(0.0f, maxH - edgesV);
+    }
     if (minH >= 0.0f && node->box.contentRect.height < minH) node->box.contentRect.height = minH;
     if (maxH >= 0.0f && node->box.contentRect.height > maxH) node->box.contentRect.height = maxH;
 

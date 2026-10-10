@@ -109,6 +109,10 @@ struct FontFaceRule {
     std::string src;          // url(...) source
     int weight = 400;         // font-weight (100-900)
     bool italic = false;      // font-style: italic
+    // URL of the stylesheet that declared the rule; `src` is relative to it
+    // (CSS Values 4 §4.5.1). Copied from Stylesheet::baseUrl when the sheet
+    // is added to a cascade; empty means the document's base.
+    std::string baseUrl;
 };
 
 // A parsed stylesheet
@@ -121,6 +125,10 @@ struct Stylesheet {
     std::vector<KeyframeBlock> keyframes;
     std::vector<FontFaceRule> fontFaces;
     std::vector<std::string> layerOrder;  // declared layer ordering from @layer statements
+    // Where the sheet came from: relative URLs in it (@import, @font-face
+    // src) resolve against this. parse() leaves it empty — the consumer sets
+    // it (a linked sheet's own URL or directory); empty means the document.
+    std::string baseUrl;
 };
 
 // Media query evaluation context — consumers set this to describe the viewport

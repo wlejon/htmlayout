@@ -355,8 +355,145 @@ static void testLetterSpacingIntrinsics() {
     check(near(wins.box.contentRect.width, 66), "the spaced item is its content width");
 }
 
+// min/max-width and min/max-height name the BORDER box under box-sizing:
+// border-box, for block, flex (row and column) and grid boxes alike. A row
+// with `min-height: 52px; padding: 8px 0` is 52 tall, not 52 + 16.
+static void testBorderBoxMinMax() {
+    printf("--- sizing: border-box min/max width and height ---\n");
+    SMetrics m;
+    auto outerH = [](SNode& n) {
+        return n.box.contentRect.height + n.box.padding.top + n.box.padding.bottom +
+               n.box.border.top + n.box.border.bottom;
+    };
+    auto outerW = [](SNode& n) {
+        return n.box.contentRect.width + n.box.padding.left + n.box.padding.right +
+               n.box.border.left + n.box.border.right;
+    };
+    for (const char* display : {"block", "flex", "grid"}) {
+        SNode root; root.init();
+        SNode row; row.init(display);
+        row.style_["box-sizing"] = "border-box";
+        row.style_["min-height"] = "52px";
+        row.style_["padding-top"] = "8px"; row.style_["padding-bottom"] = "8px";
+        row.style_["border-top-style"] = "solid"; row.style_["border-top-width"] = "1px";
+        row.style_["align-items"] = "center";
+        SNode item; item.init(); item.style_["height"] = "20px"; item.style_["width"] = "30px";
+        row.addChild(&item); root.addChild(&row);
+        layoutTree(&root, 800, m);
+        check(near(outerH(row), 52),
+              (std::string(display) + ": border-box min-height is the border box (" +
+               std::to_string(outerH(row)) + ")").c_str());
+
+        SNode root2; root2.init();
+        SNode capped; capped.init(display);
+        capped.style_["box-sizing"] = "border-box";
+        capped.style_["height"] = "100px"; capped.style_["max-height"] = "30px";
+        capped.style_["min-width"] = "100px"; capped.style_["width"] = "10px";
+        capped.style_["padding-top"] = "8px"; capped.style_["padding-bottom"] = "8px";
+        capped.style_["padding-left"] = "10px"; capped.style_["padding-right"] = "10px";
+        SNode item2; item2.init(); item2.style_["height"] = "5px";
+        capped.addChild(&item2); root2.addChild(&capped);
+        layoutTree(&root2, 800, m);
+        check(near(outerH(capped), 30),
+              (std::string(display) + ": border-box max-height is the border box").c_str());
+        check(near(outerW(capped), 100),
+              (std::string(display) + ": border-box min-width is the border box").c_str());
+
+        SNode root3; root3.init();
+        SNode wide; wide.init(display);
+        wide.style_["box-sizing"] = "border-box";
+        wide.style_["max-width"] = "200px";
+        wide.style_["padding-left"] = "10px"; wide.style_["padding-right"] = "10px";
+        wide.style_["border-left-style"] = "solid"; wide.style_["border-left-width"] = "5px";
+        root3.addChild(&wide);
+        layoutTree(&root3, 800, m);
+        check(near(outerW(wide), 200),
+              (std::string(display) + ": border-box max-width is the border box").c_str());
+    }
+
+    // The row case in full: a single-line row flex container centres its items
+    // in the min-height box, not at the top of a content-sized line.
+    SNode root; root.init();
+    SNode row; row.init("flex");
+    row.style_["box-sizing"] = "border-box";
+    row.style_["min-height"] = "52px";
+    row.style_["padding-top"] = "8px"; row.style_["padding-bottom"] = "8px";
+    row.style_["align-items"] = "center";
+    SNode item; item.init(); item.style_["height"] = "20px"; item.style_["width"] = "30px";
+    row.addChild(&item); root.addChild(&row);
+    layoutTree(&root, 800, m);
+    check(near(row.box.contentRect.height, 36), "the row's content box is 52 - 16");
+    check(near(item.box.contentRect.y, 8), "its item is centred in the 36px content box");
+
+    // content-box sizing is unchanged: min-height names the content box.
+    SNode root2; root2.init();
+    SNode cb; cb.init();
+    cb.style_["min-height"] = "52px";
+    cb.style_["padding-top"] = "8px"; cb.style_["padding-bottom"] = "8px";
+    root2.addChild(&cb);
+    layoutTree(&root2, 800, m);
+    check(near(cb.box.contentRect.height, 52), "content-box min-height is the content box");
+}
+
+// An absolutely/fixed positioned box anchored by `bottom` alone, height auto,
+// is as tall as its content, and its bottom edge sits `bottom` above the
+// containing block's. A column-reverse flex container — a toast stack, newest
+// nearest the anchor — came out zero tall: the reversed line's extent was
+// read off a cursor that finishes at the start of the line.
+static void testBottomAnchoredAutoHeight() {
+    printf("--- sizing: bottom-anchored auto-height positioned boxes ---\n");
+    SMetrics m;
+    for (const char* dir : {"column", "column-reverse", "row"}) {
+        for (const char* pos : {"absolute", "fixed"}) {
+            SNode root; root.init();
+            root.style_["position"] = "relative";
+            root.style_["height"] = "300px";
+            SNode stack; stack.init("flex");
+            stack.style_["position"] = pos;
+            stack.style_["bottom"] = "40px";
+            stack.style_["left"] = "0";
+            stack.style_["top"] = "auto";
+            stack.style_["right"] = "auto";
+            stack.style_["width"] = "200px";
+            stack.style_["flex-direction"] = dir;
+            stack.style_["row-gap"] = "8px";
+            SNode a; a.init(); a.style_["height"] = "30px";
+            SNode b; b.init(); b.style_["height"] = "20px";
+            stack.addChild(&a); stack.addChild(&b);
+            root.addChild(&stack);
+            layoutTree(&root, 800, m);
+            const bool column = std::string(dir) != "row";
+            const float want = column ? 58.0f : 30.0f;
+            const std::string what = std::string(pos) + " " + dir;
+            check(near(stack.box.contentRect.height, want),
+                  (what + ": auto height is the content's (" +
+                   std::to_string(stack.box.contentRect.height) + ")").c_str());
+            if (std::string(pos) == "absolute") {
+                check(near(stack.box.contentRect.y + stack.box.contentRect.height, 260),
+                      (what + ": its bottom edge is 40px above the containing block's").c_str());
+            }
+            if (std::string(dir) == "column-reverse") {
+                // The first item sits at the main-end (bottom), the second above it.
+                check(near(a.box.contentRect.y, 28) && near(b.box.contentRect.y, 0),
+                      (what + ": items stack upward from the bottom").c_str());
+            }
+        }
+    }
+
+    // In flow, too: an auto-height column-reverse container is content-tall.
+    SNode root; root.init();
+    SNode col; col.init("flex");
+    col.style_["flex-direction"] = "column-reverse";
+    SNode a; a.init(); a.style_["height"] = "30px";
+    col.addChild(&a); root.addChild(&col);
+    layoutTree(&root, 800, m);
+    check(near(col.box.contentRect.height, 30), "in-flow column-reverse is content-tall");
+}
+
 void testSizingFixes() {
     printf("=== Sizing fixes ===\n");
+    testBorderBoxMinMax();
+    testBottomAnchoredAutoHeight();
     testLetterSpacingIntrinsics();
     testInlineFlexShrinksToFit();
     testFlexWrapExactFit();
