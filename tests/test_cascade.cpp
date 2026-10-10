@@ -1005,6 +1005,40 @@ static void testOutOfFlowBlockification() {
     check(sv(cascade.resolve(ab), "display") == "block",
           "cascade: abspos display:block unchanged");
 
+    // ::before / ::after are blockified the same way, with the originating
+    // element as their parent: a positioned `content: ''` rule (a divider
+    // line, a badge dot) otherwise kept display:inline and painted nothing.
+    Cascade pc;
+    pc.addStylesheet(parse(
+        ".g::after { content: ''; position: absolute; width: 1px; }\n"
+        ".i::after { content: ''; }\n"
+        ".fx { display: flex; }\n"
+        ".fx::before { content: 'x'; }\n"
+    ));
+    MockElement pg; pg.tag = "div"; pg.classes = "g";
+    check(sv(pc.resolvePseudo(pg, "after", pc.resolve(pg)), "display") == "block",
+          "cascade: abspos ::after blockified to block");
+    MockElement pi; pi.tag = "div"; pi.classes = "i";
+    check(sv(pc.resolvePseudo(pi, "after", pc.resolve(pi)), "display") == "inline",
+          "cascade: in-flow ::after stays inline");
+    MockElement pf; pf.tag = "div"; pf.classes = "fx";
+    check(sv(pc.resolvePseudo(pf, "before", pc.resolve(pf)), "display") == "block",
+          "cascade: ::before of a flex container is a flex item, blockified");
+
+    // var() in a pseudo's declarations resolves against the originating
+    // element's custom properties and its own, shorthands included.
+    Cascade vc;
+    vc.addStylesheet(parse(
+        ".v { --rule: red; }\n"
+        ".v::after { content: ''; --w: 2px; background: var(--rule); width: var(--w); border-left: var(--w) solid var(--rule); }\n"
+    ));
+    MockElement pv; pv.tag = "div"; pv.classes = "v";
+    auto pvs = vc.resolvePseudo(pv, "after", vc.resolve(pv));
+    check(sv(pvs, "background-color") == "red", "cascade: ::after background: var() resolved");
+    check(sv(pvs, "width") == "2px", "cascade: ::after uses its own custom property");
+    check(sv(pvs, "border-left-width") == "2px" && sv(pvs, "border-left-color") == "red",
+          "cascade: ::after shorthand with var() substitutes before expanding");
+
     // A standalone element resolved with a null parentStyle must NOT be
     // treated as the root: nullptr also means "style this detached subtree".
     MockElement plain; plain.tag = "span";

@@ -393,6 +393,45 @@ void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
     }
 }
 
+// Blockification (CSS Display §2.7): an inline-level display computes to its
+// block-level equivalent when the box must be block-level: a flex or grid
+// item (parentStyle displays flex/grid), an absolutely positioned box, or a
+// float. Shared by elements and ::before/::after, whose parent is their
+// originating element. Absent keys are initial values.
+static void blockify(ComputedStyle& style, const ComputedStyle* parentStyle) {
+    auto own = [&](const char* k, const char* dflt) -> std::string {
+        auto it = style.find(k);
+        return (it != style.end()) ? it->second : std::string(dflt);
+    };
+
+    bool must = false;
+
+    if (parentStyle) {
+        auto pd = parentStyle->find("display");
+        if (pd != parentStyle->end() &&
+            (pd->second == "flex" || pd->second == "inline-flex" ||
+             pd->second == "grid" || pd->second == "inline-grid"))
+            must = true;  // (a)
+    }
+    if (!must) {
+        const std::string pos = own("position", "static");
+        if (pos == "absolute" || pos == "fixed") must = true;  // (b)
+    }
+    if (!must) {
+        const std::string fl = own("float", "none");
+        if (fl == "left" || fl == "right" || fl == "inline-start" ||
+            fl == "inline-end") must = true;  // (c)
+    }
+    if (must) {
+        const std::string d = own("display", "inline");
+        if (d == "inline" || d == "inline-block") style["display"] = "block";
+        else if (d == "inline-table") style["display"] = "table";
+        else if (d == "inline-flex") style["display"] = "flex";
+        else if (d == "inline-grid") style["display"] = "grid";
+        else if (d == "-webkit-inline-box") style["display"] = "-webkit-box";
+    }
+}
+
 // CSS Logical Properties L1 — resolve inline-axis logical properties (margin/
 // padding/border/inset -inline-start/end) to physical sides using the element's
 // own computed `direction`. Block-axis logical properties are already physical
@@ -992,41 +1031,7 @@ ComputedStyle Cascade::resolve(const ElementRef& elem,
     //    `display: inline` gets laid out by the inline path, where width/height
     //    do not apply — it collapses to a zero-size box instead of honouring
     //    its inset/size properties.
-    {
-        // Absent key = initial value (non-inherited defaults are not stored in
-        // the map — see the note below).
-        auto own = [&](const char* k, const char* dflt) -> std::string {
-            auto it = style.find(k);
-            return (it != style.end()) ? it->second : std::string(dflt);
-        };
-
-        bool blockify = false;
-
-        if (parentStyle) {
-            auto pd = parentStyle->find("display");
-            if (pd != parentStyle->end() &&
-                (pd->second == "flex" || pd->second == "inline-flex" ||
-                 pd->second == "grid" || pd->second == "inline-grid"))
-                blockify = true;  // (a)
-        }
-        if (!blockify) {
-            const std::string pos = own("position", "static");
-            if (pos == "absolute" || pos == "fixed") blockify = true;  // (b)
-        }
-        if (!blockify) {
-            const std::string fl = own("float", "none");
-            if (fl == "left" || fl == "right" || fl == "inline-start" ||
-                fl == "inline-end") blockify = true;  // (c)
-        }
-        if (blockify) {
-            const std::string d = own("display", "inline");
-            if (d == "inline" || d == "inline-block") style["display"] = "block";
-            else if (d == "inline-table") style["display"] = "table";
-            else if (d == "inline-flex") style["display"] = "flex";
-            else if (d == "inline-grid") style["display"] = "grid";
-            else if (d == "-webkit-inline-box") style["display"] = "-webkit-box";
-        }
-    }
+    blockify(style, parentStyle);
 
     // 9d. CSS Logical Properties L1 — resolve inline-axis logical properties to
     //     physical sides now that `direction` is known. Block-axis logical
@@ -1154,13 +1159,22 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
 
     // Apply declarations. The pseudo inherits the originating element's custom
     // properties the way a child would: by sharing its set.
+    // Custom properties first, then the rest with var() substituted before a
+    // shorthand expands, as for an element (resolve() steps 4a/4b): a
+    // `background: var(--rim)` on a ::after otherwise reached paint unparsed.
     ComputedStyle style;
     style.inheritedVars = elemStyle.varsForChildren();
     for (auto& m : matched) {
-        auto expanded = expandShorthand(*m.property, *m.value);
-        for (auto& e : expanded) {
-            style[e.property] = e.value;
+        if (isCustomProperty(*m.property)) style[*m.property] = *m.value;
+    }
+    for (auto& m : matched) {
+        if (isCustomProperty(*m.property)) continue;
+        if (m.value->find("var(") == std::string::npos) {
+            for (auto& e : expandShorthand(*m.property, *m.value)) style[e.property] = e.value;
+            continue;
         }
+        std::string substituted = resolveVarReferences(*m.value, style, &elemStyle);
+        for (auto& e : expandShorthand(*m.property, substituted)) style[e.property] = e.value;
     }
 
     // Resolve inline-axis logical properties to physical sides before the
@@ -1188,6 +1202,10 @@ ComputedStyle Cascade::resolvePseudo(const ElementRef& elem,
             }
         }
     }
+
+    // A positioned ::after (a divider rule, a badge dot) or one inside a flex
+    // or grid element is block-level, so its width and height apply.
+    blockify(style, &elemStyle);
 
     return style;
 }

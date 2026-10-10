@@ -1486,7 +1486,13 @@ bool layoutAbsoluteElementsRecursive(LayoutNode* node, const Viewport& viewport,
                                       TextMetrics& metrics) {
     if (node->subtreeHasPositioned == 0) return false;
     bool any = false;
-    for (auto* child : node->children()) {
+    // ::before / ::after hang off the node outside children(); a positioned
+    // one (a divider rule, a badge dot) is laid out here like any child.
+    std::vector<LayoutNode*> kids;
+    if (auto* p = node->pseudoBefore()) kids.push_back(p);
+    for (auto* child : node->children()) kids.push_back(child);
+    if (auto* p = node->pseudoAfter()) kids.push_back(p);
+    for (auto* child : kids) {
         if (!child || child->isTextNode()) continue;
 
         auto& style = child->computedStyle();
