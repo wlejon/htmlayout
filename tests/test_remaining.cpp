@@ -120,6 +120,27 @@ static void testMaxContentWidth() {
     layoutTree(&root, 800, m);
 
     check(approx(root.box.contentRect.width, 110.0f), "max-content: full text = 110px");
+
+    // A `width: 100%` child of a box sized to its content: the percentage
+    // depends on the size being measured, so it counts as auto and the
+    // child's text is the contribution (a menu row in a shrink-to-fit menu).
+    RemMockNode menu;
+    menu.initBlock();
+    menu.style_["width"] = "max-content";
+    menu.style_["min-width"] = "40px";
+    RemMockNode row;
+    row.initBlock();
+    row.style_["width"] = "100%";
+    menu.addChild(&row);
+    RemMockNode label;
+    label.isText = true;
+    label.text = "hello world";
+    label.style_["display"] = "inline";
+    row.addChild(&label);
+    layoutTree(&menu, 800, m);
+    check(approx(menu.box.contentRect.width, 110.0f),
+          "max-content: a width:100% child contributes its content");
+    check(approx(row.box.contentRect.width, 110.0f), "and then fills the box it sized");
 }
 
 static void testFitContentWidth() {

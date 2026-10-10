@@ -818,10 +818,17 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
             }
             float mh = resolveLength(styleVal(child, Prop::MarginLeft), 0, childFontSize) +
                        resolveLength(styleVal(child, Prop::MarginRight), 0, childFontSize);
-            // Use explicit width if set, otherwise recurse for intrinsic size
+            // A definite width is the contribution; otherwise recurse for the
+            // content. A percentage resolves against the very size being
+            // measured, so it behaves as auto here (CSS Sizing 3 §5.2.1) — a
+            // `width: 100%` menu row otherwise added nothing, and the menu
+            // sized to its min-width and cut every label.
             const std::string& wVal = styleVal(child, Prop::Width);
+            const bool definiteW = !wVal.empty() && wVal != "auto" &&
+                                   wVal.find('%') == std::string::npos &&
+                                   !isIntrinsicSizingKeyword(wVal);
             float childMax;
-            if (!wVal.empty() && wVal != "auto") {
+            if (definiteW) {
                 float w = resolveLength(wVal, 0, childFontSize);
                 if (styleVal(child, Prop::BoxSizing) == "border-box")
                     childMax = w + mh;
