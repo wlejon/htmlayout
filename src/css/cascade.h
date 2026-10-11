@@ -185,6 +185,12 @@ public:
     // an SVG presentation attribute, or is a table cell/column, whose span
     // attributes surface as style)?
     bool readsElementAttributes(const ElementRef& elem) const;
+    // Those attributes, names and values, serialized into `out` in a fixed
+    // order (empty when there are none): the rest of resolveMatched()'s input,
+    // so a sharing cache can key on them instead of leaving such elements out.
+    // Two elements with equal outputs here (and equal everything else above)
+    // get equal computed styles.
+    void styleAttributes(const ElementRef& elem, std::string& out) const;
 
     // What resolveMatched() reads of the PARENT style: the properties this
     // names (the inherited ones, the internal font-size keyword, `display` for

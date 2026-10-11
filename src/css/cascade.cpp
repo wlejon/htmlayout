@@ -607,6 +607,25 @@ bool Cascade::readsElementAttributes(const ElementRef& elem) const {
     return !pres.empty();
 }
 
+void Cascade::styleAttributes(const ElementRef& elem, std::string& out) const {
+    out.clear();
+    auto add = [&out](std::string_view name, std::string_view value) {
+        out.append(name);
+        out.push_back('=');
+        out.append(value);
+        out.push_back('\0');
+    };
+    if (isTableSpanTag(elem.tagName())) {
+        for (std::string_view attr : {"colspan", "rowspan", "span"}) {
+            std::string_view v = elem.getAttribute(attr);
+            if (!v.empty()) add(attr, v);
+        }
+    }
+    std::vector<std::pair<std::string_view, std::string_view>> pres;
+    collectPresentationAttrs(elem, pres);
+    for (const auto& [name, value] : pres) add(name, value);
+}
+
 bool Cascade::parentPropertyIsRead(std::string_view name) {
     return name == "display" || name == "-hl-font-size-keyword" || isInherited(name);
 }
