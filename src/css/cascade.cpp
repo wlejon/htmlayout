@@ -1314,6 +1314,8 @@ void Cascade::clear() {
     usesStartingStyle_ = false;
     usesForcedInherit_ = false;
     usesHas_ = false;
+    hasSubjects_.clear();
+    hasArgSiblings_ = false;
     usesStructuralQualifiers_ = false;
     usesFocusWithin_ = false;
     focusSrcIds_.clear();

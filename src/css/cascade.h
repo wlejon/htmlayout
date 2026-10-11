@@ -240,8 +240,8 @@ public:
     //
     // `classList` is the raw class attribute (space-separated). Returns true
     // conservatively when a hover-descendant rule's subject names nothing this
-    // can key on (`.row:hover > *`, `.row:hover [data-x]`) or when the sheet
-    // uses :has(), whose matching runs the other way.
+    // can key on (`.row:hover > *`, `.row:hover [data-x]`). A :hover read
+    // through :has() runs the other way, upward: hasReach().
     // Can a :hover flip re-match an element OUTSIDE the hovered element's own
     // subtree? Only through a sibling combinator hanging directly off the
     // :hover compound (`.tab:hover + .panel`, `.tab:hover ~ .panel p`) — with a
@@ -249,7 +249,8 @@ public:
     // the rule can reach is under the hovered element. Lets the consumer scope
     // the hover re-match to the flipped elements' subtrees, instead of having to
     // include their siblings' subtrees too.
-    bool hoverAffectsSiblings() const { return hoverSiblings_ || usesHas_; }
+    // (A :hover read through :has() reaches upward instead: hasReach.)
+    bool hoverAffectsSiblings() const { return hoverSiblings_; }
 
     // The other half of the question: is THIS element one that a hover-descendant
     // rule names on the :hover side (`.row:hover .label` → the `.row`)? A flip on
@@ -260,7 +261,7 @@ public:
     bool hoverInvalidatesDescendants(std::string_view tag, std::string_view id,
                                      std::string_view classList) const {
         if (!usesHover_) return false;
-        if (hoverSrcUniversal_ || usesHas_) return true;
+        if (hoverSrcUniversal_) return true;
         return keysHit(hoverSrcIds_, hoverSrcClasses_, hoverSrcTags_,
                        tag, id, classList);
     }
@@ -268,7 +269,7 @@ public:
     bool hoverCanAffect(std::string_view tag, std::string_view id,
                         std::string_view classList) const {
         if (!usesHover_) return false;
-        if (hoverDescUniversal_ || usesHas_) return true;
+        if (hoverDescUniversal_) return true;
         return keysHit(hoverDescIds_, hoverDescClasses_, hoverDescTags_,
                        tag, id, classList);
     }
@@ -292,6 +293,33 @@ public:
     // (`.a + .b .c`). Otherwise a child list changing re-matches the children,
     // and a child put back where it was keeps its subtree's matches.
     bool positionReachesDescendants() const { return usesStructuralQualifiers_; }
+
+    // :has() reads below (or beside) its element, so a change there — a child
+    // added or removed, a class or attribute, focus or hover — can change what
+    // matches an ANCESTOR (or an earlier sibling) of the change. For such an
+    // element: can it be a compound holding a :has() (self: it re-matches),
+    // one in a qualifier (subtree: what is below it re-matches), or one a
+    // sibling combinator leads from (siblings: its parent's subtree does)?
+    struct HasReach {
+        bool self = false;
+        bool subtree = false;
+        bool siblings = false;
+    };
+    HasReach hasReach(std::string_view tag, std::string_view id, std::string_view classList) const {
+        HasReach r;
+        for (const HasSubject& h : hasSubjects_) {
+            if (!namesHit(h.names, tag, id, classList)) continue;
+            r.self = true;
+            r.subtree |= h.subtree;
+            r.siblings |= h.siblings;
+        }
+        return r;
+    }
+    // Does some :has() argument step to a sibling? Then the change's earlier
+    // siblings (and each ancestor's) can be :has() elements too.
+    bool hasArgsReachSiblings() const { return hasArgSiblings_; }
+    // Does any rule use :has()?
+    bool usesHas() const { return !hasSubjects_.empty(); }
 
     // Can focus moving onto or off this element (or into or out of it, for
     // :focus-within) change which rules match its DESCENDANTS? Only if a
@@ -329,11 +357,10 @@ public:
     // is on. Lets a consumer keep `panel.classList.toggle('on')` off the whole
     // subtree's restyle bill, which is what makes it affordable per frame.
     //
-    // Conservative when the sheet uses :has(), whose matching runs the other way
-    // (a class on a descendant decides an ancestor's match), so no subject/
-    // ancestor split of the class names describes it.
+    // A class read through :has() (a class on a descendant deciding an
+    // ancestor's match) reaches upward instead, which hasReach() answers.
     bool classAffectsDescendants(const std::string& cls) const {
-        return usesHas_ || ancestorClasses_.count(cls) > 0;
+        return ancestorClasses_.count(cls) > 0;
     }
 
     // True if any rule targets ::<name> (e.g. "before", "after"). A document
@@ -459,6 +486,22 @@ private:
         return false;
     }
 
+    // A :has() argument that steps to a sibling (`:has(+ .x)`, `:has(.a ~ .b)`):
+    // then a change at an element can change the :has() of its earlier
+    // siblings, and theirs up the chain, not only of its ancestors.
+    static bool simpleHasSiblingArg(const SimpleSelector& s) {
+        for (auto& rel : s.relativeArgs) {
+            if (rel.lead == Combinator::AdjacentSibling || rel.lead == Combinator::GeneralSibling) return true;
+            for (auto& e : rel.chain.entries)
+                if (e.combinator == Combinator::AdjacentSibling || e.combinator == Combinator::GeneralSibling)
+                    return true;
+        }
+        for (auto& n : s.notArg) if (simpleHasSiblingArg(n)) return true;
+        for (auto& c : s.selectorListArg)
+            for (auto& sub : c.simples) if (simpleHasSiblingArg(sub)) return true;
+        return false;
+    }
+
     static bool simpleUsesHas(const SimpleSelector& s) {
         if (!s.relativeArgs.empty()) return true;
         for (auto& n : s.notArg)     if (simpleUsesHas(n)) return true;
@@ -518,6 +561,37 @@ private:
                     usesStructuralQualifiers_ = true;
                 for (auto& s : es[i].compound.simples)
                     if (simpleIsStructural(s)) { usesStructuralQualifiers_ = true; break; }
+            }
+        }
+        // :has(): a change below an element (a child added or removed, a
+        // class, an attribute, focus or hover on a descendant) can change
+        // what matches it. Record each compound that holds one: what it
+        // requires by name, whether it is a qualifier (then its subtree
+        // re-matches too) and whether a sibling combinator lies between it and
+        // the subject (then its siblings' subtrees do). See hasReach().
+        {
+            const auto& es = rule.selector.chain.entries;
+            bool siblingSoFar = false;
+            for (size_t i = 0; i < es.size(); i++) {
+                if (i >= 1 && (es[i].combinator == Combinator::AdjacentSibling ||
+                               es[i].combinator == Combinator::GeneralSibling))
+                    siblingSoFar = true;
+                bool hasHere = false;
+                for (auto& s : es[i].compound.simples) {
+                    if (!simpleUsesHas(s)) continue;
+                    hasHere = true;
+                    if (simpleHasSiblingArg(s)) hasArgSiblings_ = true;
+                }
+                if (!hasHere) continue;
+                HasSubject h;
+                for (auto& s : es[i].compound.simples) {
+                    if (s.type == SimpleSelectorType::Id) h.names.id = s.value;
+                    else if (s.type == SimpleSelectorType::Tag) h.names.tag = toLowerKey(s.value);
+                    else if (s.type == SimpleSelectorType::Class) h.names.classes.push_back(s.value);
+                }
+                h.subtree = i >= 1;
+                h.siblings = siblingSoFar;
+                hasSubjects_.push_back(std::move(h));
             }
         }
         if (!usesHas_) {
@@ -732,6 +806,22 @@ private:
         std::vector<std::string> classes;
     };
     std::vector<SubjectNames> focusSubjects_;
+    // The compounds holding a :has() (hasReach).
+    struct HasSubject {
+        SubjectNames names;
+        bool subtree = false;
+        bool siblings = false;
+    };
+    std::vector<HasSubject> hasSubjects_;
+    bool hasArgSiblings_ = false;
+    bool namesHit(const SubjectNames& r, std::string_view tag, std::string_view id,
+                  std::string_view classList) const {
+        if (!r.id.empty() && r.id != id) return false;
+        if (!r.tag.empty() && r.tag != toLowerKey(tag)) return false;
+        for (const std::string& c : r.classes)
+            if (!hasClassToken(classList, c)) return false;
+        return true;
+    }
     static bool hasClassToken(std::string_view classList, std::string_view want) {
         size_t pos = 0;
         while (pos < classList.size()) {
