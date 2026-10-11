@@ -286,6 +286,42 @@ public:
     // instead. See classifyLastRule().
     bool usesForcedInherit() const { return usesForcedInherit_; }
 
+    // Can an element's place among its siblings change which rules match its
+    // DESCENDANTS? Only if some selector reads a place among siblings in a
+    // qualifier (`li:first-child .x`) or relates two qualifiers as siblings
+    // (`.a + .b .c`). Otherwise a child list changing re-matches the children,
+    // and a child put back where it was keeps its subtree's matches.
+    bool positionReachesDescendants() const { return usesStructuralQualifiers_; }
+
+    // Can focus moving onto or off this element (or into or out of it, for
+    // :focus-within) change which rules match its DESCENDANTS? Only if a
+    // selector names :focus, :focus-visible or :focus-within in a qualifier
+    // that can name this element (`.checkbox:focus-visible .box` and a
+    // .checkbox). Otherwise it re-matches the element alone. (A :has(:focus)
+    // reads focus from above: the element's ancestors, never its descendants.)
+    bool focusInvalidatesDescendants(std::string_view tag, std::string_view id,
+                                     std::string_view classList) const {
+        if (focusSrcUniversal_) return true;
+        return keysHit(focusSrcIds_, focusSrcClasses_, focusSrcTags_, tag, id, classList);
+    }
+    // Inside such an element's subtree, can this element be the subject of
+    // one of those rules (it carries every id, tag and class the subject
+    // names)? Only those re-match.
+    bool focusCanAffect(std::string_view tag, std::string_view id, std::string_view classList) const {
+        for (const SubjectNames& r : focusSubjects_) {
+            if (!r.id.empty() && r.id != id) continue;
+            if (!r.tag.empty() && r.tag != toLowerKey(tag)) continue;
+            bool all = true;
+            for (const std::string& c : r.classes)
+                if (!hasClassToken(classList, c)) { all = false; break; }
+            if (all) return true;
+        }
+        return false;
+    }
+    // Does any rule use :focus-within? Then focus moving re-matches the
+    // ancestors of the elements it left and reached.
+    bool usesFocusWithin() const { return usesFocusWithin_; }
+
     // Can adding or removing this class from an element change which rules match
     // that element's DESCENDANTS? Only if the class appears in a non-subject
     // compound of some selector (`.dark .btn`, `.open > li`) — a class that is
@@ -359,6 +395,23 @@ private:
 
     // Does this simple selector (or anything nested in its :not()/:is()/
     // :where()/:has()/:host() args) use the :hover pseudo-class?
+    // :focus, :focus-visible or :focus-within (`within` only: just the last),
+    // directly or nested.
+    static bool simpleMentionsFocus(const SimpleSelector& s, bool withinOnly) {
+        if (s.type == SimpleSelectorType::PseudoClass &&
+            (s.value == "focus-within" || (!withinOnly && (s.value == "focus" || s.value == "focus-visible"))))
+            return true;
+        for (auto& n : s.notArg)     if (simpleMentionsFocus(n, withinOnly)) return true;
+        for (auto& n : s.hostArg)    if (simpleMentionsFocus(n, withinOnly)) return true;
+        for (auto& c : s.selectorListArg)
+            for (auto& sub : c.simples) if (simpleMentionsFocus(sub, withinOnly)) return true;
+        for (auto& rel : s.relativeArgs)
+            for (auto& entry : rel.chain.entries)
+                for (auto& sub : entry.compound.simples)
+                    if (simpleMentionsFocus(sub, withinOnly)) return true;
+        return false;
+    }
+
     static bool simpleMentionsHover(const SimpleSelector& s) {
         if (s.type == SimpleSelectorType::PseudoClass && s.value == "hover")
             return true;
@@ -389,6 +442,23 @@ private:
                 for (auto& sub : entry.compound.simples) collectClasses(sub, out);
     }
 
+    // Does this simple selector depend on the element's place among its
+    // siblings (:first-child, :nth-of-type(), :empty...), directly or inside
+    // :not()/:is()/:where()?
+    static bool simpleIsStructural(const SimpleSelector& s) {
+        if (s.type == SimpleSelectorType::PseudoClass) {
+            static constexpr std::string_view kStructural[] = {
+                "first-child", "last-child", "only-child", "nth-child", "nth-last-child",
+                "first-of-type", "last-of-type", "only-of-type", "nth-of-type", "nth-last-of-type", "empty"};
+            for (std::string_view n : kStructural)
+                if (s.value == n) return true;
+        }
+        for (auto& n : s.notArg) if (simpleIsStructural(n)) return true;
+        for (auto& c : s.selectorListArg)
+            for (auto& sub : c.simples) if (simpleIsStructural(sub)) return true;
+        return false;
+    }
+
     static bool simpleUsesHas(const SimpleSelector& s) {
         if (!s.relativeArgs.empty()) return true;
         for (auto& n : s.notArg)     if (simpleUsesHas(n)) return true;
@@ -410,6 +480,46 @@ private:
         for (size_t i = 1; i < rule.selector.chain.entries.size(); i++)
             for (auto& s : rule.selector.chain.entries[i].compound.simples)
                 collectClasses(s, ancestorClasses_);
+        // Focus: named in a qualifier (`.checkbox:focus-visible .box`), focus
+        // moving re-matches below an element that compound can name (its key
+        // recorded, as for :hover); :focus-within anywhere, above it.
+        {
+            const auto& es = rule.selector.chain.entries;
+            for (size_t i = 0; i < es.size(); i++) {
+                bool focusHere = false;
+                for (auto& s : es[i].compound.simples) {
+                    if (simpleMentionsFocus(s, false)) focusHere = true;
+                    if (!usesFocusWithin_ && simpleMentionsFocus(s, true)) usesFocusWithin_ = true;
+                }
+                if (i >= 1 && focusHere) {
+                    addKey(es[i].compound, focusSrcIds_, focusSrcClasses_, focusSrcTags_, focusSrcUniversal_);
+                    // And everything the subject requires by name, so only
+                    // an element that can be it re-matches inside the scope:
+                    // `.row.cursor`, not every `.row`.
+                    SubjectNames req;
+                    for (auto& s : es[0].compound.simples) {
+                        if (s.type == SimpleSelectorType::Id) req.id = s.value;
+                        else if (s.type == SimpleSelectorType::Tag) req.tag = toLowerKey(s.value);
+                        else if (s.type == SimpleSelectorType::Class) req.classes.push_back(s.value);
+                    }
+                    focusSubjects_.push_back(std::move(req));
+                }
+            }
+        }
+        // A qualifier (entries[1..], an ancestor or a sibling of one) that
+        // reads a place among siblings, or two qualifiers related as siblings:
+        // then where an element sits in its parent decides how rules match
+        // BELOW it, not only on it (`li:first-child .x`, `.a + .b .c`).
+        if (!usesStructuralQualifiers_) {
+            const auto& es = rule.selector.chain.entries;
+            for (size_t i = 1; i < es.size() && !usesStructuralQualifiers_; i++) {
+                if (i >= 2 && (es[i].combinator == Combinator::AdjacentSibling ||
+                               es[i].combinator == Combinator::GeneralSibling))
+                    usesStructuralQualifiers_ = true;
+                for (auto& s : es[i].compound.simples)
+                    if (simpleIsStructural(s)) { usesStructuralQualifiers_ = true; break; }
+            }
+        }
         if (!usesHas_) {
             for (auto& entry : rule.selector.chain.entries) {
                 for (auto& s : entry.compound.simples) {
@@ -611,6 +721,29 @@ private:
     bool usesStartingStyle_ = false; // any @starting-style rule added
     bool usesForcedInherit_ = false; // any `inherit` on a non-inherited property
     bool usesHas_ = false;           // any rule uses :has()
+    bool usesStructuralQualifiers_ = false;  // see classifyLastRule
+    bool usesFocusWithin_ = false;           // :focus-within anywhere
+    // The keys of the qualifier compounds naming a focus pseudo-class.
+    KeySet focusSrcIds_, focusSrcClasses_, focusSrcTags_;  // tags lowercased
+    bool focusSrcUniversal_ = false;         // such a compound requires no name
+    // What each such rule's subject requires by name (focusCanAffect).
+    struct SubjectNames {
+        std::string id, tag;                 // tag lowercased; empty: any
+        std::vector<std::string> classes;
+    };
+    std::vector<SubjectNames> focusSubjects_;
+    static bool hasClassToken(std::string_view classList, std::string_view want) {
+        size_t pos = 0;
+        while (pos < classList.size()) {
+            size_t start = classList.find_first_not_of(" \t\n\r\f", pos);
+            if (start == std::string_view::npos) break;
+            size_t end = classList.find_first_of(" \t\n\r\f", start);
+            if (end == std::string_view::npos) end = classList.size();
+            if (classList.substr(start, end - start) == want) return true;
+            pos = end;
+        }
+        return false;
+    }
     // Class names appearing in a non-subject compound of some selector — the
     // only classes whose presence on an element decides a DESCENDANT's match.
     std::unordered_set<std::string> ancestorClasses_;

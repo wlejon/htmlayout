@@ -1314,6 +1314,13 @@ void Cascade::clear() {
     usesStartingStyle_ = false;
     usesForcedInherit_ = false;
     usesHas_ = false;
+    usesStructuralQualifiers_ = false;
+    usesFocusWithin_ = false;
+    focusSrcIds_.clear();
+    focusSrcClasses_.clear();
+    focusSrcTags_.clear();
+    focusSrcUniversal_ = false;
+    focusSubjects_.clear();
     ancestorClasses_.clear();
     layerNames_.clear();
     layerRanks_.clear();
