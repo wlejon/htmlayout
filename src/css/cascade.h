@@ -363,6 +363,17 @@ public:
         return ancestorClasses_.count(cls) > 0;
     }
 
+    // The sideways half: is the class named in a compound a sibling
+    // combinator leads from (`.a.on + .b`, `.a.on ~ .b .c`)? Then toggling it
+    // can change what matches the element's later siblings and what is below
+    // them, none of which is below the element: the consumer re-matches those
+    // too. usesSiblingQualifiers(): any rule has such a compound, so an id or
+    // attribute change (which carries no class to key on) reaches them as well.
+    bool classAffectsSiblings(const std::string& cls) const {
+        return siblingClasses_.count(cls) > 0;
+    }
+    bool usesSiblingQualifiers() const { return usesSiblingQualifiers_; }
+
     // True if any rule targets ::<name> (e.g. "before", "after"). A document
     // with no such rule can generate no content, so the consumer can skip the
     // whole generated-content pass instead of asking every element.
@@ -520,9 +531,19 @@ private:
         // qualifiers. A class named there is one whose presence on some OTHER
         // element decides this rule's match, so changing it has to re-match the
         // subtree below. A class named only in entries[0] does not.
-        for (size_t i = 1; i < rule.selector.chain.entries.size(); i++)
-            for (auto& s : rule.selector.chain.entries[i].compound.simples)
+        // One a sibling combinator leads from (`.a + .b`, `.a ~ .b .c`) decides
+        // the match of the element's LATER siblings (and what is below them),
+        // which are not below it: siblingClasses_ too.
+        for (size_t i = 1; i < rule.selector.chain.entries.size(); i++) {
+            const auto& entry = rule.selector.chain.entries[i];
+            const bool sibling = entry.combinator == Combinator::AdjacentSibling ||
+                                 entry.combinator == Combinator::GeneralSibling;
+            if (sibling) usesSiblingQualifiers_ = true;
+            for (auto& s : entry.compound.simples) {
                 collectClasses(s, ancestorClasses_);
+                if (sibling) collectClasses(s, siblingClasses_);
+            }
+        }
         // Focus: named in a qualifier (`.checkbox:focus-visible .box`), focus
         // moving re-matches below an element that compound can name (its key
         // recorded, as for :hover); :focus-within anywhere, above it.
@@ -837,6 +858,10 @@ private:
     // Class names appearing in a non-subject compound of some selector — the
     // only classes whose presence on an element decides a DESCENDANT's match.
     std::unordered_set<std::string> ancestorClasses_;
+    // Those of them in a compound a sibling combinator leads from — the
+    // classes whose presence on an element decides a LATER SIBLING's match.
+    std::unordered_set<std::string> siblingClasses_;
+    bool usesSiblingQualifiers_ = false;  // any compound a sibling combinator leads from
 
     // @import resolution
     BasedImportResolver importResolver_;

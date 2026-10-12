@@ -1324,6 +1324,8 @@ void Cascade::clear() {
     focusSrcUniversal_ = false;
     focusSubjects_.clear();
     ancestorClasses_.clear();
+    siblingClasses_.clear();
+    usesSiblingQualifiers_ = false;
     layerNames_.clear();
     layerRanks_.clear();
     loadedImports_.clear();

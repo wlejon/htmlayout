@@ -1222,9 +1222,32 @@ static void testHoverPseudoTracking() {
     }
 }
 
+static void testSiblingQualifierClasses() {
+    printf("--- Cascade: classAffectsSiblings / usesSiblingQualifiers ---\n");
+    {
+        Cascade c;
+        c.addStylesheet(parse(".row.on { color: red; } .dark .btn { color: blue; }"));
+        check(!c.usesSiblingQualifiers(), "no sibling combinator -> usesSiblingQualifiers() false");
+        check(!c.classAffectsSiblings("on") && !c.classAffectsSiblings("dark"), "no class reaches a sibling");
+        check(c.classAffectsDescendants("dark"), "an ancestor class still reaches below");
+    }
+    {
+        Cascade c;
+        c.addStylesheet(parse(".box.focus + .tag { visibility: visible; } .a ~ .b .c { color: red; } .x .y + .z { color: blue; }"));
+        check(c.usesSiblingQualifiers(), "a sibling combinator -> usesSiblingQualifiers() true");
+        check(c.classAffectsSiblings("box") && c.classAffectsSiblings("focus"), ".box.focus + .tag: both classes reach the next sibling");
+        check(c.classAffectsSiblings("a") && !c.classAffectsSiblings("b"), ".a ~ .b .c: .a does, .b (a descendant combinator leads from it) does not");
+        check(c.classAffectsSiblings("y") && !c.classAffectsSiblings("x"), ".x .y + .z: .y does, .x does not");
+        check(!c.classAffectsSiblings("tag") && !c.classAffectsSiblings("z"), "a subject class does not");
+        c.clear();
+        check(!c.usesSiblingQualifiers() && !c.classAffectsSiblings("focus"), "clear() resets them");
+    }
+}
+
 void testCascade() {
     testInlineLogicalDirection();
     testHoverPseudoTracking();
+    testSiblingQualifierClasses();
     testBasicResolve();
     testSpecificityOrder();
     testSourceOrder();
