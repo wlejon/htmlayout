@@ -323,6 +323,13 @@ struct LayoutNode {
     // edits descendants' boxes, which must be laid out afresh next time.
     bool textOverflowed = false;
 
+    // How far right (content coordinates) the lines text-overflow truncated
+    // reached before the cut, or 0. The ellipsis is a paint effect: the text
+    // it hides is still this box's scrollable overflow (CSSOM scrollWidth,
+    // css-overflow-3 §2.2), so computeSubtreeHitBounds folds it into
+    // naturalWidth after the cut runs have stopped reaching that far.
+    float textOverflowReach = 0.0f;
+
     // The box position box.hitBounds was last derived against. A pass that skips
     // this subtree (nothing in it laid out) compares it to the current position
     // to see how far the parent has moved the box, and translates the cached

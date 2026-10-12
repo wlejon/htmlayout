@@ -291,6 +291,34 @@ static void testTextOverflowEllipsis() {
     }
     check(hasEllipsis, "an ellipsis is drawn");
     check(right <= 120.5f, "the truncated line ends inside the box");
+    // The ellipsis is paint: the cut text is still scrollable overflow, so
+    // naturalWidth (scrollWidth less padding) is the whole line, 38 bytes.
+    check(near(box.box.naturalWidth, 380), "truncated: naturalWidth is the uncut line");
+    // Relaid with nothing changed (the reach is re-derived, not stale or lost).
+    markDirty(&box);
+    layoutTree(&box, 800, m);
+    check(near(box.box.naturalWidth, 380), "relaid: naturalWidth still the uncut line");
+    // Under padding the reach is in content coordinates (padding is added by
+    // the scrollWidth consumer).
+    SNode boxP; boxP.init(); boxP.style_["width"] = "120px";
+    boxP.style_["padding-left"] = "6px"; boxP.style_["padding-right"] = "6px";
+    boxP.style_["white-space"] = "nowrap";
+    boxP.style_["overflow"] = "hidden"; boxP.style_["overflow-x"] = "hidden";
+    boxP.style_["text-overflow"] = "ellipsis";
+    SNode tP; tP.textNode("ARDY Motion text to G1 skeleton motion");
+    boxP.addChild(&tP);
+    layoutTree(&boxP, 800, m);
+    check(boxP.box.textTruncated && near(boxP.box.naturalWidth, 380),
+          "padded: naturalWidth is the uncut line, content-relative");
+    // Several lines (pre): the widest uncut line counts.
+    SNode boxM; boxM.init(); boxM.style_["width"] = "100px";
+    boxM.style_["white-space"] = "pre";
+    boxM.style_["overflow"] = "hidden"; boxM.style_["overflow-x"] = "hidden";
+    boxM.style_["text-overflow"] = "ellipsis";
+    SNode tM; tM.textNode("abcdefghijklmno\nabcdefghijklmnopqrstuvwxy\nab");
+    boxM.addChild(&tM);
+    layoutTree(&boxM, 800, m);
+    check(near(boxM.box.naturalWidth, 250), "multi-line: the widest uncut line counts");
 
     // Fits: nothing happens.
     SNode box2; box2.init(); box2.style_["width"] = "400px";
@@ -319,6 +347,7 @@ static void testTextOverflowEllipsis() {
     for (auto& r : t.box.textRuns) all += r.text;
     check(!box.box.textTruncated && all.find("\xE2\x80\xA6") == std::string::npos &&
           all.find("motion") != std::string::npos, "relaid wider, the full text returns");
+    check(near(box.box.naturalWidth, 600), "relaid wider: naturalWidth back to the box");
 }
 
 // Intrinsic sizes count letter-spacing the way layout does: one advance per

@@ -341,8 +341,11 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             item.flexBasis = resolveLength(basis, mainAvailable, childFontSize);
             basisFromMainDim = (item.flexBasis >= 0);
         }
-        if (basisFromMainDim && styleVal(child, Prop::BoxSizing) != "border-box") {
-            float edges = 0;
+        // A content-box item's main-axis padding + border: what turns its
+        // width/height, min-* and max-* into the border-box sizes flex works in.
+        float contentBoxEdges = 0;
+        if (styleVal(child, Prop::BoxSizing) != "border-box") {
+            float& edges = contentBoxEdges;
             if (isRow) {
                 edges += resolveLength(styleVal(child, Prop::PaddingLeft), mainAvailable, childFontSize) +
                          resolveLength(styleVal(child, Prop::PaddingRight), mainAvailable, childFontSize);
@@ -358,8 +361,8 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 if (styleVal(child, Prop::BorderBottomStyle) != "none")
                     edges += resolveLength(styleVal(child, Prop::BorderBottomWidth), mainAvailable, childFontSize);
             }
-            item.flexBasis += edges;
         }
+        if (basisFromMainDim) item.flexBasis += contentBoxEdges;
 
         // Resolve min/max on main axis.
         // CSS Flexbox §4.5: min-width/min-height: auto on a flex item resolves to
@@ -375,6 +378,11 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             item.minMain = minMainAuto ? -1.0f : resolveDim(minMainVal, mainAvailable, childFontSize);
             item.maxMain = resolveDim(styleVal(child, Prop::MaxHeight), mainAvailable, childFontSize);
         }
+        // min-width: 200px on a content-box item with 6px padding each side
+        // is a 212px border box (max-width: 200px clamped the border box to
+        // 200, so the content shrank to 188).
+        if (item.minMain >= 0) item.minMain += contentBoxEdges;
+        if (item.maxMain >= 0) item.maxMain += contentBoxEdges;
         if (minMainAuto && isRow) {
             // §4.5: the automatic minimum resolves to 0 when the item is a scroll
             // container on the MAIN axis. For row flex that is the inline axis, so

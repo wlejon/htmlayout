@@ -569,6 +569,7 @@ bool textOverflowApplies(LayoutNode* node) {
 
 bool beginTextOverflow(LayoutNode* node, std::string& ellipsisText) {
     ellipsisText = resolveTextOverflow(node);
+    node->textOverflowReach = 0.0f;
     if (node->textOverflowed) {
         // Last pass cut runs short in reused descendant boxes: lay them out
         // afresh, and drop an ellipsis the container itself carried.
@@ -601,7 +602,9 @@ void applyTextOverflow(LayoutNode* node, const std::string& ellipsisText,
         w.lineTop = line.top;
         gatherLine(node, 0.0f, 0.0f, line.top, line.bottom, w);
         bool overflows = false;
+        float reach = 0.0f;   // the line's right edge before the cut
         auto past = [&](float l, float r) {
+            reach = std::max(reach, r);
             if (rtl ? l < line.left - kFitSlack : r > line.right + kFitSlack)
                 overflows = true;
         };
@@ -613,6 +616,10 @@ void applyTextOverflow(LayoutNode* node, const std::string& ellipsisText,
         }
         for (const ElemRef& e : w.lastLineElems) past(e.left, e.right);
         if (!overflows) continue;
+        // The cut text is still scrollable overflow (naturalWidth). Only the
+        // rightward reach: naturalWidth measures from the content-box left
+        // edge, so an rtl line's leftward overflow has nowhere to go.
+        if (!rtl) node->textOverflowReach = std::max(node->textOverflowReach, reach);
         placeEllipsis(w, line, spec, metrics);
         node->box.textTruncated = true;
         node->textOverflowed = true;

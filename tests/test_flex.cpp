@@ -816,11 +816,48 @@ static void testFlexBorderBoxColumnHeight() {
           "border-box column: flexible item fills the content box, not the border box");
 }
 
+static void testFlexContentBoxMinMax() {
+    printf("--- Flex: min/max-width under box-sizing:content-box ---\n");
+    // max-width:200px on a content-box item with 6px padding a side is a 212px
+    // border box with a 200px content box. Clamping the border box to 200 left
+    // 188 of content (a long nowrap tag narrower than Chrome's by its padding).
+    FlexMockNode root; initFlexContainer(root);
+    root.style["width"] = "400px";
+    FlexMockNode tag;
+    initFlexItem(tag);
+    tag.style["max-width"] = "200px";
+    tag.style["padding-left"] = "6px"; tag.style["padding-right"] = "6px";
+    tag.style["border-left-style"] = "solid"; tag.style["border-left-width"] = "2px";
+    tag.style["white-space"] = "nowrap";
+    FlexMockNode txt; txt.isText = true; txt.text = std::string(30, 'x');  // 300px
+    txt.style = tag.style;
+    tag.addChild(&txt);
+    // min-width likewise: 100px of content, the item's own content only 20.
+    FlexMockNode small;
+    initFlexItem(small);
+    small.style["min-width"] = "100px";
+    small.style["padding-left"] = "5px"; small.style["padding-right"] = "5px";
+    FlexMockNode stxt; stxt.isText = true; stxt.text = "ab"; stxt.style = small.style;
+    small.addChild(&stxt);
+    root.addChild(&tag);
+    root.addChild(&small);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 600, m);
+    check(approx(tag.box.contentRect.width, 200),
+          "content-box max-width: content box is the max-width");
+    check(approx(tag.box.fullWidth(), 214), "content-box max-width: border box adds padding + border");
+    check(approx(small.box.contentRect.width, 100),
+          "content-box min-width: content box is the min-width");
+    check(approx(small.box.fullWidth(), 110), "content-box min-width: border box adds padding");
+}
+
 // ========== Entry point ==========
 
 void testFlexLayout() {
     testFlexBorderBoxMinWidth();
     testFlexBorderBoxColumnHeight();
+    testFlexContentBoxMinMax();
     testFlexColumnMaxHeightClamp();
     testFlexColumnAutoHeightGrow();
     testFlexBasicRow();

@@ -417,6 +417,8 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
             reachRight(child->box.marginBox());
     }
 
+    // Text an ellipsis cut short reached further before the cut.
+    contentRight = std::max(contentRight, node->textOverflowReach);
     node->box.naturalWidth = std::max(node->box.contentRect.width, contentRight);
 
     // Children live in this node's content space, shifted by its scroll offset —

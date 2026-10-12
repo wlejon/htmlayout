@@ -1100,7 +1100,8 @@ static void testFlexColumnAutoMinMaxHeightClamp() {
         root.addChild(k);
         kids[i] = k; texts[i] = t;
     }
-    kids[0]->style_["max-height"] = "30px";
+    // Content-box: a 10px content box under 20px of padding is a 30px border box.
+    kids[0]->style_["max-height"] = "10px";
 
     LxMetrics m;
     layoutTree(&root, 400, m);
