@@ -87,6 +87,37 @@ void relayoutStretchedRowItem(FlexItem* item, float stretchCross, float vExtra,
     n->box.contentRect.width = contentW;
 }
 
+// An anonymous flex item's text as it lays out on its own line (CSS Text
+// §4.1): with collapsible spaces (normal / nowrap / pre-line) each run of
+// spaces and tabs collapses to one, and the line's leading and trailing
+// spaces are removed; pre-line keeps its newlines as breaks, the others turn
+// them into spaces. pre / pre-wrap / break-spaces keep the text as it is.
+std::string collapsedLineText(std::string_view text, const std::string& whiteSpace) {
+    if (whiteSpace == "pre" || whiteSpace == "pre-wrap" || whiteSpace == "break-spaces")
+        return std::string(text);
+    const bool keepNewlines = whiteSpace == "pre-line";
+    std::string out;
+    out.reserve(text.size());
+    bool space = false;
+    for (char ch : text) {
+        const bool nl = ch == '\n' || ch == '\r';
+        if (nl && keepNewlines) {
+            while (!out.empty() && out.back() == ' ') out.pop_back();
+            out += '\n';
+            space = false;
+            continue;
+        }
+        if (nl || std::isspace(static_cast<unsigned char>(ch))) {
+            space = true;
+            continue;
+        }
+        if (space && !out.empty() && out.back() != '\n') out += ' ';
+        space = false;
+        out += ch;
+    }
+    return out;
+}
+
 } // anonymous namespace
 
 void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
@@ -256,8 +287,12 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             const std::string& fontFamily = styleVal(node, Prop::FontFamily);
             const std::string& fontWeight = styleVal(node, Prop::FontWeight);
             FontFeatureScope features(metrics, fontFeaturesOf(node));
-            // Measure the text-transformed glyphs (matches paint + breakTextIntoRuns).
-            std::string shaped = applyTextTransform(std::string(text), styleVal(node, Prop::TextTransform));
+            // Measure the text-transformed glyphs (matches paint + breakTextIntoRuns),
+            // white-space processed as on its own line: unless spaces are
+            // preserved, runs collapse to one and the line's leading and
+            // trailing spaces go, so a "Skip\n  <svg>" source measures "Skip".
+            std::string shaped = applyTextTransform(collapsedLineText(text, styleVal(node, Prop::WhiteSpace)),
+                                                    styleVal(node, Prop::TextTransform));
             float textW = metrics.measureWidth(shaped, fontFamily, fontSize, fontWeight);
             float textH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
 

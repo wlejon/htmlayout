@@ -852,6 +852,26 @@ static void testFlexContentBoxMinMax() {
     check(approx(small.box.fullWidth(), 110), "content-box min-width: border box adds padding");
 }
 
+static void testFlexAnonymousTextWhitespace() {
+    printf("--- Flex: an anonymous text item's white space ---\n");
+    // The text is a line of its own: runs collapse, the line's leading and
+    // trailing spaces go. The mock measures 10px a byte, so "Skip it" is 70.
+    FlexMockNode root; initFlexContainer(root);
+    FlexMockNode t; t.isText = true; t.text = "\n   Skip \t it\n  ";
+    root.addChild(&t);
+    FlexTextMetrics m;
+    layoutTree(&root, 400, m);
+    check(approx(t.box.contentRect.width, 70), "source indentation collapses: \"Skip it\" is 70px");
+
+    // white-space: pre keeps every space: "Skip  " is 60.
+    FlexMockNode root2; initFlexContainer(root2);
+    root2.style["white-space"] = "pre";
+    FlexMockNode t2; t2.isText = true; t2.text = "Skip  ";
+    root2.addChild(&t2);
+    layoutTree(&root2, 400, m);
+    check(approx(t2.box.contentRect.width, 60), "white-space: pre keeps its trailing spaces");
+}
+
 // ========== Entry point ==========
 
 void testFlexLayout() {
@@ -893,4 +913,5 @@ void testFlexLayout() {
     testFlexAlignContentSpaceEvenly();
     testFlexAlignContentStretch();
     testFlexShrunkItemChildWidth();
+    testFlexAnonymousTextWhitespace();
 }
