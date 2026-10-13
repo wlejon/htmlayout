@@ -108,6 +108,19 @@ Edges resolveEdges(const LayoutNode* node, const EdgeProps& props,
 // and table layout — and each copy pasted together the same eight property names.
 Edges resolveBorders(const LayoutNode* node, float referenceWidth, float fontSize);
 
+// Move everything inside `node` down by dy: its child boxes (descendant block
+// boxes are relative to their parent, so the children carry them) and the
+// placed text runs of every text descendant, which are stored on the
+// TextNode in the formatting root's content space. A table cell's
+// vertical-align and a button's centred content.
+void shiftContentY(LayoutNode* node, float dy);
+
+// A <button>'s content sits in an anonymous box centred in the block
+// dimension when the button is taller than it (HTML §15.5 button layout; a
+// flex or grid button lays out its own items and is left alone): called with
+// the content's flowed height once the button's content box height is final.
+void centerButtonContent(LayoutNode* node, float flowHeight);
+
 // Post-layout pass: position all absolute/fixed elements against their
 // correct containing blocks. Called automatically by layoutTree().
 void layoutAbsoluteElements(LayoutNode* root, const Viewport& viewport, TextMetrics& metrics);

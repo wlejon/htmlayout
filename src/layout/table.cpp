@@ -1221,34 +1221,7 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (valign == "middle") shiftY = availableH / 2.0f;
             else if (valign == "bottom") shiftY = availableH;
             // else top (default): no shift
-            if (shiftY > 0.0f) {
-                // Shift everything inside the cell down: child boxes and any
-                // placed text runs on TextNode descendants. Coordinates of
-                // descendant block boxes are relative to their parent so
-                // shifting the immediate child propagates them; text runs are
-                // stored on the TextNode itself in the cell's content coord
-                // space and must be shifted explicitly.
-                std::vector<LayoutNode*> walkStack;
-                for (auto* child : getLayoutChildren(cell)) {
-                    if (!child) continue;
-                    child->box.contentRect.y += shiftY;
-                    if (child->isTextNode()) {
-                        for (auto& tr : child->box.textRuns) tr.y += shiftY;
-                    }
-                    walkStack.push_back(child);
-                }
-                while (!walkStack.empty()) {
-                    auto* n = walkStack.back();
-                    walkStack.pop_back();
-                    for (auto* gc : n->children()) {
-                        if (!gc) continue;
-                        if (gc->isTextNode()) {
-                            for (auto& tr : gc->box.textRuns) tr.y += shiftY;
-                        }
-                        walkStack.push_back(gc);
-                    }
-                }
-            }
+            if (shiftY > 0.0f) shiftContentY(cell, shiftY);
         }
         cell->box.contentRect.height = cellContentH;
     }

@@ -1575,4 +1575,24 @@ void layoutAbsoluteElements(LayoutNode* root, const Viewport& viewport, TextMetr
     layoutAbsoluteElementsRecursive(root, viewport, metrics);
 }
 
+void centerButtonContent(LayoutNode* node, float flowHeight) {
+    if (!node || node->isTextNode()) return;
+    const std::string_view tag = node->tagName();
+    if (tag != "button" && tag != "BUTTON") return;
+    const std::string& d = styleVal(node, Prop::Display);
+    if (d == "flex" || d == "inline-flex" || d == "grid" || d == "inline-grid") return;
+    const float spare = node->box.contentRect.height - flowHeight;
+    if (spare > 0.5f) shiftContentY(node, spare / 2.0f);
+}
+
+void shiftContentY(LayoutNode* node, float dy) {
+    if (!node || dy == 0.0f) return;
+    for (auto* child : getLayoutChildren(node)) {
+        if (!child) continue;
+        child->box.contentRect.y += dy;
+        if (child->isTextNode())
+            for (auto& tr : child->box.textRuns) tr.y += dy;
+    }
+}
+
 } // namespace htmlayout::layout

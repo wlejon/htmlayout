@@ -1414,6 +1414,9 @@ void layoutBlock(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
         if (specifiedHeight < 0.0f) node->box.contentRect.height = totalY;
     }
+
+    // A height: 32px "Save" button reads in its middle, as in browsers.
+    if (!hasMulticol) centerButtonContent(node, cursorY);
 }
 
 } // namespace htmlayout::layout

@@ -810,6 +810,7 @@ void layoutInline(LayoutNode* node, float availableWidth, TextMetrics& metrics) 
         } else {
             node->box.contentRect.height = cursorY;
         }
+        centerButtonContent(node, cursorY);
 
         if (widthVal == "auto" || widthVal.empty()) {
             // The shrink-to-fit width decided above is the box's width: the
