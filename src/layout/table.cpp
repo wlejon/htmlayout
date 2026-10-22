@@ -254,6 +254,11 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
     auto& colInfos = ts.colInfos;
 
     auto collectRows = [&](LayoutNode* parent) {
+        std::vector<TableRow> headerRows;
+        std::vector<TableRow> bodyRows;
+        std::vector<TableRow> footerRows;
+        std::vector<LayoutNode*> groupNodes;
+
         for (auto* child : getLayoutChildren(parent)) {
             if (child->isTextNode()) continue;
             auto& cs = child->computedStyle();
@@ -267,22 +272,21 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
             if (isTableRow(d)) {
                 TableRow row;
                 row.rowNode = child;
-                for (auto* cell : child->children()) {
+                for (auto* cell : getLayoutChildren(child)) {
                     if (cell->isTextNode()) continue;
                     auto& cellStyle = cell->computedStyle();
                     const std::string& cd = styleVal(cell, Prop::Display);
                     if (cd == "none") { clearHiddenBox(cell); continue; }
                     row.cells.push_back(cell);
                 }
-                rows.push_back(std::move(row));
+                bodyRows.push_back(std::move(row));
             } else if (isTableRowGroup(d)) {
                 // Recurse into row groups (thead, tbody, tfoot)
-                RowGroup rg;
-                rg.node = child;
-                rg.firstRow = rows.size();
-                rg.lastRow = rows.size(); // updated below
+                auto& targetRows = (d == "table-header-group") ? headerRows
+                                 : (d == "table-footer-group") ? footerRows
+                                                               : bodyRows;
                 bool added = false;
-                for (auto* groupChild : child->children()) {
+                for (auto* groupChild : getLayoutChildren(child)) {
                     if (groupChild->isTextNode()) continue;
                     auto& gcs = groupChild->computedStyle();
                     const std::string& gd = styleVal(groupChild, Prop::Display);
@@ -295,17 +299,16 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                             if (cell->isTextNode()) continue;
                             auto& cellStyle = cell->computedStyle();
                             if (styleVal(cell, Prop::Display) == "none") {
-                                cell->box = LayoutBox{};
+                                clearHiddenBox(cell);
                                 continue;
                             }
                             row.cells.push_back(cell);
                         }
-                        rg.lastRow = rows.size();
-                        rows.push_back(std::move(row));
+                        targetRows.push_back(std::move(row));
                         added = true;
                     }
                 }
-                if (added) ts.rowGroups.push_back(rg);
+                if (added) groupNodes.push_back(child);
                 else { child->box = LayoutBox{}; } // empty row group
             } else if (d == "table-column-group") {
                 ts.colGroups.push_back(child);
@@ -316,10 +319,12 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                 std::string gSpan(child->attribute("span"));
                 if (gSpan.empty()) gSpan = styleVal(child, Prop::Span);
                 bool hasColChildren = false;
-                for (auto* gc : child->children()) {
+                for (auto* gc : getLayoutChildren(child)) {
                     if (gc->isTextNode()) continue;
                     auto& gccs = gc->computedStyle();
-                    if (styleVal(gc, Prop::Display) == "table-column") {
+                    const std::string& gcd = styleVal(gc, Prop::Display);
+                    if (gcd == "none") { clearHiddenBox(gc); continue; }
+                    if (gcd == "table-column") {
                         hasColChildren = true;
                         ColInfo ci;
                         ci.colNode = gc;
@@ -369,15 +374,36 @@ TableStructure buildTableStructure(LayoutNode* node, float availableWidth,
                 ts.captions.push_back(child);
             } else if (isTableCell(d)) {
                 // Direct cell without a row — create anonymous row
-                if (rows.empty() || !rows.back().cells.empty()) {
-                    rows.push_back(TableRow{});
+                if (bodyRows.empty() || !bodyRows.back().cells.empty()) {
+                    bodyRows.push_back(TableRow{});
                 }
-                rows.back().cells.push_back(child);
+                bodyRows.back().cells.push_back(child);
             } else {
                 // Non-table child — treat as anonymous cell in anonymous row
-                rows.push_back(TableRow{});
-                rows.back().cells.push_back(child);
+                bodyRows.push_back(TableRow{});
+                bodyRows.back().cells.push_back(child);
             }
+        }
+
+        rows.reserve(headerRows.size() + bodyRows.size() + footerRows.size());
+        for (auto& r : headerRows) rows.push_back(std::move(r));
+        for (auto& r : bodyRows)   rows.push_back(std::move(r));
+        for (auto& r : footerRows) rows.push_back(std::move(r));
+
+        for (auto* gn : groupNodes) {
+            RowGroup rg;
+            rg.node = gn;
+            bool found = false;
+            for (size_t i = 0; i < rows.size(); ++i) {
+                if (rows[i].groupNode == gn) {
+                    if (!found) {
+                        rg.firstRow = i;
+                        found = true;
+                    }
+                    rg.lastRow = i;
+                }
+            }
+            if (found) ts.rowGroups.push_back(rg);
         }
     };
 
@@ -952,6 +978,13 @@ void layoutTable(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 newMar.top   != ci.node->box.margin.top   ||
                 newMar.bottom!= ci.node->box.margin.bottom;
             if (padChanged || marChanged) {
+                float borderH = ci.node->box.border.left + ci.node->box.border.right;
+                float newContentW = std::max(0.0f,
+                    layoutW - newPad.left - newPad.right - newMar.left - newMar.right - borderH);
+                float prevOverride = ci.node->overrideContentWidth;
+                ci.node->overrideContentWidth = newContentW;
+                layoutNode(ci.node, tableContentWidth, metrics);
+                ci.node->overrideContentWidth = prevOverride;
                 ci.node->box.padding = newPad;
                 ci.node->box.margin  = newMar;
             }
