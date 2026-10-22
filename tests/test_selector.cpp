@@ -359,6 +359,34 @@ static void testIsWhereHas() {
     // :has() specificity = most specific argument
     check(calculateSpecificity(":has(#x, .y)") == (1u << 16),
           ":has() specificity = most specific argument");
+
+    // Nested :is()/:not()/:where()/:has() specificity
+    check(calculateSpecificity(":is(:where(#id))") == 0,
+          ":is(:where(#id)) has zero specificity");
+    check(calculateSpecificity(":where(:is(#id))") == 0,
+          ":where(:is(#id)) has zero specificity");
+    check(calculateSpecificity(":not(:is(#id, .cls))") == (1u << 16),
+          ":not(:is(#id, .cls)) has ID specificity (1,0,0)");
+    check(calculateSpecificity(":is(:has(#x), .a)") == (1u << 16),
+          ":is(:has(#x), .a) has ID specificity (1,0,0)");
+
+    // Case-insensitive pseudo-classes and pseudo-elements
+    MockElement hovered; hovered.tag = "div"; hovered.hovered = true;
+    check(parseSelector(":HOVER").matches(hovered), ":HOVER matches hovered element");
+    check(parseSelector(":Not(.box)").matches(span), ":Not(.box) matches span");
+    check(!parseSelector(":Not(.box)").matches(div), ":Not(.box) does not match .box");
+    check(parseSelector(":First-Child").matches(s1), ":First-Child matches first child");
+    check(!parseSelector(":First-Child").matches(s2), ":First-Child does not match second child");
+    auto beforeSel = parseSelector("div:BEFORE");
+    check(!beforeSel.chain.entries.empty() &&
+          beforeSel.chain.entries[0].compound.simples.back().type == SimpleSelectorType::PseudoElement &&
+          beforeSel.chain.entries[0].compound.simples.back().value == "before",
+          ":BEFORE parses as lowercase PseudoElement 'before'");
+    auto afterSel = parseSelector("div::AFTER");
+    check(!afterSel.chain.entries.empty() &&
+          afterSel.chain.entries[0].compound.simples.back().type == SimpleSelectorType::PseudoElement &&
+          afterSel.chain.entries[0].compound.simples.back().value == "after",
+          "::AFTER parses as lowercase PseudoElement 'after'");
 }
 
 // :scope is the root element unless the ElementRef names another scoping

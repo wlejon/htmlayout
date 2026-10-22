@@ -739,6 +739,109 @@ static void testGridAutoFlowColumn() {
     check(approx(c.box.contentRect.y, 0, 2), "auto-flow column: c at top of col 2");
 }
 
+static void testGridPercentageHeightAndMinmaxIntrinsic() {
+    printf("--- Grid: percentage height & minmax() intrinsic keywords ---\n");
+    GridMetrics metrics;
+
+    // 1. Indefinite parent height (availableHeight == 0): height: 100% resolves to auto
+    {
+        GridNode grid;
+        grid.initBlock();
+        grid.style_["display"] = "grid";
+        grid.style_["grid-template-columns"] = "100px";
+        grid.style_["width"] = "200px";
+        grid.style_["height"] = "100%";
+        grid.style_["row-gap"] = "0";
+        grid.style_["column-gap"] = "0";
+
+        GridNode c1;
+        c1.initBlock();
+        c1.style_["height"] = "60px";
+        grid.addChild(&c1);
+
+        layoutTree(&grid, 400.0f, metrics);
+        check(approx(grid.box.contentRect.height, 60.0f),
+              "grid height: 100% against indefinite parent falls back to natural height (60px)");
+    }
+
+    // 2. Definite parent height (400px block parent): height: 50% resolves to 200px
+    {
+        GridNode parent;
+        parent.initBlock();
+        parent.style_["width"] = "400px";
+        parent.style_["height"] = "400px";
+
+        GridNode grid;
+        grid.initBlock();
+        grid.style_["display"] = "grid";
+        grid.style_["grid-template-columns"] = "100px";
+        grid.style_["grid-template-rows"] = "1fr";
+        grid.style_["width"] = "200px";
+        grid.style_["height"] = "50%";
+        grid.style_["row-gap"] = "0";
+        grid.style_["column-gap"] = "0";
+
+        GridNode c1;
+        c1.initBlock();
+        grid.addChild(&c1);
+        parent.addChild(&grid);
+
+        layoutTree(&parent, 400.0f, metrics);
+        check(approx(grid.box.contentRect.height, 200.0f),
+              "grid height: 50% against definite 400px parent resolves to 200px");
+        check(approx(c1.box.contentRect.height, 200.0f),
+              "grid 1fr row stretches to resolved 200px percentage height");
+    }
+
+    // 3. minmax(50px, max-content) and minmax(max-content, 1fr)
+    {
+        GridNode grid;
+        grid.initBlock();
+        grid.style_["display"] = "grid";
+        grid.style_["grid-template-columns"] = "minmax(50px, max-content) 1fr";
+        grid.style_["width"] = "300px";
+        grid.style_["row-gap"] = "0";
+        grid.style_["column-gap"] = "0";
+
+        GridNode c1, t1, c2;
+        c1.initBlock();
+        t1.isText = true;
+        t1.text = "hello world"; // 11 chars * 16 * 0.6 = 105.6px max-content
+        c1.addChild(&t1);
+        c2.initBlock();
+        c2.style_["height"] = "20px";
+        grid.addChild(&c1);
+        grid.addChild(&c2);
+
+        layoutTree(&grid, 300.0f, metrics);
+        float expectedMax = 11.0f * 16.0f * 0.6f; // 105.6
+        check(approx(c1.box.contentRect.width, expectedMax, 2.0f),
+              "minmax(50px, max-content) column grows to item max-content width");
+        check(approx(c2.box.contentRect.width, 300.0f - expectedMax, 2.0f),
+              "1fr column receives remainder after minmax(50px, max-content)");
+    }
+
+    // 4. inline-grid shrink-to-fit with fixed minmax(50px, 120px) uses maxValue=120
+    {
+        GridNode grid;
+        grid.initBlock();
+        grid.style_["display"] = "inline-grid";
+        grid.style_["grid-template-columns"] = "minmax(50px, 120px)";
+        grid.style_["row-gap"] = "0";
+        grid.style_["column-gap"] = "0";
+
+        GridNode c1;
+        c1.initBlock();
+        c1.style_["width"] = "200px";
+        c1.style_["height"] = "20px";
+        grid.addChild(&c1);
+
+        layoutTree(&grid, 500.0f, metrics);
+        check(approx(grid.box.contentRect.width, 120.0f, 2.0f),
+              "inline-grid minmax(50px, 120px) max-content width is capped at 120px");
+    }
+}
+
 // ========== Entry point ==========
 
 void testGridLayout() {
@@ -775,4 +878,5 @@ void testGridLayout() {
     testGridRowsOnlySingleColumn();
     testGridNoTemplateSingleColumn();
     testGridRowsOnlyExplicitColumnExtends();
+    testGridPercentageHeightAndMinmaxIntrinsic();
 }

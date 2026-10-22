@@ -220,14 +220,6 @@ private:
         return name;
     }
 
-    int consumeInt() {
-        std::string s;
-        if (peek() == '+' || peek() == '-') s += advance();
-        while (m_pos < m_text.size() && std::isdigit((unsigned char)peek())) s += advance();
-        if (s.empty() || s == "+" || s == "-") return 0;
-        return safeStoi(s);
-    }
-
     CompoundSelector parseCompound() {
         CompoundSelector compound;
         if (tooDeep()) { m_pos = m_text.size(); return compound; }
@@ -334,7 +326,7 @@ private:
             // Pseudo-element ::before, ::after, ::slotted(), ::part()
             advance();
             ss.type = SimpleSelectorType::PseudoElement;
-            ss.value = consumeName();
+            ss.value = toLower(consumeName());
 
             // Handle functional pseudo-elements
             if (peek() == '(') {
@@ -380,7 +372,7 @@ private:
             return ss;
         }
         ss.type = SimpleSelectorType::PseudoClass;
-        ss.value = consumeName();
+        ss.value = toLower(consumeName());
 
         // The four CSS 2.1 pseudo-elements predate the double-colon notation
         // and are still written with one colon in the wild. Selectors L3 §7
@@ -527,86 +519,69 @@ private:
 
 // ---- Specificity Calculator ----
 
+uint32_t computeSpecificity(const SelectorChain& chain);
+
+void addSimpleSpecificity(const SimpleSelector& s, int& ids, int& classes, int& types) {
+    switch (s.type) {
+        case SimpleSelectorType::Id:
+            ids++;
+            break;
+        case SimpleSelectorType::Class:
+        case SimpleSelectorType::Attribute:
+            classes++;
+            break;
+        case SimpleSelectorType::PseudoClass:
+            if (s.value == "not" || s.value == "is" || s.value == "has") {
+                // :is()/:not()/:has() specificity = most specific argument
+                uint32_t maxSpec = 0;
+                for (auto& compound : s.selectorListArg) {
+                    int ci = 0, cc = 0, ct = 0;
+                    for (auto& inner : compound.simples)
+                        addSimpleSpecificity(inner, ci, cc, ct);
+                    uint32_t spec = (std::min(ci, 255) << 16) |
+                                    (std::min(cc, 255) << 8) |
+                                    std::min(ct, 255);
+                    if (spec > maxSpec) maxSpec = spec;
+                }
+                for (auto& rel : s.relativeArgs) {
+                    uint32_t spec = computeSpecificity(rel.chain);
+                    if (spec > maxSpec) maxSpec = spec;
+                }
+                ids += (maxSpec >> 16) & 0xFF;
+                classes += (maxSpec >> 8) & 0xFF;
+                types += maxSpec & 0xFF;
+            } else if (s.value == "where") {
+                // :where() contributes zero specificity
+            } else if (s.value == "host" || s.value == "host-context") {
+                // :host/:host-context itself = pseudo-class specificity + argument
+                classes++;
+                for (auto& inner : s.hostArg)
+                    addSimpleSpecificity(inner, ids, classes, types);
+            } else {
+                classes++;
+            }
+            break;
+        case SimpleSelectorType::Tag:
+            types++;
+            break;
+        case SimpleSelectorType::PseudoElement:
+            types++;
+            // ::slotted(selector) specificity includes its argument
+            if (s.value == "slotted") {
+                for (auto& inner : s.slottedArg)
+                    addSimpleSpecificity(inner, ids, classes, types);
+            }
+            break;
+        case SimpleSelectorType::Universal:
+            break; // no specificity
+    }
+}
+
 uint32_t computeSpecificity(const SelectorChain& chain) {
     int ids = 0, classes = 0, types = 0;
     for (auto& entry : chain.entries) {
-        for (auto& s : entry.compound.simples) {
-            switch (s.type) {
-                case SimpleSelectorType::Id:
-                    ids++;
-                    break;
-                case SimpleSelectorType::Class:
-                case SimpleSelectorType::Attribute:
-                case SimpleSelectorType::PseudoClass:
-                    if (s.value == "not" || s.value == "is" || s.value == "has") {
-                        // :is()/:not()/:has() specificity = most specific argument
-                        uint32_t maxSpec = 0;
-                        for (auto& compound : s.selectorListArg) {
-                            int ci = 0, cc = 0, ct = 0;
-                            for (auto& inner : compound.simples) {
-                                switch (inner.type) {
-                                    case SimpleSelectorType::Id: ci++; break;
-                                    case SimpleSelectorType::Class:
-                                    case SimpleSelectorType::Attribute:
-                                    case SimpleSelectorType::PseudoClass: cc++; break;
-                                    case SimpleSelectorType::Tag: ct++; break;
-                                    default: break;
-                                }
-                            }
-                            uint32_t spec = (ci << 16) | (cc << 8) | ct;
-                            if (spec > maxSpec) maxSpec = spec;
-                        }
-                        for (auto& rel : s.relativeArgs) {
-                            uint32_t spec = computeSpecificity(rel.chain);
-                            if (spec > maxSpec) maxSpec = spec;
-                        }
-                        ids += (maxSpec >> 16) & 0xFF;
-                        classes += (maxSpec >> 8) & 0xFF;
-                        types += maxSpec & 0xFF;
-                    } else if (s.value == "where") {
-                        // :where() contributes zero specificity
-                    } else if (s.value == "host" || s.value == "host-context") {
-                        // :host/:host-context itself = pseudo-class specificity
-                        classes++;
-                        // Plus the specificity of the argument selectors
-                        for (auto& inner : s.hostArg) {
-                            switch (inner.type) {
-                                case SimpleSelectorType::Id: ids++; break;
-                                case SimpleSelectorType::Class:
-                                case SimpleSelectorType::Attribute:
-                                case SimpleSelectorType::PseudoClass: classes++; break;
-                                case SimpleSelectorType::Tag: types++; break;
-                                default: break;
-                            }
-                        }
-                    } else {
-                        classes++;
-                    }
-                    break;
-                case SimpleSelectorType::Tag:
-                    types++;
-                    break;
-                case SimpleSelectorType::PseudoElement:
-                    types++;
-                    // ::slotted(selector) specificity includes its argument
-                    if (s.value == "slotted") {
-                        for (auto& inner : s.slottedArg) {
-                            switch (inner.type) {
-                                case SimpleSelectorType::Id: ids++; break;
-                                case SimpleSelectorType::Class:
-                                case SimpleSelectorType::Attribute:
-                                case SimpleSelectorType::PseudoClass: classes++; break;
-                                case SimpleSelectorType::Tag: types++; break;
-                                default: break;
-                            }
-                        }
-                    }
-                    // ::part(name) has specificity of a pseudo-element (already counted above)
-                    break;
-                case SimpleSelectorType::Universal:
-                    break; // no specificity
-            }
-        }
+        for (auto& s : entry.compound.simples)
+            addSimpleSpecificity(s, ids, classes, types);
     }
     // Pack as (ids << 16) | (classes << 8) | types, clamped to 255 each
     if (ids > 255) ids = 255;
@@ -614,7 +589,7 @@ uint32_t computeSpecificity(const SelectorChain& chain) {
     if (types > 255) types = 255;
     return (static_cast<uint32_t>(ids) << 16) |
            (static_cast<uint32_t>(classes) << 8) |
-           static_cast<uint32_t>(types);
+           (static_cast<uint32_t>(types));
 }
 
 // ---- Matching ----

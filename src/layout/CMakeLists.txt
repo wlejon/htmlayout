@@ -7,6 +7,7 @@ add_library(htmlayout_layout STATIC
     inline.cpp
     flex.cpp
     grid.cpp
+    grid_tracks.cpp
     table.cpp
     text.cpp
     text_geometry.cpp
