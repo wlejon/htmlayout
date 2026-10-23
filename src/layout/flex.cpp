@@ -1,4 +1,5 @@
 #include "layout/flex.h"
+#include "layout/flex_items.h"
 #include "layout/formatting_context.h"
 #include "layout/text.h"
 #include "layout/style_util.h"
@@ -16,106 +17,6 @@ namespace {
 float resolveDim(const std::string& value, float available, float fontSize) {
     if (value.empty() || value == "auto" || value == "none") return -1.0f;
     return resolveLength(value, available, fontSize);
-}
-
-struct FlexItem {
-    LayoutNode* node;
-    float flexGrow;
-    float flexShrink;
-    float flexBasis;      // resolved basis (px), -1 = auto
-    float baseMain = 0;     // flex base size (outer, before min/max clamp)
-    float hypotheticalMain; // base size clamped by min/max
-    float minMain;
-    float maxMain;
-    float crossSize;
-    int order;
-    bool frozen = false;
-    float finalMain = 0;
-    // Column flex only: min-main is auto (min-height:auto) with visible overflow,
-    // so its content-based minimum can only be resolved once the item is laid out
-    // (its block-axis content height depends on the definite cross size). Deferred
-    // to the hypothetical-size loop where that layout happens.
-    bool colAutoMinPending = false;
-    // Column flex with an indefinite main size only: the item's laid-out outer
-    // height, which is its max-content contribution to the container's own
-    // intrinsic height (§9.9.1). Kept beside the flex base rather than folded
-    // into it because they answer different questions — the base is where
-    // flexing *starts*, this is what the item is *worth* to a container being
-    // sized by what is in it. -1 = not measured (the two are the same).
-    float contentMain = -1.0f;
-    // Row flex only: the item was laid out with its stretched height preset
-    // (a single line in a container of definite height), so its contents
-    // already fill the line and the stretch needs no second layout.
-    bool preStretched = false;
-};
-
-struct FlexLine {
-    std::vector<FlexItem*> items;
-    float mainSize = 0;
-    float crossSize = 0;
-};
-
-// CSS Flexbox §9.4 step 11: a stretched item's used cross size is definite,
-// and its contents are laid out again against it — so a `flex: 1` or `1fr`
-// inside a card stretched to a taller neighbour fills the card. Row flex
-// only (the cross size is the height). The measuring layout ran with the
-// height indefinite (unless the container's was definite, which preset it:
-// preStretched), so the item is laid out again when the stretch grew it past
-// that, or when its box is last pass's (reused), whose children were
-// distributed over whatever height it was stretched to then. The layout is
-// keyed on the stretched height (availableHeight), so a reused item whose
-// stretch has not changed is handed back as it is.
-void relayoutStretchedRowItem(FlexItem* item, float stretchCross, float vExtra,
-                              TextMetrics& metrics) {
-    LayoutNode* n = item->node;
-    if (item->preStretched) return;
-    const float naturalH = item->crossSize - n->box.margin.top - n->box.margin.bottom - vExtra;
-    const bool grew = stretchCross > naturalH + 0.01f;
-    const bool reused = n->lastLayoutPass != currentLayoutPass();
-    if (!grew && !reused) return;
-    // The measuring layout's keys: the flexed border-box width as the
-    // available width, the flexed content width as the override.
-    const float contentW = n->box.contentRect.width;
-    const float availW = item->finalMain;
-    n->availableHeight = stretchCross + vExtra;
-    n->overrideContentWidth = contentW;
-    if (beginLayoutNode(n, availW)) {
-        n->box.contentRect.height = stretchCross;
-        layoutNode(n, availW, metrics);
-    }
-    n->overrideContentWidth = -1.0f;
-    n->box.contentRect.width = contentW;
-}
-
-// An anonymous flex item's text as it lays out on its own line (CSS Text
-// §4.1): with collapsible spaces (normal / nowrap / pre-line) each run of
-// spaces and tabs collapses to one, and the line's leading and trailing
-// spaces are removed; pre-line keeps its newlines as breaks, the others turn
-// them into spaces. pre / pre-wrap / break-spaces keep the text as it is.
-std::string collapsedLineText(std::string_view text, const std::string& whiteSpace) {
-    if (whiteSpace == "pre" || whiteSpace == "pre-wrap" || whiteSpace == "break-spaces")
-        return std::string(text);
-    const bool keepNewlines = whiteSpace == "pre-line";
-    std::string out;
-    out.reserve(text.size());
-    bool space = false;
-    for (char ch : text) {
-        const bool nl = ch == '\n' || ch == '\r';
-        if (nl && keepNewlines) {
-            while (!out.empty() && out.back() == ' ') out.pop_back();
-            out += '\n';
-            space = false;
-            continue;
-        }
-        if (nl || std::isspace(static_cast<unsigned char>(ch))) {
-            space = true;
-            continue;
-        }
-        if (space && !out.empty() && out.back() != '\n') out += ' ';
-        space = false;
-        out += ch;
-    }
-    return out;
 }
 
 } // anonymous namespace
@@ -274,325 +175,12 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // Collect flex items, filtering out absolutely/fixed positioned children.
     // Text nodes become anonymous flex items (CSS spec).
     std::vector<FlexItem> items;
-    for (auto* child : getLayoutChildren(node)) {
-        if (child->isTextNode()) {
-            // Anonymous flex item: measure text and include as a flex item
-            std::string_view text = child->textContent();
-            bool allWhitespace = true;
-            for (char c : text) {
-                if (!std::isspace(static_cast<unsigned char>(c))) { allWhitespace = false; break; }
-            }
-            if (allWhitespace) continue;
-
-            const std::string& fontFamily = styleVal(node, Prop::FontFamily);
-            const std::string& fontWeight = styleVal(node, Prop::FontWeight);
-            FontFeatureScope features(metrics, fontFeaturesOf(node));
-            // Measure the text-transformed glyphs (matches paint + breakTextIntoRuns),
-            // white-space processed as on its own line: unless spaces are
-            // preserved, runs collapse to one and the line's leading and
-            // trailing spaces go, so a "Skip\n  <svg>" source measures "Skip".
-            std::string shaped = applyTextTransform(collapsedLineText(text, styleVal(node, Prop::WhiteSpace)),
-                                                    styleVal(node, Prop::TextTransform));
-            float textW = metrics.measureWidth(shaped, fontFamily, fontSize, fontWeight);
-            float textH = metrics.lineHeight(fontFamily, fontSize, fontWeight);
-
-            child->box.contentRect.width = textW;
-            child->box.contentRect.height = textH;
-
-            FlexItem item;
-            item.node = child;
-            item.flexGrow = 0;
-            item.flexShrink = 1;
-            item.flexBasis = isRow ? textW : textH;
-            // Automatic minimum size (§4.5) applies to anonymous items too:
-            // in a row container the text may not be shrunk below its
-            // min-content width (the widest unbreakable word).
-            item.minMain = 0;
-            if (isRow) {
-                std::string word;
-                float widestWord = 0.0f;
-                for (size_t ci = 0; ci <= shaped.size(); ci++) {
-                    char c = (ci < shaped.size()) ? shaped[ci] : ' ';
-                    if (std::isspace(static_cast<unsigned char>(c))) {
-                        if (!word.empty()) {
-                            widestWord = std::max(widestWord,
-                                metrics.measureWidth(word, fontFamily, fontSize, fontWeight));
-                            word.clear();
-                        }
-                    } else {
-                        word += c;
-                    }
-                }
-                item.minMain = widestWord;
-            }
-            item.maxMain = -1;
-            item.order = 0;
-            items.push_back(item);
-            continue;
-        }
-        child->viewportHeight = node->viewportHeight;
-        child->availableHeight = childAvailableHeight;
-        auto& cs = child->computedStyle();
-        if (styleVal(child, Prop::Display) == "none") {
-            clearHiddenBox(child);
-            continue;
-        }
-        const std::string& childPos = styleVal(child, Prop::Position);
-        if (childPos == "absolute" || childPos == "fixed") continue;
-
-        FlexItem item;
-        item.node = child;
-        float childFontSize = resolveLength(styleVal(child, Prop::FontSize), fontSize, fontSize);
-        if (childFontSize <= 0) childFontSize = fontSize;
-
-        item.flexGrow = resolveLength(styleVal(child, Prop::FlexGrow), 0, childFontSize);
-        item.flexShrink = resolveLength(styleVal(child, Prop::FlexShrink), 0, childFontSize);
-        if (item.flexShrink < 0) item.flexShrink = 1.0f;
-        item.order = static_cast<int>(resolveLength(styleVal(child, Prop::Order), 0, childFontSize));
-
-        // Re-resolve the item's margins from style every pass (auto → 0, per
-        // §9.7 auto margins are treated as 0 while sizing). A previous layout
-        // pass may have written *resolved* main-axis auto margins into
-        // box.margin (they absorb free space at positioning time); counting
-        // those stale values as real margins here would eat into this pass's
-        // free space and shrink items that fit.
-        child->box.margin = resolveEdges(child, kMarginProps, containerMain, childFontSize);
-
-        // Resolve flex-basis. flex-basis represents the outer (border-box) main
-        // size of the item — the rest of flex layout subtracts padding/border to
-        // recover content size. When the basis comes from a width/height (or an
-        // explicit length on flex-basis) and box-sizing is content-box, the
-        // specified value is content size, so we must add padding+border to
-        // convert to the outer main size.
-        const std::string& basis = styleVal(child, Prop::FlexBasis);
-        bool basisFromMainDim = false;
-        if (basis == "auto" || basis.empty()) {
-            // Use width/height as basis
-            float dim = resolveDim(styleVal(child, isRow ? Prop::Width : Prop::Height),
-                                   mainAvailable, childFontSize);
-            item.flexBasis = dim >= 0 ? dim : -1.0f;
-            basisFromMainDim = (dim >= 0);
-        } else {
-            item.flexBasis = resolveLength(basis, mainAvailable, childFontSize);
-            basisFromMainDim = (item.flexBasis >= 0);
-        }
-        // A content-box item's main-axis padding + border: what turns its
-        // width/height, min-* and max-* into the border-box sizes flex works in.
-        float contentBoxEdges = 0;
-        if (styleVal(child, Prop::BoxSizing) != "border-box") {
-            float& edges = contentBoxEdges;
-            if (isRow) {
-                edges += resolveLength(styleVal(child, Prop::PaddingLeft), mainAvailable, childFontSize) +
-                         resolveLength(styleVal(child, Prop::PaddingRight), mainAvailable, childFontSize);
-                if (styleVal(child, Prop::BorderLeftStyle) != "none")
-                    edges += resolveLength(styleVal(child, Prop::BorderLeftWidth), mainAvailable, childFontSize);
-                if (styleVal(child, Prop::BorderRightStyle) != "none")
-                    edges += resolveLength(styleVal(child, Prop::BorderRightWidth), mainAvailable, childFontSize);
-            } else {
-                edges += resolveLength(styleVal(child, Prop::PaddingTop), mainAvailable, childFontSize) +
-                         resolveLength(styleVal(child, Prop::PaddingBottom), mainAvailable, childFontSize);
-                if (styleVal(child, Prop::BorderTopStyle) != "none")
-                    edges += resolveLength(styleVal(child, Prop::BorderTopWidth), mainAvailable, childFontSize);
-                if (styleVal(child, Prop::BorderBottomStyle) != "none")
-                    edges += resolveLength(styleVal(child, Prop::BorderBottomWidth), mainAvailable, childFontSize);
-            }
-        }
-        if (basisFromMainDim) item.flexBasis += contentBoxEdges;
-
-        // Resolve min/max on main axis.
-        // CSS Flexbox §4.5: min-width/min-height: auto on a flex item resolves to
-        // the item's min-content size on the main axis (when overflow is visible),
-        // so unbreakable content (long words) is not shrunk below its min-content.
-        const std::string& minMainVal =
-            styleVal(child, isRow ? Prop::MinWidth : Prop::MinHeight);
-        bool minMainAuto = (minMainVal == "auto" || minMainVal.empty());
-        if (isRow) {
-            item.minMain = minMainAuto ? -1.0f : resolveDim(minMainVal, mainAvailable, childFontSize);
-            item.maxMain = resolveDim(styleVal(child, Prop::MaxWidth), mainAvailable, childFontSize);
-        } else {
-            item.minMain = minMainAuto ? -1.0f : resolveDim(minMainVal, mainAvailable, childFontSize);
-            item.maxMain = resolveDim(styleVal(child, Prop::MaxHeight), mainAvailable, childFontSize);
-        }
-        // min-width: 200px on a content-box item with 6px padding each side
-        // is a 212px border box (max-width: 200px clamped the border box to
-        // 200, so the content shrank to 188).
-        if (item.minMain >= 0) item.minMain += contentBoxEdges;
-        if (item.maxMain >= 0) item.maxMain += contentBoxEdges;
-        if (minMainAuto && isRow) {
-            // §4.5: the automatic minimum resolves to 0 when the item is a scroll
-            // container on the MAIN axis. For row flex that is the inline axis, so
-            // check overflow-x (the `overflow` shorthand expands into it too);
-            // reading the shorthand alone misses `overflow-x`/`overflow-y` longhands.
-            const std::string& overflow = styleVal(child, Prop::OverflowX);
-            if (overflow == "visible" || overflow.empty()) {
-                // Auto-min = min-content on the main axis (plus border/padding edges).
-                float minContent = computeMinContentWidth(item.node, metrics);
-                float ph = resolveLength(styleVal(child, Prop::PaddingLeft), mainAvailable, childFontSize) +
-                           resolveLength(styleVal(child, Prop::PaddingRight), mainAvailable, childFontSize);
-                Edges bEdges = resolveBorders(item.node, mainAvailable, childFontSize);
-                float bh = bEdges.left + bEdges.right;
-                item.minMain = minContent + ph + bh;
-                // CSS Flexbox §4.5: the automatic minimum size is the smaller of
-                // the content size suggestion and the "specified size suggestion"
-                // — the item's definite main size *property* (width), if any.
-                // flex-basis does NOT provide a specified size suggestion: an
-                // item with `flex: 0 0 240px` and wider content is still floored
-                // at its min-content size (Chromium behavior).
-                const std::string& wProp = styleVal(child, Prop::Width);
-                if (!isIntrinsicSizingKeyword(wProp)) {
-                    float specMain = resolveDim(wProp, mainAvailable, childFontSize);
-                    if (specMain >= 0) {
-                        if (styleVal(child, Prop::BoxSizing) != "border-box")
-                            specMain += ph + bh;
-                        if (item.minMain > specMain) item.minMain = specMain;
-                    }
-                }
-                // In all cases, the automatic minimum is clamped by the max
-                // main size property.
-                if (item.maxMain >= 0 && item.minMain > item.maxMain)
-                    item.minMain = item.maxMain;
-            }
-        } else if (minMainAuto && !isRow) {
-            // Column flex: the automatic minimum on the main (block) axis is the
-            // item's content-based min-content height. Unlike the inline axis it
-            // depends on the item's definite cross size, so it can't be measured
-            // until the item is laid out — defer to the hypothetical-size loop.
-            // (Overflow != visible resolves auto-min to 0, so items with their own
-            // scroll container are still allowed to shrink.) The main axis here is
-            // the block axis, so check overflow-y (the `overflow` shorthand expands
-            // into it too); reading the shorthand alone misses the longhand form.
-            const std::string& overflow = styleVal(child, Prop::OverflowY);
-            if (overflow == "visible" || overflow.empty())
-                item.colAutoMinPending = true;
-        }
-        if (item.minMain < 0) item.minMain = 0;
-
-        items.push_back(item);
-    }
-
-    // Sort by order
-    std::stable_sort(items.begin(), items.end(),
-        [](const FlexItem& a, const FlexItem& b) { return a.order < b.order; });
-
-    // One item's laid-out outer main size at the container's inner width, cached
-    // per node so a clean item doesn't re-lay its subtree to re-derive it. Two
-    // callers want the same number for different reasons: an `auto` basis *is*
-    // this, and an indefinite-main-size column container needs it as the item's
-    // max-content contribution however the basis was written.
-    auto measureOuterMain = [&](FlexItem& item) -> float {
-        if (item.node->box.dirty || !(item.node->measuredAtW == containerMain)) {
-            layoutNode(item.node, containerMain, metrics);
-            item.node->measuredAtW = containerMain;
-            item.node->measuredOuterMain =
-                item.node->box.contentRect.height +
-                item.node->box.padding.top + item.node->box.padding.bottom +
-                item.node->box.border.top + item.node->box.border.bottom;
-        }
-        return item.node->measuredOuterMain;
-    };
-
-    // Determine hypothetical main sizes
-    for (auto& item : items) {
-        if (item.flexBasis >= 0) {
-            item.hypotheticalMain = item.flexBasis;
-            // A column container with an indefinite main size is sized by what
-            // is in it, and an item that can grow contributes its *content*
-            // height rather than its flex base (§9.9.1). Without this, the
-            // universal `flex: 1; min-height: 0` scroll pane has a base of 0, a
-            // hypothetical of 0 and would contribute nothing at all — the
-            // container would collapse to its other items and the pane to
-            // nothing. Measured only where the answer is used: an item that
-            // cannot grow is worth its base, and a container with a definite
-            // height is not asking this question.
-            if (columnAutoHeight && item.flexGrow > 0 && !item.node->isTextNode()) {
-                item.contentMain = measureOuterMain(item);
-                if (item.maxMain >= 0 && item.contentMain > item.maxMain)
-                    item.contentMain = item.maxMain;
-            }
-            // For border-box items, a flex-basis of 0 must still reserve space for
-            // padding+border so flex-grow distributes the content area proportionally.
-            if (item.hypotheticalMain == 0 && !item.node->isTextNode()) {
-                auto& cs = item.node->computedStyle();
-                if (styleVal(item.node, Prop::BoxSizing) == "border-box") {
-                    float childFontSize = resolveLength(styleVal(item.node, Prop::FontSize), fontSize, fontSize);
-                    if (childFontSize <= 0) childFontSize = fontSize;
-                    float edges = 0;
-                    if (isRow) {
-                        edges += resolveLength(styleVal(item.node, Prop::PaddingLeft), mainAvailable, childFontSize) +
-                                 resolveLength(styleVal(item.node, Prop::PaddingRight), mainAvailable, childFontSize);
-                        if (styleVal(item.node, Prop::BorderLeftStyle) != "none")
-                            edges += resolveLength(styleVal(item.node, Prop::BorderLeftWidth), mainAvailable, childFontSize);
-                        if (styleVal(item.node, Prop::BorderRightStyle) != "none")
-                            edges += resolveLength(styleVal(item.node, Prop::BorderRightWidth), mainAvailable, childFontSize);
-                    } else {
-                        edges += resolveLength(styleVal(item.node, Prop::PaddingTop), mainAvailable, childFontSize) +
-                                 resolveLength(styleVal(item.node, Prop::PaddingBottom), mainAvailable, childFontSize);
-                        if (styleVal(item.node, Prop::BorderTopStyle) != "none")
-                            edges += resolveLength(styleVal(item.node, Prop::BorderTopWidth), mainAvailable, childFontSize);
-                        if (styleVal(item.node, Prop::BorderBottomStyle) != "none")
-                            edges += resolveLength(styleVal(item.node, Prop::BorderBottomWidth), mainAvailable, childFontSize);
-                    }
-                    item.hypotheticalMain = edges;
-                }
-            }
-        } else {
-            // Auto basis: use intrinsic (max-content) size so wrapping works.
-            // Without this, items laid out with mainAvailable expand to fill
-            // the container and wrapping never triggers.
-            if (isRow) {
-                float intrinsic = computeMaxContentWidth(item.node, metrics);
-                // Add padding/border/margin edges
-                auto& cs = item.node->computedStyle();
-                float childFontSize = resolveLength(styleVal(item.node, Prop::FontSize), fontSize, fontSize);
-                if (childFontSize <= 0) childFontSize = fontSize;
-                float ph = resolveLength(styleVal(item.node, Prop::PaddingLeft), mainAvailable, childFontSize) +
-                           resolveLength(styleVal(item.node, Prop::PaddingRight), mainAvailable, childFontSize);
-                Edges bEdges = resolveBorders(item.node, mainAvailable, childFontSize);
-                float bh = bEdges.left + bEdges.right;
-                item.hypotheticalMain = intrinsic + ph + bh;
-                if (item.hypotheticalMain > mainAvailable)
-                    item.hypotheticalMain = mainAvailable;
-                // Lay out at this width to compute cross size — but only if the
-                // item actually changed. The measure's downstream inputs (the
-                // hypothetical main above, margins re-resolved from style for
-                // every item each pass) don't come from this layout, so a clean,
-                // previously-laid item can skip straight to the final layout,
-                // where its cached subtree is checked against the final inputs.
-                if (item.node->box.dirty || std::isnan(item.node->cachedAvailWidth))
-                    layoutNode(item.node, item.hypotheticalMain, metrics);
-            } else {
-                // Column: the measure produces the item's laid-out outer height
-                // at the container's inner width.
-                item.hypotheticalMain = measureOuterMain(item);
-                // Resolve the deferred column auto-min: with the cross size definite
-                // (containerMain), the item's laid-out outer height is its block-axis
-                // content-min, so it must not be shrunk below it in a height-limited
-                // container (content overflows and scrolls instead of collapsing).
-                if (item.colAutoMinPending && item.hypotheticalMain > item.minMain) {
-                    item.minMain = item.hypotheticalMain;
-                    // §4.5: the automatic minimum is clamped by the max main
-                    // size property (same rule as the row axis above).
-                    if (item.maxMain >= 0 && item.minMain > item.maxMain)
-                        item.minMain = item.maxMain;
-                }
-            }
-        }
-        // The flex base size is the unclamped size; the hypothetical main
-        // size is the base clamped by min/max. §9.7 distributes free space
-        // over base sizes, so keep both.
-        item.baseMain = item.hypotheticalMain;
-        if (item.maxMain >= 0 && item.hypotheticalMain > item.maxMain)
-            item.hypotheticalMain = item.maxMain;
-        if (item.hypotheticalMain < item.minMain)
-            item.hypotheticalMain = item.minMain;
-    }
+    collectAndMeasureFlexItems(node, isRow, fontSize, containerMain, mainAvailable,
+                               childAvailableHeight, columnAutoHeight, metrics, items);
 
     // Compute per-item main-axis margins for sizing and positioning
     auto itemMarginMain = [&](const FlexItem& item) -> float {
-        if (isRow)
-            return item.node->box.margin.left + item.node->box.margin.right;
-        else
-            return item.node->box.margin.top + item.node->box.margin.bottom;
+        return flexItemMarginMain(item, isRow);
     };
 
     // Split into flex lines
@@ -640,26 +228,9 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     // so §9.7 measures free space against the sum of the items' contributions:
     // it is zero, and the container is exactly the size of what is in it —
     // nothing grows into it and nothing is shrunk to fit it.
-    //
-    // `mainAvailable` is the container's *width* here (the fallback at the top
-    // of this function, which is what percentage padding and flex-basis resolve
-    // against), so leaving it in place made that width the free space to grow
-    // into: a 400px-wide auto-height column with a `flex: 1` child came out
-    // 400px *tall*, and the same column under `max-height: 46vh` came out
-    // exactly 46vh whatever was in it, the end-of-function clamp being the only
-    // thing that stopped it. That is how it was found — a drawer that took
-    // nearly half the window to draw a hundred pixels of log.
-    //
-    // Single-line only. A wrapping column of auto height split its lines against
-    // that same width fallback, and the sum of every item across every line is
-    // not one line's free space; the old "never shrink" floor is left in place
-    // for it rather than replaced by a number that means something else.
     if (columnAutoHeight) {
         float totalNeeded = (items.size() > 1) ? gapMain * (items.size() - 1) : 0;
         for (auto& item : items) {
-            // What the item is worth to a container being sized by its contents:
-            // its content height where that was measured (an item that can grow),
-            // its hypothetical size otherwise.
             totalNeeded += std::max(item.hypotheticalMain, item.contentMain) +
                            itemMarginMain(item);
         }
@@ -669,93 +240,7 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
 
     // Resolve flexible lengths per line
     for (auto& line : lines) {
-        float totalHypothetical = 0;
-        float totalMargins = 0;
-        float totalGaps = (line.items.size() > 1) ? gapMain * (line.items.size() - 1) : 0;
-        for (auto* item : line.items) {
-            totalHypothetical += item->hypotheticalMain;
-            totalMargins += itemMarginMain(*item);
-        }
-
-        // Resolve flexible lengths (CSS Flexbox §9.7). The used flex factor is
-        // chosen by comparing the sum of the *hypothetical* outer sizes to the
-        // container, but free space is then distributed over the *flex base
-        // sizes* of the unfrozen items, clamping violations and redistributing
-        // iteratively. Distributing from base sizes (not min/max-clamped
-        // hypotheticals) matches the spec and Chromium: an item's automatic
-        // minimum floors its final size but must not inflate its share of the
-        // free space.
-        bool growing = totalHypothetical + totalMargins + totalGaps < mainAvailable;
-
-        // Freeze inflexible items at their hypothetical size: zero flex
-        // factor, or a min/max clamp that already binds against the flex
-        // direction (base > hypothetical when growing, base < when shrinking).
-        for (auto* item : line.items) {
-            item->finalMain = item->hypotheticalMain;
-            float factor = growing ? item->flexGrow : item->flexShrink;
-            item->frozen = (factor == 0) ||
-                (growing && item->baseMain > item->hypotheticalMain) ||
-                (!growing && item->baseMain < item->hypotheticalMain);
-        }
-
-        for (size_t iter = 0; iter <= line.items.size(); iter++) {
-            float freeSpace = mainAvailable - totalMargins - totalGaps;
-            float totalFactor = 0, totalScaled = 0;
-            bool anyUnfrozen = false;
-            for (auto* item : line.items) {
-                if (item->frozen) {
-                    freeSpace -= item->finalMain;
-                } else {
-                    freeSpace -= item->baseMain;
-                    totalFactor += growing ? item->flexGrow : item->flexShrink;
-                    totalScaled += item->flexShrink * item->baseMain;
-                    anyUnfrozen = true;
-                }
-            }
-            if (!anyUnfrozen) break;
-
-            // §9.7.4.b: flex factors summing below 1 consume only that
-            // fraction of the free space.
-            float used = freeSpace;
-            if (totalFactor > 0 && totalFactor < 1) used *= totalFactor;
-
-            float totalViolation = 0;
-            for (auto* item : line.items) {
-                if (item->frozen) continue;
-                float target = item->baseMain;
-                if (growing) {
-                    if (used > 0 && totalFactor > 0)
-                        target += used * (item->flexGrow / std::max(totalFactor, 1.0f));
-                } else {
-                    // Shrink proportional to the scaled flex shrink factor
-                    // (shrink × base) so larger items give up more.
-                    if (used < 0 && totalScaled > 0)
-                        target += used * ((item->flexShrink * item->baseMain) / totalScaled);
-                }
-                float clamped = target;
-                if (item->maxMain >= 0 && clamped > item->maxMain) clamped = item->maxMain;
-                if (clamped < item->minMain) clamped = item->minMain;
-                if (clamped < 0) clamped = 0;
-                item->finalMain = clamped;
-                totalViolation += clamped - target;
-            }
-
-            if (totalViolation > 0.0001f) {
-                // Min violations win: freeze the items clamped upward.
-                for (auto* item : line.items)
-                    if (!item->frozen && item->finalMain > item->minMain - 0.0001f &&
-                        item->finalMain <= item->minMain + 0.0001f)
-                        item->frozen = true;
-            } else if (totalViolation < -0.0001f) {
-                // Max violations win: freeze the items clamped downward.
-                for (auto* item : line.items)
-                    if (!item->frozen && item->maxMain >= 0 &&
-                        item->finalMain >= item->maxMain - 0.0001f)
-                        item->frozen = true;
-            } else {
-                break;  // all targets fit their min/max — done
-            }
-        }
+        resolveFlexibleLineLengths(line, mainAvailable, gapMain, isRow);
 
         // Layout each item with its final main size
         for (auto* item : line.items) {
@@ -869,9 +354,18 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                 // layout IS its first visit. beginLayoutNode returns false when the
                 // item's cached subtree is still valid — then nothing is laid out
                 // and the writes below simply re-state what the box already holds.
+                const float targetPresetH = preStretchH > 0 ? preStretchH : 0.0f;
+                if (!item->node->box.dirty && !(item->node->visitPresetH == targetPresetH)) {
+                    item->node->cachedAvailHeight = std::numeric_limits<float>::quiet_NaN();
+                }
+                const bool alreadyVisited = (item->node->lastLayoutPass == currentLayoutPass());
                 bool laidNow = beginLayoutNode(item->node, contentWidth);
                 if (laidNow) {
-                    if (preStretchH > 0) item->node->box.contentRect.height = preStretchH;
+                    if (preStretchH > 0) {
+                        item->node->box.contentRect.height = preStretchH;
+                    } else if (alreadyVisited) {
+                        item->node->box.contentRect.height = 0.0f;
+                    }
                     layoutNode(item->node, contentWidth, metrics);
                 }
                 item->node->overrideContentWidth = -1.0f;
@@ -892,6 +386,11 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     item->node->flexNaturalCross = item->crossSize;
                 } else {
                     item->crossSize = item->node->flexNaturalCross;
+                    float natContentH = item->crossSize -
+                        item->node->box.padding.top - item->node->box.padding.bottom -
+                        item->node->box.border.top - item->node->box.border.bottom -
+                        item->node->box.margin.top - item->node->box.margin.bottom;
+                    if (natContentH >= 0) item->node->box.contentRect.height = natContentH;
                 }
             } else {
                 // Main = height, cross = width
@@ -969,6 +468,11 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     item->node->flexNaturalCross = item->crossSize;
                 } else {
                     item->crossSize = item->node->flexNaturalCross;
+                    float natContentW = item->crossSize -
+                        item->node->box.padding.left - item->node->box.padding.right -
+                        item->node->box.border.left - item->node->box.border.right -
+                        item->node->box.margin.left - item->node->box.margin.right;
+                    if (natContentW >= 0) item->node->box.contentRect.width = natContentW;
                 }
             }
         }

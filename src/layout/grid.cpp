@@ -338,8 +338,10 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
     std::vector<float> rowContentSizes(numRows, 0);
 
     for (auto& item : items) {
+        item.node->viewportHeight = node->viewportHeight;
         float itemAvail = containerWidth / numCols;
         if (item.node->box.dirty || !(item.node->gridMeasuredAtW == itemAvail)) {
+            item.node->availableHeight = 0.0f;
             layoutNode(item.node, itemAvail, metrics);
             item.node->gridMeasuredAtW = itemAvail;
             item.node->gridMeasuredOuterW = item.node->box.fullWidth() +
@@ -457,23 +459,49 @@ void layoutGrid(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
             if (c > item.col) itemWidth += colGap;
         }
 
-        bool laidNow = beginLayoutNode(item.node, itemWidth);
-        if (laidNow) layoutNode(item.node, itemWidth, metrics);
-
         const std::string& w = styleVal(item.node, Prop::Width);
+        const std::string& h = styleVal(item.node, Prop::Height);
         std::string justifySelf = resolveAlign(styleVal(item.node, Prop::JustifySelf), containerJustifyItems);
-        if ((w == "auto" || w.empty()) && justifySelf == "stretch") {
-            float cw = itemWidth -
-                item.node->box.padding.left - item.node->box.padding.right -
-                item.node->box.border.left - item.node->box.border.right -
-                item.node->box.margin.left - item.node->box.margin.right;
-            if (cw > 0) item.node->box.contentRect.width = cw;
+        std::string alignSelf = resolveAlign(styleVal(item.node, Prop::AlignSelf), containerAlignItems);
+        bool stretchesH = (h == "auto" || h.empty()) && alignSelf == "stretch";
+        if (!stretchesH || item.node->box.dirty || !(item.node->cachedAvailWidth == itemWidth)) {
+            item.node->availableHeight = 0.0f;
+        }
+
+        const bool alreadyVisited = (item.node->lastLayoutPass == currentLayoutPass());
+        bool laidNow = beginLayoutNode(item.node, itemWidth);
+        if (laidNow) {
+            if (!alreadyVisited) {
+                layoutNode(item.node, itemWidth, metrics);
+            } else if (!(item.node->cachedAvailWidth == itemWidth) ||
+                       !(item.node->cachedAvailHeight == item.node->availableHeight)) {
+                item.node->box.contentRect.width = 0.0f;
+                item.node->box.contentRect.height = 0.0f;
+                layoutNode(item.node, itemWidth, metrics);
+            }
+        }
+
+        if (laidNow || std::isnan(item.node->gridNaturalContentW)) {
+            item.node->gridNaturalContentW = item.node->box.contentRect.width;
+        }
+        if (w == "auto" || w.empty()) {
+            if (justifySelf == "stretch") {
+                float cw = itemWidth -
+                    item.node->box.padding.left - item.node->box.padding.right -
+                    item.node->box.border.left - item.node->box.border.right -
+                    item.node->box.margin.left - item.node->box.margin.right;
+                if (cw > 0) item.node->box.contentRect.width = cw;
+            } else if (!laidNow && !std::isnan(item.node->gridNaturalContentW)) {
+                item.node->box.contentRect.width = item.node->gridNaturalContentW;
+            }
         }
 
         if (laidNow || std::isnan(item.node->gridNaturalOuterH)) {
             item.node->gridNaturalOuterH = item.node->box.fullHeight() +
                 item.node->box.margin.top + item.node->box.margin.bottom;
             item.node->gridNaturalContentH = item.node->box.contentRect.height;
+        } else if (!stretchesH && (h == "auto" || h.empty()) && !std::isnan(item.node->gridNaturalContentH)) {
+            item.node->box.contentRect.height = item.node->gridNaturalContentH;
         }
         float itemH = item.node->gridNaturalOuterH;
         if (item.rowSpan == 1 && item.row < static_cast<int>(numRows)) {

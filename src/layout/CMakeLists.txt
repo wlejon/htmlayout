@@ -6,6 +6,7 @@ add_library(htmlayout_layout STATIC
     line_clamp.cpp
     inline.cpp
     flex.cpp
+    flex_items.cpp
     grid.cpp
     grid_tracks.cpp
     table.cpp

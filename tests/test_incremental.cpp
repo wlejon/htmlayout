@@ -353,6 +353,398 @@ void testGridItemReuse() {
     }
 }
 
+// Deep box comparison: contentRect, padding, border, margin, hitBounds, and escapeAbsBounds.
+bool boxesAgreeDeep(Node* a, Node* b, std::string& where) {
+    const std::string& dispA = a->style.count("display") ? a->style.at("display") : "";
+    if (dispA == "none") return true;
+
+    auto rectEq = [](const Rect& r1, const Rect& r2) {
+        if (r1.width < 0 && r2.width < 0) return true;
+        return approx(r1.x, r2.x) && approx(r1.y, r2.y) &&
+               approx(r1.width, r2.width) && approx(r1.height, r2.height);
+    };
+    auto edgesEq = [](const Edges& e1, const Edges& e2) {
+        return approx(e1.top, e2.top) && approx(e1.right, e2.right) &&
+               approx(e1.bottom, e2.bottom) && approx(e1.left, e2.left);
+    };
+
+    if (!rectEq(a->box.contentRect, b->box.contentRect)) {
+        char buf[256];
+        snprintf(buf, sizeof(buf),
+                 "<%s> contentRect incr(%.1f,%.1f %.1fx%.1f) vs fresh(%.1f,%.1f %.1fx%.1f)",
+                 a->isText ? "#text" : a->tag.c_str(),
+                 a->box.contentRect.x, a->box.contentRect.y,
+                 a->box.contentRect.width, a->box.contentRect.height,
+                 b->box.contentRect.x, b->box.contentRect.y,
+                 b->box.contentRect.width, b->box.contentRect.height);
+        where = buf;
+        return false;
+    }
+    if (!a->isText) {
+        if (!edgesEq(a->box.padding, b->box.padding) ||
+            !edgesEq(a->box.border, b->box.border) ||
+            !edgesEq(a->box.margin, b->box.margin)) {
+            where = "<" + a->tag + "> edges mismatch";
+            return false;
+        }
+        if (!rectEq(a->box.hitBounds, b->box.hitBounds)) {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "<%s> hitBounds incr(%.1f,%.1f %.1fx%.1f) vs fresh(%.1f,%.1f %.1fx%.1f)",
+                     a->tag.c_str(),
+                     a->box.hitBounds.x, a->box.hitBounds.y,
+                     a->box.hitBounds.width, a->box.hitBounds.height,
+                     b->box.hitBounds.x, b->box.hitBounds.y,
+                     b->box.hitBounds.width, b->box.hitBounds.height);
+            where = buf;
+            return false;
+        }
+        if (!rectEq(a->escapeAbsBounds, b->escapeAbsBounds)) {
+            where = "<" + a->tag + "> escapeAbsBounds mismatch";
+            return false;
+        }
+    }
+    for (size_t i = 0; i < a->childNodes.size(); i++) {
+        if (!boxesAgreeDeep(static_cast<Node*>(a->childNodes[i]),
+                            static_cast<Node*>(b->childNodes[i]), where))
+            return false;
+    }
+    return true;
+}
+
+// Clone a Node subtree with clean LayoutNode state (for fresh full-tree oracle comparison).
+struct ClonedTree {
+    std::vector<std::unique_ptr<Node>> nodes;
+    Node* root = nullptr;
+
+    Node* cloneRec(const Node* src) {
+        nodes.push_back(std::make_unique<Node>());
+        Node* dst = nodes.back().get();
+        dst->tag = src->tag;
+        dst->isText = src->isText;
+        dst->text = src->text;
+        dst->style = src->style;
+        for (auto* ch : src->childNodes) {
+            Node* c = cloneRec(static_cast<const Node*>(ch));
+            dst->addChild(c);
+        }
+        return dst;
+    }
+};
+
+bool verifyAgainstFreshOracle(Node* incrRoot, const Viewport& vp, Metrics& metrics,
+                              std::string& diffOut) {
+    ClonedTree fresh;
+    fresh.root = fresh.cloneRec(incrRoot);
+    layoutTree(fresh.root, vp, metrics);
+    return boxesAgreeDeep(incrRoot, fresh.root, diffOut);
+}
+
+void testPositionedHitBoundsInMovedCleanSubtree() {
+    printf("--- Incremental: positioned descendant hitBounds in moved clean subtree ---\n");
+    Node root, header, cleanWrap, innerBlock, absBadge, fixedHud;
+    initNode(root, "div", "block");
+    root.style["position"] = "relative";
+    root.style["width"] = "800px";
+    root.style["height"] = "600px";
+
+    initNode(header, "div", "block");
+    header.style["height"] = "40px";
+
+    initNode(cleanWrap, "div", "block");
+    cleanWrap.style["overflow"] = "hidden";
+    cleanWrap.style["height"] = "100px";
+
+    initNode(innerBlock, "div", "block");
+    innerBlock.style["height"] = "30px";
+
+    initNode(absBadge, "div", "block");
+    absBadge.style["position"] = "absolute";
+    absBadge.style["top"] = "15px";
+    absBadge.style["left"] = "250px";
+    absBadge.style["width"] = "60px";
+    absBadge.style["height"] = "25px";
+
+    initNode(fixedHud, "div", "block");
+    fixedHud.style["position"] = "fixed";
+    fixedHud.style["bottom"] = "20px";
+    fixedHud.style["right"] = "30px";
+    fixedHud.style["width"] = "90px";
+    fixedHud.style["height"] = "35px";
+
+    root.addChild(&header);
+    root.addChild(&cleanWrap);
+    cleanWrap.addChild(&innerBlock);
+    cleanWrap.addChild(&absBadge);
+    cleanWrap.addChild(&fixedHud);
+
+    Metrics metrics;
+    Viewport vp{800.0f, 600.0f};
+    layoutTree(&root, vp, metrics);
+
+    // Mutate only `header` height so `cleanWrap` moves vertically without being dirty.
+    const char* heights[] = {"120px", "10px", "200px", "40px"};
+    for (const char* h : heights) {
+        header.style["height"] = h;
+        markDirty(&header);
+        layoutTree(&root, vp, metrics);
+
+        std::string diff;
+        bool ok = verifyAgainstFreshOracle(&root, vp, metrics, diff);
+        check(ok, (std::string("positioned hitBounds after header=") + h +
+                   (ok ? "" : " [" + diff + "]")).c_str());
+
+        // Hit-test directly on absBadge (250 + 30, 15 + 12) and fixedHud (800 - 30 - 45, 600 - 20 - 15)
+        LayoutNode* hitAbs = hitTest(&root, 260.0f, 25.0f);
+        check(hitAbs == &absBadge, "hitTest finds absBadge after clean parent moved");
+        LayoutNode* hitFix = hitTest(&root, 725.0f, 565.0f);
+        check(hitFix == &fixedHud, "hitTest finds fixedHud after clean parent moved");
+    }
+}
+
+void testGridAndFlexAlignmentMutationOracle() {
+    printf("--- Incremental: differential oracle for Grid & Flex alignment/stretch mutations ---\n");
+    Metrics metrics;
+    Viewport vp{800.0f, 600.0f};
+
+    // Build a composite document with both a Grid section and a Flex section
+    GridDoc doc;
+    Node* root = doc.alloc();
+    initNode(*root, "div", "block");
+    root->style["width"] = "800px";
+
+    // Section 1: Grid container with 2 columns, explicit height, and mixed items
+    Node* grid = doc.alloc();
+    initNode(*grid, "div", "grid");
+    grid->style["grid-template-columns"] = "1fr 2fr";
+    grid->style["column-gap"] = "12px";
+    grid->style["row-gap"] = "10px";
+    grid->style["align-items"] = "stretch";
+    grid->style["justify-items"] = "stretch";
+    root->addChild(grid);
+
+    Node* gItem0 = doc.alloc();
+    initNode(*gItem0, "div", "flex");
+    gItem0->style["flex-direction"] = "column";
+    gItem0->style["padding-top"] = "4px";
+    gItem0->style["padding-bottom"] = "4px";
+    grid->addChild(gItem0);
+    Node* gItem0TextWrap = doc.alloc();
+    initNode(*gItem0TextWrap, "div", "block");
+    Node* gItem0Text = doc.alloc();
+    gItem0Text->isText = true;
+    gItem0Text->text = "short label";
+    gItem0Text->style["font-size"] = "16px";
+    gItem0TextWrap->addChild(gItem0Text);
+    gItem0->addChild(gItem0TextWrap);
+    Node* gItem0Fill = doc.alloc();
+    initNode(*gItem0Fill, "div", "block");
+    gItem0Fill->style["flex-grow"] = "1";
+    gItem0Fill->style["height"] = "12px";
+    gItem0->addChild(gItem0Fill);
+
+    Node* gItem1 = doc.alloc();
+    initNode(*gItem1, "div", "block");
+    gItem1->style["height"] = "90px";
+    Node* gItem1Pct = doc.alloc();
+    initNode(*gItem1Pct, "div", "block");
+    gItem1Pct->style["height"] = "50%";
+    gItem1->addChild(gItem1Pct);
+    grid->addChild(gItem1);
+
+    // Section 2: Row Flex container with definite height and nested items
+    Node* flexRow = doc.alloc();
+    initNode(*flexRow, "div", "flex");
+    flexRow->style["flex-direction"] = "row";
+    flexRow->style["height"] = "140px";
+    flexRow->style["gap"] = "8px";
+    flexRow->style["align-items"] = "stretch";
+    root->addChild(flexRow);
+
+    Node* fItem0 = doc.alloc();
+    initNode(*fItem0, "div", "flex");
+    fItem0->style["flex-direction"] = "column";
+    fItem0->style["flex-grow"] = "1";
+    fItem0->style["flex-basis"] = "0px";
+    Node* fItem0Child = doc.alloc();
+    initNode(*fItem0Child, "div", "block");
+    fItem0Child->style["flex-grow"] = "1";
+    fItem0Child->style["height"] = "20px";
+    fItem0->addChild(fItem0Child);
+    flexRow->addChild(fItem0);
+
+    Node* fItem1 = doc.alloc();
+    initNode(*fItem1, "div", "block");
+    fItem1->style["width"] = "120px";
+    Node* fItem1Text = doc.alloc();
+    fItem1Text->isText = true;
+    fItem1Text->text = "flex item text";
+    fItem1Text->style["font-size"] = "16px";
+    fItem1->addChild(fItem1Text);
+    flexRow->addChild(fItem1);
+
+    // Section 3: Column Flex container with auto height and flex-grow item
+    Node* flexCol = doc.alloc();
+    initNode(*flexCol, "div", "flex");
+    flexCol->style["flex-direction"] = "column";
+    flexCol->style["align-items"] = "stretch";
+    root->addChild(flexCol);
+
+    Node* fcItem0 = doc.alloc();
+    initNode(*fcItem0, "div", "block");
+    fcItem0->style["flex-grow"] = "1";
+    fcItem0->style["flex-basis"] = "0px";
+    Node* fcItem0Text = doc.alloc();
+    fcItem0Text->isText = true;
+    fcItem0Text->text = "column flex child";
+    fcItem0Text->style["font-size"] = "16px";
+    fcItem0->addChild(fcItem0Text);
+    flexCol->addChild(fcItem0);
+
+    layoutTree(root, vp, metrics);
+
+    struct Step {
+        const char* desc;
+        void (*apply)(Node* root, Node* grid, Node* gItem0, Node* gItem0TextWrap,
+                      Node* gItem0Text, Node* gItem1, Node* flexRow, Node* fItem0,
+                      Node* fItem1, Node* flexCol, Node* fcItem0);
+    };
+
+    Step steps[] = {
+        {"grid align-items: center (un-stretch)", [](Node*, Node* grid, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*) {
+            grid->style["align-items"] = "center";
+            markDirty(grid);
+        }},
+        {"grid align-items: end", [](Node*, Node* grid, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*) {
+            grid->style["align-items"] = "end";
+            markDirty(grid);
+        }},
+        {"grid align-items: stretch (re-stretch)", [](Node*, Node* grid, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*) {
+            grid->style["align-items"] = "stretch";
+            markDirty(grid);
+        }},
+        {"grid item0 dirty while stretched", [](Node*, Node*, Node*, Node* wrap, Node* txt, Node*, Node*, Node*, Node*, Node*, Node*) {
+            txt->text = "longer label text that wraps across lines in column 0 of the grid";
+            markDirty(wrap);
+        }},
+        {"grid item1 shrinks", [](Node*, Node*, Node*, Node*, Node*, Node* g1, Node*, Node*, Node*, Node*, Node*) {
+            g1->style["height"] = "30px";
+            markDirty(g1);
+        }},
+        {"flexRow align-items: center (un-stretch definite row)", [](Node*, Node*, Node*, Node*, Node*, Node*, Node* fr, Node*, Node*, Node*, Node*) {
+            fr->style["align-items"] = "center";
+            markDirty(fr);
+        }},
+        {"flexRow align-items: flex-end", [](Node*, Node*, Node*, Node*, Node*, Node*, Node* fr, Node*, Node*, Node*, Node*) {
+            fr->style["align-items"] = "flex-end";
+            markDirty(fr);
+        }},
+        {"flexRow align-items: stretch (re-stretch definite row)", [](Node*, Node*, Node*, Node*, Node*, Node*, Node* fr, Node*, Node*, Node*, Node*) {
+            fr->style["align-items"] = "stretch";
+            markDirty(fr);
+        }},
+        {"flexRow height auto -> definite -> auto", [](Node*, Node*, Node*, Node*, Node*, Node*, Node* fr, Node*, Node*, Node*, Node*) {
+            fr->style["height"] = "auto";
+            markDirty(fr);
+        }},
+        {"flexCol height definite 120px -> auto", [](Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node* fc, Node*) {
+            fc->style["height"] = "120px";
+            markDirty(fc);
+        }},
+        {"flexCol height back to auto", [](Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node* fc, Node*) {
+            fc->style["height"] = "auto";
+            markDirty(fc);
+        }},
+        {"flexCol align-items: center -> stretch", [](Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node* fc, Node*) {
+            fc->style["align-items"] = "center";
+            markDirty(fc);
+        }},
+        {"flexCol align-items back to stretch", [](Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node* fc, Node*) {
+            fc->style["align-items"] = "stretch";
+            markDirty(fc);
+        }},
+        {"display:none toggle on fItem1", [](Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node* f1, Node*, Node*) {
+            f1->style["display"] = "none";
+            markDirty(f1);
+        }},
+        {"restore fItem1 display:block", [](Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node*, Node* f1, Node*, Node*) {
+            f1->style["display"] = "block";
+            markDirty(f1);
+        }},
+    };
+
+    for (const auto& s : steps) {
+        s.apply(root, grid, gItem0, gItem0TextWrap, gItem0Text, gItem1,
+                flexRow, fItem0, fItem1, flexCol, fcItem0);
+        layoutTree(root, vp, metrics);
+        std::string diff;
+        bool ok = verifyAgainstFreshOracle(root, vp, metrics, diff);
+        std::string msg = std::string(s.desc) + (ok ? "" : " [" + diff + "]");
+        check(ok, msg.c_str());
+    }
+
+    // Randomized multi-step mutation fuzzing against the fresh full-tree oracle
+    uint32_t rng = 0xC0FFEE11u;
+    auto nextRng = [&]() {
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        return rng;
+    };
+    const char* aligns[] = {"stretch", "center", "flex-start", "flex-end"};
+    const char* heights[] = {"auto", "45px", "90px", "150px"};
+    const char* gaps[] = {"0px", "6px", "16px"};
+    const char* sampleTexts[] = {
+        "x",
+        "medium length text item",
+        "a very long text run that wraps across multiple lines inside its column container box"
+    };
+
+    bool allFuzzOk = true;
+    std::string firstFuzzFailure;
+    for (int step = 0; step < 50; ++step) {
+        switch (nextRng() % 6) {
+            case 0:
+                grid->style["align-items"] = aligns[nextRng() % 4];
+                grid->style["column-gap"] = gaps[nextRng() % 3];
+                markDirty(grid);
+                break;
+            case 1:
+                gItem0Text->text = sampleTexts[nextRng() % 3];
+                markDirty(gItem0TextWrap);
+                break;
+            case 2:
+                gItem1->style["height"] = heights[nextRng() % 4];
+                markDirty(gItem1);
+                break;
+            case 3:
+                flexRow->style["align-items"] = aligns[nextRng() % 4];
+                flexRow->style["height"] = heights[nextRng() % 4];
+                markDirty(flexRow);
+                break;
+            case 4:
+                fItem1Text->text = sampleTexts[nextRng() % 3];
+                markDirty(fItem1);
+                break;
+            case 5:
+                flexCol->style["height"] = heights[nextRng() % 4];
+                flexCol->style["align-items"] = aligns[nextRng() % 4];
+                markDirty(flexCol);
+                break;
+        }
+        Viewport stepVp = (step % 10 == 9) ? Viewport{640.0f, 480.0f} : Viewport{800.0f, 600.0f};
+        layoutTree(root, stepVp, metrics);
+        std::string diff;
+        if (!verifyAgainstFreshOracle(root, stepVp, metrics, diff)) {
+            allFuzzOk = false;
+            firstFuzzFailure = "step " + std::to_string(step) + ": " + diff;
+            break;
+        }
+    }
+    check(allFuzzOk, (std::string("50-step PRNG differential mutation sequence matches fresh layout") +
+                      (allFuzzOk ? "" : " [" + firstFuzzFailure + "]")).c_str());
+}
+
 }  // namespace
 
 void testIncrementalLayout() {
@@ -360,4 +752,6 @@ void testIncrementalLayout() {
     testTableCellTextRelayout();
     testCleanSubtreeIsStable();
     testGridItemReuse();
+    testPositionedHitBoundsInMovedCleanSubtree();
+    testGridAndFlexAlignmentMutationOracle();
 }

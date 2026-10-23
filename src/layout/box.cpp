@@ -78,6 +78,10 @@ void markSubtreeDirty(LayoutNode* node) {
     node->cachedMaxContentW = -1.0f;
     node->measuredAtW = std::numeric_limits<float>::quiet_NaN();
     node->gridMeasuredAtW = std::numeric_limits<float>::quiet_NaN();
+    node->gridNaturalOuterH = std::numeric_limits<float>::quiet_NaN();
+    node->gridNaturalContentH = std::numeric_limits<float>::quiet_NaN();
+    node->gridNaturalContentW = std::numeric_limits<float>::quiet_NaN();
+    node->flexNaturalCross = -1.0f;
     node->subtreeHasPositioned = -1;
     for (auto* child : node->children()) markSubtreeDirty(child);
     // ::before / ::after wrappers hang off the node outside children().
@@ -305,7 +309,8 @@ Rect computeSubtreeHitBounds(LayoutNode* node) {
     // Without this the pass is O(document) on every layout, which quietly undoes
     // the incremental layout above it: a one-element change would still walk and
     // re-derive bounds for every node in the document.
-    if (node->lastLayoutPass != currentLayoutPass() && node->box.hitBounds.width >= 0) {
+    if (node->lastLayoutPass != currentLayoutPass() &&
+        node->subtreeHasPositioned == 0 && node->box.hitBounds.width >= 0) {
         float dx = node->box.contentRect.x - node->hitBoundsOriginX;
         float dy = node->box.contentRect.y - node->hitBoundsOriginY;
         if (dx != 0.0f || dy != 0.0f) {
@@ -806,6 +811,10 @@ void markDirty(LayoutNode* node) {
     node->cachedMaxContentW = -1.0f;
     node->measuredAtW = std::numeric_limits<float>::quiet_NaN();
     node->gridMeasuredAtW = std::numeric_limits<float>::quiet_NaN();
+    node->gridNaturalOuterH = std::numeric_limits<float>::quiet_NaN();
+    node->gridNaturalContentH = std::numeric_limits<float>::quiet_NaN();
+    node->gridNaturalContentW = std::numeric_limits<float>::quiet_NaN();
+    node->flexNaturalCross = -1.0f;
     node->subtreeHasPositioned = -1;
     // Walk all the way to the root. Stopping at the first already-dirty
     // ancestor would assume every dirty node eventually reaches layoutNode()
@@ -822,6 +831,10 @@ void markDirty(LayoutNode* node) {
         p->cachedMaxContentW = -1.0f;
         p->measuredAtW = std::numeric_limits<float>::quiet_NaN();
         p->gridMeasuredAtW = std::numeric_limits<float>::quiet_NaN();
+        p->gridNaturalOuterH = std::numeric_limits<float>::quiet_NaN();
+        p->gridNaturalContentH = std::numeric_limits<float>::quiet_NaN();
+        p->gridNaturalContentW = std::numeric_limits<float>::quiet_NaN();
+        p->flexNaturalCross = -1.0f;
         p->subtreeHasPositioned = -1;
     }
 }
@@ -842,10 +855,11 @@ static const std::vector<std::string_view>& layoutProperties() {
         "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
         "box-sizing", "overflow",
         "flex-direction", "flex-wrap", "justify-content", "align-items", "align-content",
-        "align-self", "flex-grow", "flex-shrink", "flex-basis", "order",
+        "align-self", "justify-items", "justify-self", "flex-grow", "flex-shrink", "flex-basis", "order",
         "gap", "row-gap", "column-gap",
-        "grid-template-columns", "grid-template-rows", "grid-area",
+        "grid-template-columns", "grid-template-rows", "grid-auto-columns", "grid-auto-rows", "grid-auto-flow", "grid-area",
         "grid-row-start", "grid-row-end", "grid-column-start", "grid-column-end",
+        "aspect-ratio", "line-clamp", "-webkit-line-clamp",
         "font-size", "font-family", "font-weight", "line-height",
         "white-space", "text-align", "vertical-align",
         "top", "right", "bottom", "left",

@@ -402,6 +402,7 @@ struct LayoutNode {
     // children) — negative margins make -1 an unsafe sentinel here.
     float gridNaturalOuterH = std::numeric_limits<float>::quiet_NaN();
     float gridNaturalContentH = std::numeric_limits<float>::quiet_NaN();
+    float gridNaturalContentW = std::numeric_limits<float>::quiet_NaN();
 
     // Whether this subtree contains any absolute/fixed element (the node
     // itself included). Lets layoutAbsoluteElements() skip whole clean
