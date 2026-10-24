@@ -872,9 +872,28 @@ static void testFlexAnonymousTextWhitespace() {
     check(approx(t2.box.contentRect.width, 60), "white-space: pre keeps its trailing spaces");
 }
 
+static void testFlexNestedRowText() {
+    printf("--- Flex: a row inside a row keeps its text's height ---\n");
+    // <div flex><div flex><span>Hi</span></div></div>: the inner row is
+    // measured, then laid out again at its flexed width in the same pass.
+    FlexMockNode root; initFlexContainer(root);
+    FlexMockNode inner; initFlexItem(inner); inner.style["display"] = "flex";
+    FlexMockNode span; initFlexItem(span); span.tag = "span";
+    FlexMockNode t; t.isText = true; t.text = "Hi";
+    span.addChild(&t);
+    inner.addChild(&span);
+    root.addChild(&inner);
+    FlexTextMetrics m;
+    layoutTree(&root, 400, m);
+    check(approx(span.box.contentRect.height, 20), "the text item is a line tall");
+    check(approx(inner.box.contentRect.height, 20), "the inner row is its item's height");
+    check(approx(root.box.contentRect.height, 20), "the outer row is the inner row's height");
+}
+
 // ========== Entry point ==========
 
 void testFlexLayout() {
+    testFlexNestedRowText();
     testFlexBorderBoxMinWidth();
     testFlexBorderBoxColumnHeight();
     testFlexContentBoxMinMax();

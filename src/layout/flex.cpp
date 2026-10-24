@@ -364,7 +364,13 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
                     if (preStretchH > 0) {
                         item->node->box.contentRect.height = preStretchH;
                     } else if (alreadyVisited) {
+                        // Re-lay from the natural height, not a stretch an
+                        // earlier visit left. The zero is the measuring visit's
+                        // preset too, so layoutNode's same-question check would
+                        // match and hand back this box — whose answer was just
+                        // overwritten. A nested row's text then measured 0 tall.
                         item->node->box.contentRect.height = 0.0f;
+                        item->node->visitPresetH = std::numeric_limits<float>::quiet_NaN();
                     }
                     layoutNode(item->node, contentWidth, metrics);
                 }
