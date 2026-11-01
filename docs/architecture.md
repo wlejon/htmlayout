@@ -9,7 +9,7 @@ htmlayout is a standalone C++20 library that provides CSS parsing, selector matc
 - **Layout engine**: htmlayout::layout (this library)
 - **Rendering**: provided by the consumer (e.g. Skia, SDL, etc.)
 - **DOM tree**: provided by the consumer
-- **JavaScript**: provided by the consumer (e.g. QuickJS)
+- **JavaScript**: provided by the consumer (e.g. bronze, in bro)
 
 htmlayout does NOT own the DOM or render anything. It computes styles and positions. The consumer provides abstract interfaces (`ElementRef` for CSS, `LayoutNode` for layout, `TextMetrics` for text measurement) and reads back computed styles and positioned boxes.
 
