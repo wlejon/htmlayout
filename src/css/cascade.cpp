@@ -531,6 +531,17 @@ constexpr std::string_view kSvgPresAttrs[] = {
 // would invent a `<div direction="rtl">` that no browser honours.
 constexpr std::string_view kSvgTextPresAttrs[] = {"direction", "unicode-bidi"};
 constexpr std::string_view kSvgTextTags[] = {"text", "tspan", "textpath", "tref", "altglyph"};
+// Presentation attributes whose names HTML also has as properties with an
+// HTML meaning (`display`, `visibility`, `overflow`, `filter`, `mask`):
+// seeded only on SVG elements, so a `<div display="none">` stays inert.
+constexpr std::string_view kSvgElementPresAttrs[] = {
+    "display", "visibility", "overflow", "filter", "mask", "mask-type",
+};
+constexpr std::string_view kSvgElementTags[] = {
+    "svg", "g", "rect", "circle", "ellipse", "line", "polyline", "polygon", "path",
+    "text", "tspan", "textpath", "use", "symbol", "switch", "foreignobject",
+    "marker", "pattern", "mask", "clippath", "defs",
+};
 
 bool equalsLowerAscii(std::string_view s, std::string_view lower) {
     if (s.size() != lower.size()) return false;
@@ -545,11 +556,20 @@ bool isSvgTextTag(std::string_view tag) {
     return false;
 }
 
-bool isPresAttr(std::string_view name, bool svgText) {
+bool isSvgElementTag(std::string_view tag) {
+    for (std::string_view t : kSvgElementTags)
+        if (equalsLowerAscii(tag, t)) return true;
+    return false;
+}
+
+bool isPresAttr(std::string_view name, bool svgText, bool svgElement) {
     for (std::string_view a : kSvgPresAttrs)
         if (a == name) return true;
     if (svgText)
         for (std::string_view a : kSvgTextPresAttrs)
+            if (a == name) return true;
+    if (svgElement)
+        for (std::string_view a : kSvgElementPresAttrs)
             if (a == name) return true;
     return false;
 }
@@ -565,12 +585,18 @@ bool isTableSpanTag(std::string_view tag) {
 void collectPresentationAttrs(const ElementRef& elem,
                               std::vector<std::pair<std::string_view, std::string_view>>& out) {
     const bool svgText = isSvgTextTag(elem.tagName());
-    struct Ctx { std::vector<std::pair<std::string_view, std::string_view>>* out; bool svgText; };
-    Ctx ctx{&out, svgText};
+    const bool svgElement = svgText || isSvgElementTag(elem.tagName());
+    struct Ctx {
+        std::vector<std::pair<std::string_view, std::string_view>>* out;
+        bool svgText;
+        bool svgElement;
+    };
+    Ctx ctx{&out, svgText, svgElement};
     const bool enumerated = elem.forEachAttribute(
         [](void* c, std::string_view name, std::string_view value) {
             auto* x = static_cast<Ctx*>(c);
-            if (!value.empty() && isPresAttr(name, x->svgText)) x->out->push_back({name, value});
+            if (!value.empty() && isPresAttr(name, x->svgText, x->svgElement))
+                x->out->push_back({name, value});
         },
         &ctx);
     if (enumerated) {
@@ -579,6 +605,7 @@ void collectPresentationAttrs(const ElementRef& elem,
                 size_t i = 0;
                 for (std::string_view a : kSvgPresAttrs) { if (a == n) return i; ++i; }
                 for (std::string_view a : kSvgTextPresAttrs) { if (a == n) return i; ++i; }
+                for (std::string_view a : kSvgElementPresAttrs) { if (a == n) return i; ++i; }
                 return i;
             };
             std::sort(out.begin(), out.end(),
@@ -592,6 +619,12 @@ void collectPresentationAttrs(const ElementRef& elem,
     }
     if (svgText) {
         for (std::string_view attr : kSvgTextPresAttrs) {
+            std::string_view v = elem.getAttribute(attr);
+            if (!v.empty()) out.push_back({attr, v});
+        }
+    }
+    if (svgElement) {
+        for (std::string_view attr : kSvgElementPresAttrs) {
             std::string_view v = elem.getAttribute(attr);
             if (!v.empty()) out.push_back({attr, v});
         }

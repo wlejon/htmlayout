@@ -241,6 +241,10 @@ const std::vector<PropertyDef>& knownProperties() {
         // Misc
         {"clip-path",         "none",       false},
         {"filter",            "none",       false},
+        // SVG masking: the <mask> an element is masked by, and a <mask>'s
+        // own luminance / alpha mode.
+        {"mask",              "none",       false},
+        {"mask-type",         "luminance",  false},
         {"mix-blend-mode",    "normal",     false},
         {"isolation",         "auto",       false},
         {"object-fit",        "fill",       false},
