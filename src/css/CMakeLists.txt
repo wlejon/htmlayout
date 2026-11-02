@@ -1,11 +1,14 @@
 add_library(htmlayout_css STATIC
     tokenizer.cpp
     parser.cpp
+    supports.cpp
     media_query.cpp
     selector.cpp
     cascade.cpp
+    cascade_resolve.cpp
     container_query.cpp
     properties.cpp
+    shorthand.cpp
     font_features.cpp
     ua_stylesheet.cpp
     color.cpp

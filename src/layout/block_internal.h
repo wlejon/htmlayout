@@ -1,7 +1,7 @@
 #pragma once
 // Pieces of block layout shared between block.cpp (the block formatting
-// context) and block_inline.cpp (a block container's inline formatting
-// context). Internal to the layout library.
+// context), block_floats.cpp, and block_inline.cpp (a block container's inline
+// formatting context). Internal to the layout library.
 
 #include "layout/box.h"
 #include <functional>
@@ -64,5 +64,22 @@ struct InlineRunEnv {
 
 void layoutInlineRun(LayoutNode* node, float childAvailable, float fontSize,
                      TextMetrics& metrics, float& cursorY, const InlineRunEnv& env);
+
+// Float tracking: left and right float edges. shapeR >= 0 carries a
+// shape-outside: circle() exclusion (center cx/cy, radius r).
+struct BlockFloatRect {
+    float x = 0, y = 0, width = 0, height = 0;
+    bool isLeft = true;
+    float shapeCx = 0, shapeCy = 0, shapeR = -1.0f;
+};
+
+std::pair<float, float> blockAvailableAtY(const std::vector<BlockFloatRect>& floats,
+                                          float childAvailable, float y, float h);
+
+void placeBlockFloat(LayoutNode* child, float atY, float childAvailable, float fontSize,
+                     TextMetrics& metrics, std::vector<BlockFloatRect>& floats);
+
+LayoutNode* layoutFieldsetLegend(LayoutNode* node, float childAvailable,
+                                 TextMetrics& metrics, float& cursorY);
 
 } // namespace htmlayout::layout

@@ -1,15 +1,18 @@
 add_library(htmlayout_layout STATIC
     box.cpp
     block.cpp
+    block_floats.cpp
     block_inline.cpp
     block_inline_items.cpp
     line_clamp.cpp
     inline.cpp
+    inline_block.cpp
     flex.cpp
     flex_items.cpp
     grid.cpp
     grid_tracks.cpp
     table.cpp
+    table_structure.cpp
     text.cpp
     text_geometry.cpp
     bidi_line.cpp

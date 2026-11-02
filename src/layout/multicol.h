@@ -3,11 +3,12 @@
 
 namespace htmlayout::layout {
 
-// Multi-column layout is handled within block.cpp's layoutBlock function.
-// When column-count or column-width is set on a block, children are
-// redistributed into columns after initial layout.
-
 // Check if a node has multi-column properties set
 bool isMulticolContainer(const LayoutNode* node);
+
+// If column-count or column-width is set on `node`, redistribute its in-flow
+// children into columns after initial block layout and return true.
+bool layoutMulticolIfNeeded(LayoutNode* node, float contentWidth, float fontSize,
+                            float specifiedHeight, TextMetrics& metrics);
 
 } // namespace htmlayout::layout
