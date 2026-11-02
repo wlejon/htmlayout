@@ -15,7 +15,9 @@ add_executable(htmlayout_test
     test_remaining.cpp
     test_final.cpp
     test_webcomponents.cpp
-    test_coverage.cpp
+    test_coverage_css.cpp
+    test_coverage_layout.cpp
+    test_coverage_grid_flex.cpp
     test_spec_completeness.cpp
     test_spec_validator.cpp
     test_transform.cpp

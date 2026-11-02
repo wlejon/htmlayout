@@ -15,6 +15,8 @@ add_library(htmlayout_layout STATIC
     bidi_line.cpp
     multicol.cpp
     formatting_context.cpp
+    formatting_intrinsic.cpp
+    formatting_abs.cpp
     style_cache.cpp
 )
 target_include_directories(htmlayout_layout PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)

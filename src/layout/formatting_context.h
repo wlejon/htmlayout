@@ -108,6 +108,9 @@ Edges resolveEdges(const LayoutNode* node, const EdgeProps& props,
 // and table layout — and each copy pasted together the same eight property names.
 Edges resolveBorders(const LayoutNode* node, float referenceWidth, float fontSize);
 
+// Parse contain property to check for specific containment types.
+bool hasContainment(const LayoutNode* node, const std::string& type);
+
 // Move everything inside `node` down by dy: its child boxes (descendant block
 // boxes are relative to their parent, so the children carry them) and the
 // placed text runs of every text descendant, which are stored on the
