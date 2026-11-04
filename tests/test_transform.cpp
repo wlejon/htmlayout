@@ -123,6 +123,18 @@ static void testParseTransform2D() {
 
     m = parseTransform("translate(", 100, 100);
     check(mat2Eq(m, 1,0,0,1,0,0), "unclosed paren -> identity translate");
+
+    // Lengths resolve as layout's do: math functions and units.
+    m = parseTransform("translate(-50%, calc(-100% - 12px))", 40, 20);
+    check(mat2Eq(m, 1,0,0,1,-20,-32), "translate with calc(-100% - 12px)");
+    m = parseTransform("translateX(min(10px, 50%)) translateY(clamp(1px, 50%, 4px))", 40, 20);
+    check(mat2Eq(m, 1,0,0,1,10,4), "translate with min() and clamp()");
+    m = parseTransform("translate(calc(2 * (5px + 1px)), 2rem)", 100, 100);
+    check(mat2Eq(m, 1,0,0,1,12,32), "nested calc and rem");
+    m = parseTransform("translate(1in, 0) scale(2)", 100, 100);
+    check(mat2Eq(m, 2,0,0,2,96,0), "absolute units, then the next function");
+    Matrix3D m3 = parseTransform3D("translate3d(calc(50% + 1px), 0, 0)", 100, 100);
+    check(approx(m3.m[12], 51), "translate3d with calc");
 }
 
 // ===== Matrix3D =====

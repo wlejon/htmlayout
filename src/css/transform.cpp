@@ -1,4 +1,5 @@
 #include "css/transform.h"
+#include "css/length.h"
 
 #include <cctype>
 #include <cmath>
@@ -32,19 +33,39 @@ float parseNumber(std::string_view s, size_t& pos) {
     return v;
 }
 
-// Parse a length: number with optional "px" or "%" suffix. Percentages resolve
-// against `ref`.
+// The transform parser has no element in hand, so em resolves against the
+// initial font size.
+constexpr float kTransformFontSize = 16.0f;
+
+// Parse a length: a number with its unit, or a math function
+// (calc()/min()/max()/clamp()), resolved as layout resolves lengths
+// (css/length.h). Percentages resolve against `ref`.
 float parseLength(std::string_view s, size_t& pos, float ref) {
-    float v = parseNumber(s, pos);
-    // Skip alphabetic unit (px, em, ...) — only px is treated as the identity
-    // here; other units aren't meaningful in transforms.
+    skipSep(s, pos);
+    size_t nameEnd = pos;
+    while (nameEnd < s.size() && std::isalpha(static_cast<unsigned char>(s[nameEnd])))
+        ++nameEnd;
+    if (nameEnd > pos && nameEnd < s.size() && s[nameEnd] == '(') {
+        int depth = 0;
+        size_t end = nameEnd;
+        for (; end < s.size(); ++end) {
+            if (s[end] == '(') ++depth;
+            else if (s[end] == ')' && --depth == 0) break;
+        }
+        if (end >= s.size()) { pos = s.size(); return 0.0f; }
+        std::string expr(s.substr(pos, end + 1 - pos));
+        pos = end + 1;
+        if (!isLengthMathFunction(expr)) return 0.0f;
+        return evalLengthCalc(expr, ref, kTransformFontSize);
+    }
+    const size_t start = pos;
+    parseNumber(s, pos);
+    if (pos == start) return 0.0f;
     while (pos < s.size() && std::isalpha(static_cast<unsigned char>(s[pos])))
         ++pos;
-    if (pos < s.size() && s[pos] == '%') {
-        ++pos;
-        return v * 0.01f * ref;
-    }
-    return v;
+    if (pos < s.size() && s[pos] == '%') ++pos;
+    return resolveSingleLength(std::string(s.substr(start, pos - start)), ref,
+                               kTransformFontSize);
 }
 
 // Length without percentage (z-axis lengths in 3D transforms). Skips unit.

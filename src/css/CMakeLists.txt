@@ -16,5 +16,6 @@ add_library(htmlayout_css STATIC
     color_space.cpp
     nesting.cpp
     transform.cpp
+    length.cpp
 )
 target_include_directories(htmlayout_css PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
