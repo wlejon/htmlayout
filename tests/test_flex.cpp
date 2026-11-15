@@ -709,6 +709,35 @@ static void testFlexColumnMaxHeightClamp() {
           "column max-height: fixed footer stays inside the 400px box");
 }
 
+static void testFlexColumnAutoHeightMaxClamp() {
+    printf("--- Flex: auto-height column flexes against its max-height ---\n");
+    // The panel: no height, `max-height: 400px`, a fixed head and a
+    // `flex: 1; min-height: 0; overflow: auto` body holding 800px. The body
+    // shrinks to what is left of the 400 and scrolls; it is not laid out at
+    // its content height past the box.
+    FlexMockNode root; initFlexContainer(root);
+    root.style["flex-direction"] = "column";
+    root.style["width"] = "300px";
+    root.style["max-height"] = "400px";
+
+    FlexMockNode head, body, tall;
+    initFlexItem(head); head.style["height"] = "40px"; head.style["flex-shrink"] = "0";
+    initFlexItem(body);
+    body.style["flex-grow"] = "1"; body.style["flex-shrink"] = "1";
+    body.style["min-height"] = "0"; body.style["overflow"] = "auto";
+    initFlexItem(tall); tall.style["height"] = "800px";
+    body.addChild(&tall);
+    root.addChild(&head); root.addChild(&body);
+
+    FlexTextMetrics m;
+    layoutTree(&root, 600, m);
+
+    check(approx(body.box.contentRect.height, 360),
+          "auto-height column, max-height: body shrunk to the clamped box (360)");
+    check(approx(root.box.contentRect.height, 400),
+          "auto-height column, max-height: container is its max-height");
+}
+
 static void testFlexColumnAutoHeightGrow() {
     printf("--- Flex: auto-height column is sized by its contents ---\n");
     // A column flex container with no height has an INDEFINITE main size, so
@@ -898,6 +927,7 @@ void testFlexLayout() {
     testFlexBorderBoxColumnHeight();
     testFlexContentBoxMinMax();
     testFlexColumnMaxHeightClamp();
+    testFlexColumnAutoHeightMaxClamp();
     testFlexColumnAutoHeightGrow();
     testFlexBasicRow();
     testFlexGrow();

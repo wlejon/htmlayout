@@ -236,6 +236,25 @@ void layoutFlex(LayoutNode* node, float availableWidth, TextMetrics& metrics) {
         }
         if (lines.size() <= 1) mainAvailable = totalNeeded;
         else if (totalNeeded > mainAvailable) mainAvailable = totalNeeded;
+        // The content-sized main size is still clamped by min/max-height, and
+        // the items flex against the clamped size: a `max-height: 80vh` panel
+        // whose body is `flex: 1; min-height: 0; overflow: auto` shrinks that
+        // body to fit and scrolls it, instead of laying it out at full content
+        // height past the box. (Percentages against an indefinite containing
+        // block are 'none'/'auto', as in the definite-height clamp above.)
+        auto pctIndefiniteH = [&](const std::string& v) {
+            return node->availableHeight <= 0.0f && !v.empty() && v.back() == '%';
+        };
+        const std::string& maxHVal = styleVal(node, Prop::MaxHeight);
+        const std::string& minHVal = styleVal(node, Prop::MinHeight);
+        float maxH = toContent(pctIndefiniteH(maxHVal) ? -1.0f
+                                   : resolveDim(maxHVal, node->availableHeight, fontSize),
+                               paddingV + borderV);
+        float minH = toContent(pctIndefiniteH(minHVal) ? -1.0f
+                                   : resolveDim(minHVal, node->availableHeight, fontSize),
+                               paddingV + borderV);
+        if (maxH >= 0 && mainAvailable > maxH) mainAvailable = maxH;
+        if (minH >= 0 && mainAvailable < minH) mainAvailable = minH;
     }
 
     // Resolve flexible lengths per line
