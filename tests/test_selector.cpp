@@ -420,7 +420,80 @@ static void testScope() {
     check(parseSelector(":root").matches(root), ":root is unaffected by the scoping root");
 }
 
+static void testInvalidSelectorsAndEscapes() {
+    printf("--- Selector: invalid selectors & CSS escapes ---\n");
+    MockElement html; html.tag = "html";
+    MockElement div; div.tag = "div"; div.classes = "w-1/2 box"; div.elemId = "a:b";
+    html.addChild(&div);
+
+    const char* bad[] = {
+        "0.13-25",
+        "",
+        "   ",
+        "div >",
+        "> div",
+        "div +",
+        "div ~",
+        ".123",
+        "#0",
+        ".",
+        "#",
+        "[",
+        "[]",
+        "[attr=]",
+        "[attr==val]",
+        "[attr=\"unclosed]",
+        "div]",
+        "div)",
+        "div, ",
+        ", div",
+        "div, , span",
+        "div, 0.13-25",
+        ":not()",
+        ":not(0.13-25)",
+        ":has()",
+        ":has(> )",
+        ":nth-child()",
+        ":nth-child(foo)",
+        ".box*",
+        "*div",
+    };
+    for (const char* s : bad) {
+        auto sel = parseSelector(s);
+        check(sel.chain.entries.empty(),
+              (std::string("parseSelector rejects '") + s + "'").c_str());
+        check(!sel.matches(html) && !sel.matches(div),
+              (std::string("invalid selector '") + s + "' matches nothing").c_str());
+        std::vector<Selector> list;
+        check(!parseSelectorListChecked(s, list),
+              (std::string("parseSelectorListChecked rejects '") + s + "'").c_str());
+    }
+
+    // Forgiving :is() drops invalid items instead of matching empty compounds.
+    auto forgivingEmpty = parseSelector(":is(0.13-25)");
+    check(!forgivingEmpty.matches(html) && !forgivingEmpty.matches(div),
+          ":is(0.13-25) matches nothing");
+    auto forgivingMixed = parseSelector(":is(0.13-25, .box)");
+    check(forgivingMixed.matches(div) && !forgivingMixed.matches(html),
+          ":is(0.13-25, .box) still matches .box only");
+
+    // Escaped class and id identifiers parse and match.
+    std::vector<Selector> escaped;
+    check(parseSelectorListChecked(".w-1\\/2", escaped) && escaped.size() == 1 &&
+          escaped[0].matches(div),
+          ".w-1\\/2 escaped class matches w-1/2");
+    std::vector<Selector> escapedId;
+    check(parseSelectorListChecked("#a\\:b", escapedId) && escapedId.size() == 1 &&
+          escapedId[0].matches(div),
+          "#a\\:b escaped id matches a:b");
+
+    // Empty CompoundSelector directly passed to matchCompound must not vacuous-match.
+    CompoundSelector emptyCompound;
+    check(!matchCompound(emptyCompound, html), "empty CompoundSelector matches nothing");
+}
+
 void testSelector() {
+    testInvalidSelectorsAndEscapes();
     testScope();
     testSimpleTag();
     testSimpleClass();

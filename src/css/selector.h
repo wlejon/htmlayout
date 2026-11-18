@@ -135,6 +135,7 @@ enum class AttrMatchOp {
 
 struct CompoundSelector; // forward declaration for selectorListArg
 struct RelativeSelector; // forward declaration for :has() arguments
+struct SelectorChain;    // forward declaration for chainListArg
 
 struct SimpleSelector {
     SimpleSelectorType type;
@@ -152,8 +153,10 @@ struct SimpleSelector {
     std::vector<SimpleSelector> notArg;
     // :host() / :host-context() argument (parsed sub-selectors)
     std::vector<SimpleSelector> hostArg;
-    // :is()/:where() arguments (selector list, stored as compound selectors)
+    // :is()/:where()/:not() compound arguments
     std::vector<CompoundSelector> selectorListArg;
+    // :is()/:where()/:not() complex (combinator-containing) arguments
+    std::vector<SelectorChain> chainListArg;
     // :has() arguments (relative selectors: lead combinator + complex selector)
     std::vector<RelativeSelector> relativeArgs;
     // ::slotted() argument (parsed compound selector)
@@ -206,13 +209,19 @@ struct Selector {
 // Parse a selector string into a Selector
 Selector parseSelector(const std::string& text);
 
-// Parse a comma-separated selector list
+// Parse a comma-separated selector list (invalid entries skipped, for CSS sheets)
 std::vector<Selector> parseSelectorList(const std::string& text);
+
+// Parse a comma-separated selector list strictly for DOM APIs (querySelector,
+// matches, closest). Returns false if the list or any entry is invalid CSS.
+bool parseSelectorListChecked(const std::string& text, std::vector<Selector>& out);
 
 // Calculate specificity for a selector
 uint32_t calculateSpecificity(const std::string& selector);
 
-// Match a single simple selector against an element (used by cascade for pseudo-elements)
+// Match a single simple selector, compound, or chain against an element
 bool matchSimple(const SimpleSelector& ss, const ElementRef& elem);
+bool matchCompound(const CompoundSelector& compound, const ElementRef& elem);
+bool matchChain(const SelectorChain& chain, const ElementRef& elem);
 
 } // namespace htmlayout::css

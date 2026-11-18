@@ -2,22 +2,11 @@
 #include "css/tokenizer.h"
 #include <algorithm>
 #include <cctype>
-#include <stdexcept>
-#include <sstream>
+#include <string_view>
 
 namespace htmlayout::css {
 
 namespace {
-
-// ---- Helpers ----
-
-int safeStoi(const std::string& s, int defaultVal = 0) {
-    try {
-        return std::stoi(s);
-    } catch (...) {
-        return defaultVal;
-    }
-}
 
 std::string toLower(std::string_view s) {
     std::string r(s);
@@ -30,6 +19,55 @@ std::string trim(const std::string& s) {
     if (a == std::string::npos) return "";
     size_t b = s.find_last_not_of(" \t\n\r\f");
     return s.substr(a, b - a + 1);
+}
+
+void appendUtf8(std::string& out, uint32_t cp) {
+    if (cp == 0 || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
+    if (cp <= 0x7F) {
+        out += static_cast<char>(cp);
+    } else if (cp <= 0x7FF) {
+        out += static_cast<char>(0xC0 | (cp >> 6));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp <= 0xFFFF) {
+        out += static_cast<char>(0xE0 | (cp >> 12));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+        out += static_cast<char>(0xF0 | (cp >> 18));
+        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+}
+
+bool hasBalancedDelimiters(const std::string& text) {
+    int parenDepth = 0;
+    int bracketDepth = 0;
+    char quote = 0;
+    for (size_t i = 0; i < text.size(); i++) {
+        char c = text[i];
+        if (c == '\\') {
+            if (i + 1 >= text.size()) return false;
+            i++;
+            continue;
+        }
+        if (quote) {
+            if (c == quote) quote = 0;
+        } else if (c == '"' || c == '\'') {
+            quote = c;
+        } else if (c == '[') {
+            bracketDepth++;
+        } else if (c == ']') {
+            if (bracketDepth == 0) return false;
+            bracketDepth--;
+        } else if (c == '(') {
+            parenDepth++;
+        } else if (c == ')') {
+            if (parenDepth == 0) return false;
+            parenDepth--;
+        }
+    }
+    return quote == 0 && bracketDepth == 0 && parenDepth == 0;
 }
 
 // Split a selector list at its top-level commas: not inside parentheses,
@@ -66,47 +104,6 @@ std::vector<std::string> splitTopLevelCommas(const std::string& text) {
     return parts;
 }
 
-// Split a string by a delimiter (for class matching)
-std::vector<std::string> splitWhitespace(std::string_view s) {
-    std::vector<std::string> parts;
-    std::istringstream iss((std::string(s)));
-    std::string part;
-    while (iss >> part) parts.push_back(part);
-    return parts;
-}
-
-// Scans the class attribute in place. This runs for every class simple of
-// every candidate rule, for every ancestor a descendant combinator walks —
-// splitting the attribute into a vector of strings per call was most of the
-// cost of matching.
-bool hasClass(const ElementRef& elem, const std::string& cls) {
-    if (cls.empty()) return false;
-    std::string_view classes = elem.className();
-    size_t pos = 0;
-    while (pos < classes.size()) {
-        size_t start = classes.find_first_not_of(" \t\n\r\f", pos);
-        if (start == std::string_view::npos) return false;
-        size_t end = classes.find_first_of(" \t\n\r\f", start);
-        if (end == std::string_view::npos) end = classes.size();
-        if (end - start == cls.size() &&
-            classes.compare(start, cls.size(), cls) == 0)
-            return true;
-        pos = end;
-    }
-    return false;
-}
-
-// ASCII case-insensitive equality against an already-lowercase name, without
-// building a lowercased copy of the tag per comparison.
-static bool equalsLowered(std::string_view tag, const std::string& lowered) {
-    if (tag.size() != lowered.size()) return false;
-    for (size_t i = 0; i < tag.size(); i++) {
-        if (static_cast<char>(std::tolower(static_cast<unsigned char>(tag[i]))) != lowered[i])
-            return false;
-    }
-    return true;
-}
-
 // ---- Selector Parser ----
 
 // Functional pseudo-classes (:not/:is/:where/:has, ::slotted) parse their
@@ -126,6 +123,7 @@ public:
     SelectorParser& operator=(const SelectorParser&) = delete;
 
     static bool tooDeep() { return t_selectorNesting > kMaxSelectorNesting; }
+    static bool atDepthLimit() { return t_selectorNesting >= kMaxSelectorNesting; }
 
     SelectorChain parseChain() {
         SelectorChain chain;
@@ -133,50 +131,52 @@ public:
         skipWS();
         if (m_pos >= m_text.size()) return chain;
 
-        // Parse rightmost compound selector (the subject)
+        // Parse leftmost compound selector (read left-to-right, reversed below)
         auto compound = parseCompound();
+        if (m_invalid || compound.simples.empty()) return SelectorChain{};
         chain.entries.push_back({std::move(compound), Combinator::None});
 
-        // Parse combinator + compound pairs going left
+        // Parse combinator + compound pairs
         while (m_pos < m_text.size()) {
             skipWS();
             if (m_pos >= m_text.size()) break;
 
-            Combinator comb = Combinator::Descendant; // default
+            Combinator comb = Combinator::Descendant;
+            bool explicitComb = false;
             char c = peek();
             if (c == '>') {
                 comb = Combinator::Child;
+                explicitComb = true;
                 advance();
                 skipWS();
             } else if (c == '+') {
                 comb = Combinator::AdjacentSibling;
+                explicitComb = true;
                 advance();
                 skipWS();
             } else if (c == '~') {
                 comb = Combinator::GeneralSibling;
+                explicitComb = true;
                 advance();
                 skipWS();
             }
-            // else descendant combinator (whitespace already consumed)
 
-            if (m_pos >= m_text.size()) break;
-
-            // Check for comma or end
-            if (peek() == ',') break;
+            if (m_pos >= m_text.size()) {
+                if (explicitComb) return SelectorChain{};
+                break;
+            }
 
             auto next = parseCompound();
-            if (next.simples.empty()) break;
+            if (m_invalid || next.simples.empty()) return SelectorChain{};
             chain.entries.push_back({std::move(next), comb});
         }
 
+        skipWS();
+        if (m_invalid || m_pos < m_text.size()) return SelectorChain{};
+
         // Reverse so entries[0] = subject (rightmost compound).
-        // Original: [A,None] [B,comb1] [C,comb2]
-        //   means A -comb1-> B -comb2-> C
-        // Want:     [C,None] [B,comb2] [A,comb1]
-        //   entries[i>0].combinator = how entries[i-1] relates to entries[i]
         if (chain.entries.size() > 1) {
             size_t n = chain.entries.size();
-            // Build reversed chain
             SelectorChain reversed;
             reversed.entries.resize(n);
             for (size_t i = 0; i < n; i++) {
@@ -184,8 +184,6 @@ public:
             }
             reversed.entries[0].combinator = Combinator::None;
             for (size_t i = 1; i < n; i++) {
-                // The combinator between original[n-1-i] and original[n-i]
-                // is stored on original[n-i].combinator
                 reversed.entries[i].combinator = chain.entries[n - i].combinator;
             }
             chain = std::move(reversed);
@@ -197,27 +195,115 @@ public:
 private:
     const std::string& m_text;
     size_t m_pos;
+    bool m_invalid = false;
 
     char peek(size_t off = 0) const {
         size_t i = m_pos + off;
         return i < m_text.size() ? m_text[i] : '\0';
     }
     char advance() { return m_pos < m_text.size() ? m_text[m_pos++] : '\0'; }
-    void skipWS() { while (m_pos < m_text.size() && isspace((unsigned char)m_text[m_pos])) m_pos++; }
+    void skipWS() { while (m_pos < m_text.size() && std::isspace((unsigned char)m_text[m_pos])) m_pos++; }
 
-    bool isNameStart(char c) const {
-        return std::isalpha((unsigned char)c) || c == '_' || c == '-' || (unsigned char)c >= 0x80;
-    }
-    bool isNameChar(char c) const {
-        return isNameStart(c) || std::isdigit((unsigned char)c);
+    static bool isNameBase(char c) {
+        return std::isalpha((unsigned char)c) || c == '_' || (unsigned char)c >= 0x80;
     }
 
-    std::string consumeName() {
+    bool validEscapeAt(size_t pos) const {
+        if (pos + 1 >= m_text.size() || m_text[pos] != '\\') return false;
+        char n = m_text[pos + 1];
+        return n != '\n' && n != '\r' && n != '\f';
+    }
+
+    bool canStartIdent() const {
+        if (m_pos >= m_text.size()) return false;
+        char c = m_text[m_pos];
+        if (isNameBase(c)) return true;
+        if (c == '\\') return validEscapeAt(m_pos);
+        if (c == '-') {
+            if (m_pos + 1 >= m_text.size()) return false;
+            char n = m_text[m_pos + 1];
+            return isNameBase(n) || n == '-' || validEscapeAt(m_pos + 1);
+        }
+        return false;
+    }
+
+    void consumeEscape(std::string& out) {
+        if (!validEscapeAt(m_pos)) {
+            m_invalid = true;
+            if (m_pos < m_text.size()) m_pos++;
+            return;
+        }
+        m_pos++; // skip '\'
+        char first = m_text[m_pos];
+        if (std::isxdigit((unsigned char)first)) {
+            uint32_t cp = 0;
+            int count = 0;
+            while (m_pos < m_text.size() && count < 6 && std::isxdigit((unsigned char)m_text[m_pos])) {
+                char h = m_text[m_pos++];
+                uint32_t v = (h <= '9') ? (h - '0')
+                           : (h <= 'F') ? (10 + h - 'A')
+                                        : (10 + h - 'a');
+                cp = (cp << 4) | v;
+                count++;
+            }
+            if (m_pos < m_text.size() && std::isspace((unsigned char)m_text[m_pos])) {
+                if (m_text[m_pos] == '\r' && m_pos + 1 < m_text.size() && m_text[m_pos + 1] == '\n')
+                    m_pos += 2;
+                else
+                    m_pos++;
+            }
+            appendUtf8(out, cp);
+        } else {
+            out += m_text[m_pos++];
+        }
+    }
+
+    std::string consumeIdent() {
         std::string name;
-        while (m_pos < m_text.size() && isNameChar(peek())) {
-            name += advance();
+        while (m_pos < m_text.size()) {
+            char c = m_text[m_pos];
+            if (c == '\\') {
+                consumeEscape(name);
+                if (m_invalid) break;
+            } else if (isNameBase(c) || c == '-' || std::isdigit((unsigned char)c)) {
+                name += m_text[m_pos++];
+            } else {
+                break;
+            }
         }
         return name;
+    }
+
+    bool readParenArg(std::string& out) {
+        int depth = 1;
+        char quote = 0;
+        size_t argStart = m_pos;
+        while (m_pos < m_text.size() && depth > 0) {
+            char c = m_text[m_pos];
+            if (c == '\\') {
+                if (m_pos + 1 >= m_text.size()) { m_invalid = true; return false; }
+                m_pos += 2;
+                continue;
+            }
+            if (quote) {
+                if (c == quote) quote = 0;
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '(') {
+                depth++;
+            } else if (c == ')') {
+                depth--;
+                if (depth == 0) break;
+            }
+            m_pos++;
+        }
+        if (depth != 0 || quote != 0) {
+            m_invalid = true;
+            return false;
+        }
+        out = m_text.substr(argStart, m_pos - argStart);
+        if (peek() == ')') advance();
+        return true;
     }
 
     CompoundSelector parseCompound() {
@@ -226,30 +312,28 @@ private:
         while (m_pos < m_text.size()) {
             char c = peek();
             if (c == '*') {
+                if (!compound.simples.empty()) { m_invalid = true; break; }
                 advance();
                 compound.simples.push_back({SimpleSelectorType::Universal, "*"});
             } else if (c == '.') {
                 advance();
-                std::string cls = consumeName();
-                compound.simples.push_back({SimpleSelectorType::Class, cls});
+                if (!canStartIdent()) { m_invalid = true; break; }
+                compound.simples.push_back({SimpleSelectorType::Class, consumeIdent()});
             } else if (c == '#') {
                 advance();
-                std::string id = consumeName();
-                compound.simples.push_back({SimpleSelectorType::Id, id});
+                if (!canStartIdent()) { m_invalid = true; break; }
+                compound.simples.push_back({SimpleSelectorType::Id, consumeIdent()});
             } else if (c == '[') {
                 compound.simples.push_back(parseAttribute());
+                if (m_invalid) break;
             } else if (c == ':') {
                 compound.simples.push_back(parsePseudo());
-            } else if (isNameStart(c) && c != '-') {
-                // Tag name (but not starting with - which could be confusing)
-                std::string tag = consumeName();
-                compound.simples.push_back({SimpleSelectorType::Tag, toLower(tag)});
-            } else if (c == '-' && isNameStart(peek(1))) {
-                // Custom element name like my-element
-                std::string tag = consumeName();
-                compound.simples.push_back({SimpleSelectorType::Tag, toLower(tag)});
+                if (m_invalid) break;
+            } else if (canStartIdent()) {
+                if (!compound.simples.empty()) { m_invalid = true; break; }
+                compound.simples.push_back({SimpleSelectorType::Tag, toLower(consumeIdent())});
             } else {
-                break; // not part of compound selector
+                break;
             }
         }
         return compound;
@@ -260,7 +344,8 @@ private:
         ss.type = SimpleSelectorType::Attribute;
         advance(); // skip '['
         skipWS();
-        ss.attrName = consumeName();
+        if (!canStartIdent()) { m_invalid = true; return ss; }
+        ss.attrName = consumeIdent();
         skipWS();
 
         if (peek() == ']') {
@@ -269,7 +354,6 @@ private:
             return ss;
         }
 
-        // Determine operator
         char c = peek();
         if (c == '=') {
             ss.attrOp = AttrMatchOp::Equals;
@@ -289,33 +373,36 @@ private:
         } else if (c == '*' && peek(1) == '=') {
             ss.attrOp = AttrMatchOp::Substring;
             advance(); advance();
+        } else {
+            m_invalid = true;
+            return ss;
         }
 
         skipWS();
-        // Value: quoted or unquoted
         if (peek() == '"' || peek() == '\'') {
             char quote = advance();
             while (m_pos < m_text.size() && peek() != quote) {
-                ss.attrValue += advance();
+                if (peek() == '\\') consumeEscape(ss.attrValue);
+                else ss.attrValue += advance();
+                if (m_invalid) return ss;
             }
-            if (peek() == quote) advance();
+            if (peek() != quote) { m_invalid = true; return ss; }
+            advance();
         } else {
-            ss.attrValue = consumeName();
+            if (!canStartIdent()) { m_invalid = true; return ss; }
+            ss.attrValue = consumeIdent();
         }
         skipWS();
-        // Check for case-insensitive flag: 'i' or 'I' before ']'
-        if ((peek() == 'i' || peek() == 'I') && m_pos + 1 < m_text.size()) {
-            // Look ahead to see if next non-space is ']'
+        if (peek() == 'i' || peek() == 'I' || peek() == 's' || peek() == 'S') {
+            bool ci = (peek() == 'i' || peek() == 'I');
             size_t saved = m_pos;
-            advance(); // skip 'i'
+            advance();
             skipWS();
-            if (peek() == ']') {
-                ss.attrCaseInsensitive = true;
-            } else {
-                m_pos = saved; // not the flag, restore
-            }
+            if (peek() == ']') ss.attrCaseInsensitive = ci;
+            else m_pos = saved;
         }
-        if (peek() == ']') advance();
+        if (peek() != ']') { m_invalid = true; return ss; }
+        advance();
         return ss;
     }
 
@@ -323,197 +410,162 @@ private:
         SimpleSelector ss;
         advance(); // skip first ':'
         if (peek() == ':') {
-            // Pseudo-element ::before, ::after, ::slotted(), ::part()
             advance();
+            if (!canStartIdent()) { m_invalid = true; return ss; }
             ss.type = SimpleSelectorType::PseudoElement;
-            ss.value = toLower(consumeName());
+            ss.value = toLower(consumeIdent());
 
-            // Handle functional pseudo-elements
             if (peek() == '(') {
-                advance(); // skip '('
-                skipWS();
+                advance();
+                std::string arg;
+                if (!readParenArg(arg)) return ss;
+                arg = trim(arg);
                 if (ss.value == "slotted") {
-                    // ::slotted(selector) — parse compound selector argument
-                    std::string arg;
-                    int depth = 1;
-                    size_t argStart = m_pos;
-                    while (m_pos < m_text.size() && depth > 0) {
-                        if (peek() == '(') depth++;
-                        else if (peek() == ')') { depth--; if (depth == 0) break; }
-                        advance();
+                    if (!atDepthLimit()) {
+                        if (arg.empty()) { m_invalid = true; return ss; }
+                        SelectorParser sub(arg);
+                        auto comp = sub.parseCompound();
+                        sub.skipWS();
+                        if (sub.m_invalid || sub.m_pos < arg.size() || comp.simples.empty()) {
+                            m_invalid = true;
+                            return ss;
+                        }
+                        ss.slottedArg = std::move(comp.simples);
                     }
-                    arg = m_text.substr(argStart, m_pos - argStart);
-                    if (peek() == ')') advance();
-
-                    SelectorParser subParser(arg);
-                    auto compound = subParser.parseCompound();
-                    ss.slottedArg = std::move(compound.simples);
                 } else if (ss.value == "part") {
-                    // ::part(name) — consume the part name
-                    std::string arg;
-                    while (m_pos < m_text.size() && peek() != ')') {
-                        arg += advance();
-                    }
-                    if (peek() == ')') advance();
-                    // Trim whitespace
-                    size_t a = arg.find_first_not_of(" \t");
-                    size_t b = arg.find_last_not_of(" \t");
-                    ss.partArg = (a != std::string::npos) ? arg.substr(a, b - a + 1) : "";
-                } else {
-                    // Unknown functional pseudo-element — skip to closing paren
-                    int depth = 1;
-                    while (m_pos < m_text.size() && depth > 0) {
-                        if (peek() == '(') depth++;
-                        else if (peek() == ')') depth--;
-                        advance();
-                    }
+                    if (arg.empty()) { m_invalid = true; return ss; }
+                    ss.partArg = std::move(arg);
                 }
             }
             return ss;
         }
-        ss.type = SimpleSelectorType::PseudoClass;
-        ss.value = toLower(consumeName());
 
-        // The four CSS 2.1 pseudo-elements predate the double-colon notation
-        // and are still written with one colon in the wild. Selectors L3 §7
-        // requires accepting that spelling, so retype them here rather than
-        // letting them fall through as pseudo-classes nothing ever matches —
-        // a sheet saying `.type:after { content: '●' }` expects a dot.
+        if (!canStartIdent()) { m_invalid = true; return ss; }
+        ss.type = SimpleSelectorType::PseudoClass;
+        ss.value = toLower(consumeIdent());
+
+        // Accept CSS 2.1 single-colon pseudo-elements (Selectors L3 §7).
         if (ss.value == "before" || ss.value == "after" ||
             ss.value == "first-line" || ss.value == "first-letter") {
             ss.type = SimpleSelectorType::PseudoElement;
+            if (peek() == '(') m_invalid = true;
             return ss;
         }
 
-        // Handle functional pseudo-classes
         if (peek() == '(') {
-            advance(); // skip '('
-            skipWS();
-            if (ss.value == "not") {
-                // :not() with CSS Selectors L4 comma-separated selector list
-                std::string arg;
-                int depth = 1;
-                size_t argStart = m_pos;
-                while (m_pos < m_text.size() && depth > 0) {
-                    if (peek() == '(') depth++;
-                    else if (peek() == ')') { depth--; if (depth == 0) break; }
-                    advance();
+            advance();
+            if (ss.value == "nth-child" || ss.value == "nth-last-child" ||
+                ss.value == "nth-of-type" || ss.value == "nth-last-of-type") {
+                if (!parseNth(ss) || peek() != ')') {
+                    m_invalid = true;
+                    return ss;
                 }
-                arg = m_text.substr(argStart, m_pos - argStart);
-                if (peek() == ')') advance();
+                advance();
+                return ss;
+            }
+            std::string arg;
+            if (!readParenArg(arg)) return ss;
+            std::string trimmedArg = trim(arg);
 
-                // Parse as comma-separated compound selectors (like :is()/:where())
+            if (ss.value == "not") {
+                if (atDepthLimit()) return ss;
+                if (trimmedArg.empty()) { m_invalid = true; return ss; }
+                for (const std::string& raw : splitTopLevelCommas(arg)) {
+                    std::string part = trim(raw);
+                    if (part.empty()) { m_invalid = true; return ss; }
+                    Selector sub = parseSelector(part);
+                    if (sub.chain.entries.empty()) { m_invalid = true; return ss; }
+                    if (sub.chain.entries.size() == 1)
+                        ss.selectorListArg.push_back(std::move(sub.chain.entries[0].compound));
+                    else
+                        ss.chainListArg.push_back(std::move(sub.chain));
+                }
+            } else if (ss.value == "is" || ss.value == "where") {
+                if (atDepthLimit()) return ss;
+                // :is() / :where() take a forgiving selector list: skip invalid items,
+                // never push empty compounds.
                 for (const std::string& raw : splitTopLevelCommas(arg)) {
                     std::string part = trim(raw);
                     if (part.empty()) continue;
-                    SelectorParser subParser(part);
-                    ss.selectorListArg.push_back(subParser.parseCompound());
+                    Selector sub = parseSelector(part);
+                    if (sub.chain.entries.size() == 1)
+                        ss.selectorListArg.push_back(std::move(sub.chain.entries[0].compound));
+                    else if (sub.chain.entries.size() > 1)
+                        ss.chainListArg.push_back(std::move(sub.chain));
                 }
-            } else if (ss.value == "nth-child" || ss.value == "nth-last-child" ||
-                       ss.value == "nth-of-type" || ss.value == "nth-last-of-type") {
-                parseNth(ss);
-                if (peek() == ')') advance();
-            } else if (ss.value == "is" || ss.value == "where" || ss.value == "has") {
-                // :is()/:where()/:has() — parse comma-separated selector list
-                std::string arg;
-                int depth = 1;
-                size_t argStart = m_pos;
-                while (m_pos < m_text.size() && depth > 0) {
-                    if (peek() == '(') depth++;
-                    else if (peek() == ')') { depth--; if (depth == 0) break; }
-                    advance();
-                }
-                arg = m_text.substr(argStart, m_pos - argStart);
-                if (peek() == ')') advance();
-
-                bool isHas = (ss.value == "has");
-                auto addPart = [&ss, isHas](const std::string& raw) {
+            } else if (ss.value == "has") {
+                if (atDepthLimit()) return ss;
+                if (trimmedArg.empty()) { m_invalid = true; return ss; }
+                for (const std::string& raw : splitTopLevelCommas(arg)) {
                     std::string part = trim(raw);
-                    if (part.empty()) return;
-                    if (isHas) {
-                        // :has() takes relative selectors: an optional lead
-                        // combinator anchoring to the scope element, then a
-                        // full complex selector.
-                        RelativeSelector rel;
-                        char c0 = part[0];
-                        if (c0 == '>') rel.lead = Combinator::Child;
-                        else if (c0 == '+') rel.lead = Combinator::AdjacentSibling;
-                        else if (c0 == '~') rel.lead = Combinator::GeneralSibling;
-                        if (c0 == '>' || c0 == '+' || c0 == '~')
-                            part = trim(part.substr(1));
-                        if (part.empty()) return;
-                        rel.chain = parseSelector(part).chain;
-                        if (!rel.chain.entries.empty())
-                            ss.relativeArgs.push_back(std::move(rel));
-                    } else {
-                        SelectorParser subParser(part);
-                        ss.selectorListArg.push_back(subParser.parseCompound());
-                    }
-                };
-
-                for (const std::string& raw : splitTopLevelCommas(arg)) addPart(raw);
+                    if (part.empty()) { m_invalid = true; return ss; }
+                    RelativeSelector rel;
+                    char c0 = part[0];
+                    if (c0 == '>') rel.lead = Combinator::Child;
+                    else if (c0 == '+') rel.lead = Combinator::AdjacentSibling;
+                    else if (c0 == '~') rel.lead = Combinator::GeneralSibling;
+                    if (c0 == '>' || c0 == '+' || c0 == '~') part = trim(part.substr(1));
+                    if (part.empty()) { m_invalid = true; return ss; }
+                    rel.chain = parseSelector(part).chain;
+                    if (rel.chain.entries.empty()) { m_invalid = true; return ss; }
+                    ss.relativeArgs.push_back(std::move(rel));
+                }
             } else if (ss.value == "host" || ss.value == "host-context") {
-                // :host(selector) / :host-context(selector)
-                std::string arg;
-                int depth = 1;
-                size_t argStart = m_pos;
-                while (m_pos < m_text.size() && depth > 0) {
-                    if (peek() == '(') depth++;
-                    else if (peek() == ')') { depth--; if (depth == 0) break; }
-                    advance();
+                if (atDepthLimit()) return ss;
+                if (trimmedArg.empty()) { m_invalid = true; return ss; }
+                SelectorParser sub(trimmedArg);
+                auto comp = sub.parseCompound();
+                sub.skipWS();
+                if (sub.m_invalid || sub.m_pos < trimmedArg.size() || comp.simples.empty()) {
+                    m_invalid = true;
+                    return ss;
                 }
-                arg = m_text.substr(argStart, m_pos - argStart);
-                if (peek() == ')') advance();
-
-                SelectorParser subParser(arg);
-                auto compound = subParser.parseCompound();
-                ss.hostArg = std::move(compound.simples);
-            } else {
-                // Unknown functional pseudo - skip to closing paren
-                int depth = 1;
-                while (m_pos < m_text.size() && depth > 0) {
-                    if (peek() == '(') depth++;
-                    else if (peek() == ')') depth--;
-                    advance();
-                }
+                ss.hostArg = std::move(comp.simples);
             }
         }
         return ss;
     }
 
-    void parseNth(SimpleSelector& ss) {
+    bool parseNth(SimpleSelector& ss) {
         skipWS();
         std::string arg;
         while (m_pos < m_text.size() && peek() != ')') arg += advance();
         arg = trim(arg);
+        if (arg.empty()) return false;
         std::string lower = toLower(arg);
+        if (lower == "odd") { ss.nthA = 2; ss.nthB = 1; return true; }
+        if (lower == "even") { ss.nthA = 2; ss.nthB = 0; return true; }
 
-        if (lower == "odd") {
-            ss.nthA = 2; ss.nthB = 1;
-        } else if (lower == "even") {
-            ss.nthA = 2; ss.nthB = 0;
-        } else {
-            // Parse An+B
-            size_t nPos = lower.find('n');
-            if (nPos != std::string::npos) {
-                std::string aPart = lower.substr(0, nPos);
-                if (aPart.empty() || aPart == "+") ss.nthA = 1;
-                else if (aPart == "-") ss.nthA = -1;
-                else ss.nthA = safeStoi(aPart);
+        auto parseSignedInt = [](std::string_view sv, int& out) -> bool {
+            if (sv.empty()) return false;
+            size_t i = (sv[0] == '+' || sv[0] == '-') ? 1 : 0;
+            if (i >= sv.size()) return false;
+            for (; i < sv.size(); ++i)
+                if (!std::isdigit((unsigned char)sv[i])) return false;
+            try { out = std::stoi(std::string(sv)); return true; }
+            catch (...) { return false; }
+        };
 
-                std::string bPart = trim(lower.substr(nPos + 1));
-                if (bPart.empty()) ss.nthB = 0;
-                else {
-                    // Remove spaces around +/-
-                    std::string cleaned;
-                    for (char ch : bPart) if (!isspace((unsigned char)ch)) cleaned += ch;
-                    if (!cleaned.empty()) ss.nthB = safeStoi(cleaned);
-                }
-            } else {
-                ss.nthA = 0;
-                ss.nthB = safeStoi(lower.empty() ? "0" : lower);
-            }
+        size_t nPos = lower.find('n');
+        if (nPos != std::string::npos) {
+            std::string_view aPart(lower.data(), nPos);
+            if (aPart.empty() || aPart == "+") ss.nthA = 1;
+            else if (aPart == "-") ss.nthA = -1;
+            else if (!parseSignedInt(aPart, ss.nthA)) return false;
+
+            std::string bPart = trim(lower.substr(nPos + 1));
+            if (bPart.empty()) { ss.nthB = 0; return true; }
+            if (bPart[0] != '+' && bPart[0] != '-') return false;
+            char sign = bPart[0];
+            std::string rest = trim(bPart.substr(1));
+            if (rest.empty()) return false;
+            for (char ch : rest)
+                if (!std::isdigit((unsigned char)ch)) return false;
+            return parseSignedInt(std::string(1, sign) + rest, ss.nthB);
         }
+
+        ss.nthA = 0;
+        return parseSignedInt(lower, ss.nthB);
     }
 };
 
@@ -532,7 +584,6 @@ void addSimpleSpecificity(const SimpleSelector& s, int& ids, int& classes, int& 
             break;
         case SimpleSelectorType::PseudoClass:
             if (s.value == "not" || s.value == "is" || s.value == "has") {
-                // :is()/:not()/:has() specificity = most specific argument
                 uint32_t maxSpec = 0;
                 for (auto& compound : s.selectorListArg) {
                     int ci = 0, cc = 0, ct = 0;
@@ -541,6 +592,10 @@ void addSimpleSpecificity(const SimpleSelector& s, int& ids, int& classes, int& 
                     uint32_t spec = (std::min(ci, 255) << 16) |
                                     (std::min(cc, 255) << 8) |
                                     std::min(ct, 255);
+                    if (spec > maxSpec) maxSpec = spec;
+                }
+                for (auto& ch : s.chainListArg) {
+                    uint32_t spec = computeSpecificity(ch);
                     if (spec > maxSpec) maxSpec = spec;
                 }
                 for (auto& rel : s.relativeArgs) {
@@ -553,7 +608,6 @@ void addSimpleSpecificity(const SimpleSelector& s, int& ids, int& classes, int& 
             } else if (s.value == "where") {
                 // :where() contributes zero specificity
             } else if (s.value == "host" || s.value == "host-context") {
-                // :host/:host-context itself = pseudo-class specificity + argument
                 classes++;
                 for (auto& inner : s.hostArg)
                     addSimpleSpecificity(inner, ids, classes, types);
@@ -566,14 +620,13 @@ void addSimpleSpecificity(const SimpleSelector& s, int& ids, int& classes, int& 
             break;
         case SimpleSelectorType::PseudoElement:
             types++;
-            // ::slotted(selector) specificity includes its argument
             if (s.value == "slotted") {
                 for (auto& inner : s.slottedArg)
                     addSimpleSpecificity(inner, ids, classes, types);
             }
             break;
         case SimpleSelectorType::Universal:
-            break; // no specificity
+            break;
     }
 }
 
@@ -583,7 +636,6 @@ uint32_t computeSpecificity(const SelectorChain& chain) {
         for (auto& s : entry.compound.simples)
             addSimpleSpecificity(s, ids, classes, types);
     }
-    // Pack as (ids << 16) | (classes << 8) | types, clamped to 255 each
     if (ids > 255) ids = 255;
     if (classes > 255) classes = 255;
     if (types > 255) types = 255;
@@ -592,376 +644,14 @@ uint32_t computeSpecificity(const SelectorChain& chain) {
            (static_cast<uint32_t>(types));
 }
 
-// ---- Matching ----
-
-bool matchNth(int a, int b, int index) {
-    if (a == 0) return index == b;
-    int n = index - b;
-    if (a < 0) {
-        return n <= 0 && (n % a == 0);
-    }
-    return n >= 0 && (n % a == 0);
-}
-
 } // anonymous namespace
-
-// Forward declarations for use by matchSimple (:is/:where/:has)
-bool matchCompound(const CompoundSelector& compound, const ElementRef& elem);
-static bool matchChainTop(const SelectorChain& chain, const ElementRef& elem,
-                          const ElementRef** topOut);
-
-// ---- :has() relative-selector matching ----
-
-static bool isDescendantOf(const ElementRef* e, const ElementRef* scope) {
-    for (ElementRef* p = e->parent(); p; p = p->parent())
-        if (p == scope) return true;
-    return false;
-}
-
-template <typename F>
-static bool anyDescendant(const ElementRef& root, F&& f) {
-    for (ElementRef* c : root.children()) {
-        if (f(*c)) return true;
-        if (anyDescendant(*c, f)) return true;
-    }
-    return false;
-}
-
-// :has(rel) — does any element match the relative selector with the :has()
-// element as scope? The chain matches bottom-up from a candidate subject; the
-// topmost matched element must then relate to the scope by the lead combinator.
-static bool matchHas(const SimpleSelector& ss, const ElementRef& scope) {
-    for (const auto& rel : ss.relativeArgs) {
-        auto tryMatch = [&](const ElementRef& cand) -> bool {
-            const ElementRef* top = nullptr;
-            if (!matchChainTop(rel.chain, cand, &top)) return false;
-            switch (rel.lead) {
-                case Combinator::Child:
-                    return top->parent() == &scope;
-                case Combinator::None:
-                case Combinator::Descendant:
-                    return isDescendantOf(top, &scope);
-                case Combinator::AdjacentSibling:
-                    return top->parent() == scope.parent() && scope.parent() &&
-                           top->childIndex() == scope.childIndex() + 1;
-                case Combinator::GeneralSibling:
-                    return top->parent() == scope.parent() && scope.parent() &&
-                           top->childIndex() > scope.childIndex();
-            }
-            return false;
-        };
-
-        bool matched = false;
-        if (rel.lead == Combinator::AdjacentSibling ||
-            rel.lead == Combinator::GeneralSibling) {
-            // Candidate subjects live in the subtrees of following siblings
-            // (including the siblings themselves).
-            if (ElementRef* p = scope.parent()) {
-                auto sibs = p->children();
-                for (int j = scope.childIndex() + 1;
-                     j < static_cast<int>(sibs.size()) && !matched; j++) {
-                    if (tryMatch(*sibs[j]) || anyDescendant(*sibs[j], tryMatch))
-                        matched = true;
-                }
-            }
-        } else {
-            matched = anyDescendant(scope, tryMatch);
-        }
-        if (matched) return true;
-    }
-    return false;
-}
-
-bool matchSimple(const SimpleSelector& ss, const ElementRef& elem) {
-    switch (ss.type) {
-        case SimpleSelectorType::Universal:
-            return true;
-        case SimpleSelectorType::Tag:
-            return equalsLowered(elem.tagName(), ss.value);
-        case SimpleSelectorType::Class:
-            return hasClass(elem, ss.value);
-        case SimpleSelectorType::Id:
-            return elem.id() == ss.value;
-        case SimpleSelectorType::Attribute: {
-            if (!elem.hasAttribute(ss.attrName)) return false;
-            if (ss.attrOp == AttrMatchOp::Exists) return true;
-            std::string val(elem.getAttribute(ss.attrName));
-            std::string cmpVal = ss.attrValue;
-            // Apply case-insensitive flag
-            if (ss.attrCaseInsensitive) {
-                val = toLower(val);
-                cmpVal = toLower(cmpVal);
-            }
-            switch (ss.attrOp) {
-                case AttrMatchOp::Equals:
-                    return val == cmpVal;
-                case AttrMatchOp::Includes: {
-                    auto parts = splitWhitespace(val);
-                    return std::find(parts.begin(), parts.end(), cmpVal) != parts.end();
-                }
-                case AttrMatchOp::DashMatch:
-                    return val == cmpVal ||
-                           (val.size() > cmpVal.size() &&
-                            val.substr(0, cmpVal.size()) == cmpVal &&
-                            val[cmpVal.size()] == '-');
-                case AttrMatchOp::Prefix:
-                    return val.size() >= cmpVal.size() &&
-                           val.substr(0, cmpVal.size()) == cmpVal;
-                case AttrMatchOp::Suffix:
-                    return val.size() >= cmpVal.size() &&
-                           val.substr(val.size() - cmpVal.size()) == cmpVal;
-                case AttrMatchOp::Substring:
-                    return val.find(cmpVal) != std::string::npos;
-                default: return false;
-            }
-        }
-        case SimpleSelectorType::PseudoClass: {
-            const std::string& name = ss.value;
-            if (name == "first-child") return elem.childIndex() == 0;
-            if (name == "last-child") return elem.childIndex() == elem.siblingCount() - 1;
-            if (name == "only-child") return elem.siblingCount() == 1;
-            if (name == "first-of-type") return elem.childIndexOfType() == 0;
-            if (name == "last-of-type") return elem.childIndexOfType() == elem.siblingCountOfType() - 1;
-            if (name == "only-of-type") return elem.siblingCountOfType() == 1;
-            if (name == "hover") return elem.isHovered();
-            if (name == "focus") return elem.isFocused();
-            if (name == "active") return elem.isActive();
-            if (name == "root") return elem.parent() == nullptr;
-            // The scoping root: the root element in a stylesheet (outside
-            // @scope, which is not implemented), the context element when a
-            // consumer answers querySelector() and friends (ElementRef).
-            if (name == "scope") return elem.isScopingRoot();
-            if (name == "empty")
-                return elem.children().empty() && !elem.hasTextChildren();
-            if (name == "host") {
-                // :host matches the shadow host element.
-                // An element is the shadow host if it has a shadow root.
-                if (!elem.shadowRoot()) return false;
-                // If :host has arguments, the host must also match those selectors
-                if (!ss.hostArg.empty()) {
-                    for (auto& inner : ss.hostArg) {
-                        if (!matchSimple(inner, elem)) return false;
-                    }
-                }
-                return true;
-            }
-            if (name == "host-context") {
-                // :host-context(selector) matches if the host or any of its ancestors
-                // matches the argument selector.
-                if (!elem.shadowRoot()) return false;
-                // Check the host itself
-                if (!ss.hostArg.empty()) {
-                    bool hostMatches = true;
-                    for (auto& inner : ss.hostArg) {
-                        if (!matchSimple(inner, elem)) { hostMatches = false; break; }
-                    }
-                    if (hostMatches) return true;
-                    // Walk ancestors
-                    ElementRef* ancestor = elem.parent();
-                    while (ancestor) {
-                        bool ancestorMatches = true;
-                        for (auto& inner : ss.hostArg) {
-                            if (!matchSimple(inner, *ancestor)) { ancestorMatches = false; break; }
-                        }
-                        if (ancestorMatches) return true;
-                        ancestor = ancestor->parent();
-                    }
-                }
-                return false;
-            }
-            if (name == "defined") {
-                return elem.isDefined();
-            }
-            // Selectors L4: link pseudo-classes
-            if (name == "any-link" || name == "link") {
-                return elem.isLink();
-            }
-            if (name == "visited") {
-                return elem.isVisited();
-            }
-            // Selectors L4: focus pseudo-classes
-            if (name == "focus-within") {
-                return elem.isFocusWithin();
-            }
-            if (name == "focus-visible") {
-                return elem.isFocusVisible();
-            }
-            // Selectors L4: form state pseudo-classes
-            if (name == "checked") {
-                return elem.isChecked();
-            }
-            if (name == "disabled") {
-                return elem.isDisabled();
-            }
-            if (name == "enabled") {
-                return elem.isEnabled();
-            }
-            if (name == "required") {
-                return elem.isRequired();
-            }
-            if (name == "optional") {
-                return elem.isOptional();
-            }
-            if (name == "read-only") {
-                return elem.isReadOnly();
-            }
-            if (name == "read-write") {
-                return elem.isReadWrite();
-            }
-            if (name == "placeholder-shown") {
-                return elem.isPlaceholderShown();
-            }
-            if (name == "indeterminate") {
-                return elem.isIndeterminate();
-            }
-            if (name == "target") {
-                return elem.isTarget();
-            }
-            if (name == "modal") {
-                return elem.isModal();
-            }
-            if (name == "not") {
-                // :not() matches if NONE of the compound selectors in the list match
-                for (auto& compound : ss.selectorListArg) {
-                    if (matchCompound(compound, elem)) return false;
-                }
-                return true;
-            }
-            if (name == "is" || name == "where") {
-                // :is()/:where() match if ANY compound in the list matches
-                for (auto& compound : ss.selectorListArg) {
-                    if (matchCompound(compound, elem)) return true;
-                }
-                return false;
-            }
-            if (name == "has") {
-                return matchHas(ss, elem);
-            }
-            if (name == "nth-child") {
-                int index = elem.childIndex() + 1; // 1-based
-                return matchNth(ss.nthA, ss.nthB, index);
-            }
-            if (name == "nth-last-child") {
-                int index = elem.siblingCount() - elem.childIndex(); // 1-based from end
-                return matchNth(ss.nthA, ss.nthB, index);
-            }
-            if (name == "nth-of-type") {
-                int index = elem.childIndexOfType() + 1;
-                return matchNth(ss.nthA, ss.nthB, index);
-            }
-            if (name == "nth-last-of-type") {
-                int index = elem.siblingCountOfType() - elem.childIndexOfType();
-                return matchNth(ss.nthA, ss.nthB, index);
-            }
-            return false;
-        }
-        case SimpleSelectorType::PseudoElement:
-            // Pseudo-elements don't participate in normal matching
-            return false;
-        default:
-            return false;
-    }
-}
-
-bool matchCompound(const CompoundSelector& compound, const ElementRef& elem) {
-    for (auto& s : compound.simples) {
-        if (!matchSimple(s, elem)) return false;
-    }
-    return true;
-}
-
-// Match a selector chain against an element.
-// entries[0] must match elem (subject). Then walk ancestors/siblings per
-// combinators. On success *topOut (if given) receives the element matched by
-// the last (leftmost) entry — used by :has() to anchor relative selectors.
-static bool matchChainTop(const SelectorChain& chain, const ElementRef& elem,
-                          const ElementRef** topOut) {
-    if (chain.entries.empty()) return false;
-
-    // entries[0] is the subject
-    if (!matchCompound(chain.entries[0].compound, elem)) return false;
-
-    // Now match the rest (entries[1..n]) walking the tree
-    const ElementRef* current = &elem;
-    for (size_t i = 1; i < chain.entries.size(); i++) {
-        auto& entry = chain.entries[i];
-        bool found = false;
-
-        switch (entry.combinator) {
-            case Combinator::Child: {
-                // Parent must match
-                ElementRef* p = current->parent();
-                if (!p || !matchCompound(entry.compound, *p)) return false;
-                current = p;
-                found = true;
-                break;
-            }
-            case Combinator::Descendant: {
-                // Any ancestor must match
-                ElementRef* p = current->parent();
-                while (p) {
-                    if (matchCompound(entry.compound, *p)) {
-                        current = p;
-                        found = true;
-                        break;
-                    }
-                    p = p->parent();
-                }
-                if (!found) return false;
-                break;
-            }
-            case Combinator::AdjacentSibling: {
-                // Immediately preceding sibling must match
-                ElementRef* p = current->parent();
-                if (!p) return false;
-                int idx = current->childIndex();
-                if (idx <= 0) return false;
-                auto siblings = p->children();
-                if (idx < static_cast<int>(siblings.size()) &&
-                    matchCompound(entry.compound, *siblings[idx - 1])) {
-                    current = siblings[idx - 1];
-                    found = true;
-                } else {
-                    return false;
-                }
-                break;
-            }
-            case Combinator::GeneralSibling: {
-                // Any preceding sibling must match
-                ElementRef* p = current->parent();
-                if (!p) return false;
-                int idx = current->childIndex();
-                auto siblings = p->children();
-                for (int j = idx - 1; j >= 0; j--) {
-                    if (matchCompound(entry.compound, *siblings[j])) {
-                        current = siblings[j];
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) return false;
-                break;
-            }
-            default:
-                return false;
-        }
-    }
-    if (topOut) *topOut = current;
-    return true;
-}
-
-bool matchChain(const SelectorChain& chain, const ElementRef& elem) {
-    return matchChainTop(chain, elem, nullptr);
-}
 
 // ---- Public API ----
 
-bool Selector::matches(const ElementRef& elem) const {
-    return matchChain(chain, elem);
-}
-
 Selector parseSelector(const std::string& text) {
     std::string trimmed = trim(text);
+    if (trimmed.empty() || !hasBalancedDelimiters(trimmed))
+        return {text, 0, {}};
     SelectorParser parser(trimmed);
     auto chain = parser.parseChain();
     uint32_t spec = computeSpecificity(chain);
@@ -970,11 +660,35 @@ Selector parseSelector(const std::string& text) {
 
 std::vector<Selector> parseSelectorList(const std::string& text) {
     std::vector<Selector> selectors;
+    if (trim(text).empty() || !hasBalancedDelimiters(text)) return selectors;
     for (const std::string& raw : splitTopLevelCommas(text)) {
         std::string part = trim(raw);
-        if (!part.empty()) selectors.push_back(parseSelector(part));
+        if (part.empty()) continue;
+        Selector sel = parseSelector(part);
+        if (!sel.chain.entries.empty()) selectors.push_back(std::move(sel));
     }
     return selectors;
+}
+
+bool parseSelectorListChecked(const std::string& text, std::vector<Selector>& out) {
+    out.clear();
+    if (trim(text).empty() || !hasBalancedDelimiters(text)) return false;
+    auto parts = splitTopLevelCommas(text);
+    if (parts.empty()) return false;
+    for (const std::string& raw : parts) {
+        std::string part = trim(raw);
+        if (part.empty()) {
+            out.clear();
+            return false;
+        }
+        Selector sel = parseSelector(part);
+        if (sel.chain.entries.empty()) {
+            out.clear();
+            return false;
+        }
+        out.push_back(std::move(sel));
+    }
+    return !out.empty();
 }
 
 uint32_t calculateSpecificity(const std::string& selector) {

@@ -443,6 +443,10 @@ private:
         for (auto& n : s.hostArg)    if (simpleMentionsFocus(n, withinOnly)) return true;
         for (auto& c : s.selectorListArg)
             for (auto& sub : c.simples) if (simpleMentionsFocus(sub, withinOnly)) return true;
+        for (auto& ch : s.chainListArg)
+            for (auto& entry : ch.entries)
+                for (auto& sub : entry.compound.simples)
+                    if (simpleMentionsFocus(sub, withinOnly)) return true;
         for (auto& rel : s.relativeArgs)
             for (auto& entry : rel.chain.entries)
                 for (auto& sub : entry.compound.simples)
@@ -458,6 +462,10 @@ private:
         for (auto& n : s.slottedArg) if (simpleMentionsHover(n)) return true;
         for (auto& c : s.selectorListArg)
             for (auto& sub : c.simples) if (simpleMentionsHover(sub)) return true;
+        for (auto& ch : s.chainListArg)
+            for (auto& entry : ch.entries)
+                for (auto& sub : entry.compound.simples)
+                    if (simpleMentionsHover(sub)) return true;
         for (auto& rel : s.relativeArgs)
             for (auto& entry : rel.chain.entries)
                 for (auto& sub : entry.compound.simples)
@@ -475,6 +483,9 @@ private:
         for (auto& n : s.slottedArg) collectClasses(n, out);
         for (auto& c : s.selectorListArg)
             for (auto& sub : c.simples) collectClasses(sub, out);
+        for (auto& ch : s.chainListArg)
+            for (auto& entry : ch.entries)
+                for (auto& sub : entry.compound.simples) collectClasses(sub, out);
         for (auto& rel : s.relativeArgs)
             for (auto& entry : rel.chain.entries)
                 for (auto& sub : entry.compound.simples) collectClasses(sub, out);
@@ -494,6 +505,9 @@ private:
         for (auto& n : s.notArg) if (simpleIsStructural(n)) return true;
         for (auto& c : s.selectorListArg)
             for (auto& sub : c.simples) if (simpleIsStructural(sub)) return true;
+        for (auto& ch : s.chainListArg)
+            for (auto& entry : ch.entries)
+                for (auto& sub : entry.compound.simples) if (simpleIsStructural(sub)) return true;
         return false;
     }
 
@@ -510,6 +524,9 @@ private:
         for (auto& n : s.notArg) if (simpleHasSiblingArg(n)) return true;
         for (auto& c : s.selectorListArg)
             for (auto& sub : c.simples) if (simpleHasSiblingArg(sub)) return true;
+        for (auto& ch : s.chainListArg)
+            for (auto& entry : ch.entries)
+                for (auto& sub : entry.compound.simples) if (simpleHasSiblingArg(sub)) return true;
         return false;
     }
 
@@ -520,6 +537,9 @@ private:
         for (auto& n : s.slottedArg) if (simpleUsesHas(n)) return true;
         for (auto& c : s.selectorListArg)
             for (auto& sub : c.simples) if (simpleUsesHas(sub)) return true;
+        for (auto& ch : s.chainListArg)
+            for (auto& entry : ch.entries)
+                for (auto& sub : entry.compound.simples) if (simpleUsesHas(sub)) return true;
         return false;
     }
 

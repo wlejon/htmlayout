@@ -4,6 +4,7 @@ add_library(htmlayout_css STATIC
     supports.cpp
     media_query.cpp
     selector.cpp
+    selector_match.cpp
     cascade.cpp
     cascade_resolve.cpp
     container_query.cpp
