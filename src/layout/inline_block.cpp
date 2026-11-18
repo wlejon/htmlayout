@@ -214,6 +214,12 @@ bool tryLayoutInlineBlockOrReplaced(LayoutNode* node, float availableWidth,
             auto& cs = child->computedStyle();
             const std::string& d = styleVal(child, Prop::Display);
             if (d == "none") continue;
+            // An absolutely positioned child (2048's `.score-container::after`
+            // label) is out of flow: it neither makes the content
+            // block-level nor counts as content. The stacker below records
+            // its static position.
+            const std::string& pos = styleVal(child, Prop::Position);
+            if (pos == "absolute" || pos == "fixed") continue;
             ibHasContent = true;
             if (d != "inline" && d != "inline-block" && d != "inline-flex" && d != "inline-grid") ibAllInline = false;
         }
@@ -430,6 +436,20 @@ bool tryLayoutInlineBlockOrReplaced(LayoutNode* node, float availableWidth,
                     child->box.padding.left + child->box.border.left;
                 child->box.contentRect.y = cursorY + child->box.margin.top +
                     child->box.padding.top + child->box.border.top;
+                // A non-replaced inline (a <span>) sits on the line's strut
+                // baseline — half-leading + ascent below the line top — by
+                // its own first-line baseline, not at the line top: 2048's
+                // score box (line-height 47px, font 25px) put its digits
+                // 6px high. Atomic inlines keep the top placement.
+                if (styleVal(child, Prop::Display) == "inline" &&
+                    child->box.baselineOffset >= 0) {
+                    float ibNatural = metrics.lineHeight(fontFamily, fontSize, fontWeight);
+                    if (ibNatural <= 0) ibNatural = fontSize * 1.2f;
+                    float asc = (ibAscent > 0 && ibAscent < ibNatural)
+                        ? ibAscent : ibNatural * 0.8f;
+                    float strutBase = std::floor((ibLineHeight - ibNatural) * 0.5f) + asc;
+                    child->box.contentRect.y = cursorY + strutBase - child->box.baselineOffset;
+                }
                 ibLine.push_back({child, -1, cw, gapUsed});
                 cursorX += cw;
                 // The line still includes the block's strut (CSS2 §10.8):

@@ -350,6 +350,38 @@ static void testRtlSpanPadding() {
     check(near(cd->x + ox, 373), "the first word ends at padding-right, on the right");
 }
 
+// An inline-block's line is taller than its font (line-height 40px over a
+// 20px font): its content sits half-leading (10px) down the line, whether it
+// is a <span> or text beside an absolutely positioned box (2048's score box
+// and its `::after` label). The span sat at the line top, and the
+// out-of-flow box sent the text down the block path, at the top too.
+static void testInlineBlockHalfLeading() {
+    printf("--- inline boxes: half-leading inside an inline-block ---\n");
+    IMetrics m;
+    {
+        INode block; block.init(); block.style_["width"] = "400px";
+        INode ib; ib.init("inline-block"); ib.style_["line-height"] = "40px";
+        INode sp; sp.span(); sp.style_["line-height"] = "40px";
+        INode t; t.textNode("0");
+        sp.addChild(&t); ib.addChild(&sp); block.addChild(&ib);
+        layoutTree(&block, 800, m);
+        check(near(sp.box.contentRect.y, 10), "a span sits half-leading down its inline-block's line");
+    }
+    {
+        INode block; block.init(); block.style_["width"] = "400px";
+        INode ib; ib.init("inline-block"); ib.style_["line-height"] = "40px";
+        ib.style_["position"] = "relative";
+        INode t; t.textNode("0");
+        INode abs; abs.init(); abs.style_["position"] = "absolute";
+        INode at; at.textNode("x");
+        abs.addChild(&at); ib.addChild(&t); ib.addChild(&abs); block.addChild(&ib);
+        layoutTree(&block, 800, m);
+        check(!t.box.textRuns.empty() && near(t.box.textRuns[0].y, 10),
+              "text beside an absolute box keeps its half-leading");
+        check(near(ib.box.contentRect.height, 40), "the inline-block is one 40px line");
+    }
+}
+
 void testInlineBoxes() {
     printf("=== Inline boxes ===\n");
     testPreWrapWrapsInsideSpan();
@@ -362,4 +394,5 @@ void testInlineBoxes() {
     testWhitespaceCollapsesAcrossSpan();
     testBreakBeforeSpan();
     testBlockInsideInlineStaysAtomic();
+    testInlineBlockHalfLeading();
 }
