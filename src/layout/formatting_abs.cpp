@@ -1,6 +1,7 @@
 #include "layout/formatting_context.h"
 #include "layout/style_util.h"
 #include "layout/style_cache.h"
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <vector>
@@ -110,15 +111,21 @@ void layoutAbsoluteChild(LayoutNode* child, float cbWidth, float cbHeight,
         float w = cbWidth - *left - *right - mh;
         if (w > 0) layoutW = w;
     } else if (shrinkWrap) {
-        float maxCW = computeMaxContentWidth(child, metrics);
-        if (maxCW > cbWidth) maxCW = cbWidth;
+        // Shrink-to-fit (CSS 2 §10.3.7): min(max(min-content, available),
+        // max-content), the available width being the containing block's less
+        // the offset pinned on this axis and the box's own edges. With no room
+        // left (a popup at left:1077px in a 0x0 pane, as Leaflet places them)
+        // that is min-content, not nothing.
         float ph = resolveLength(styleVal(child, Prop::PaddingLeft), cbWidth, fontSize) +
                    resolveLength(styleVal(child, Prop::PaddingRight), cbWidth, fontSize);
         Edges bEdges = resolveBorders(child, cbWidth, fontSize);
         float bh = bEdges.left + bEdges.right;
         float mh = resolveLength(styleVal(child, Prop::MarginLeft), cbWidth, fontSize) +
                    resolveLength(styleVal(child, Prop::MarginRight), cbWidth, fontSize);
-        layoutW = maxCW + ph + bh + mh;
+        const float avail = cbWidth - (left ? *left : 0.0f) - (right ? *right : 0.0f) - ph - bh - mh;
+        float fit = computeMaxContentWidth(child, metrics);
+        if (fit > avail) fit = std::max(computeMinContentWidth(child, metrics), avail);
+        layoutW = fit + ph + bh + mh;
     } else if (intrinsicW) {
         // fit-content's available space: the containing block less the
         // offsets pinned on this axis.

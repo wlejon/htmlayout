@@ -9,6 +9,7 @@ namespace htmlayout::css {
 enum class TokenType {
     Ident,          // keyword or property name
     Function,       // function-name(
+    Url,            // url(unquoted): value is the URL, escapes decoded
     AtKeyword,      // @keyword
     Hash,           // #name
     String,         // "..." or '...'

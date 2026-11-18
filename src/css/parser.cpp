@@ -474,7 +474,7 @@ private:
         skipWhitespace();
 
         // Extract URL: either a bare string token or url("...")
-        if (peek().type == TokenType::String) {
+        if (peek().type == TokenType::String || peek().type == TokenType::Url) {
             rule.url = peek().value;
             advance();
         } else if (peek().type == TokenType::Function && peek().value == "url") {
@@ -917,6 +917,22 @@ private:
             case TokenType::Delim: return tok.value;
             case TokenType::String: return "\"" + tok.value + "\"";
             case TokenType::Function: return tok.value + "(";
+            case TokenType::Url: {
+                // Unquoted when it can be read back as one url token.
+                bool plain = !tok.value.empty();
+                for (char c : tok.value)
+                    if (c == '(' || c == ')' || c == '"' || c == '\'' || c == '\\' || c == ' ' || c == '\t' ||
+                        c == '\n' || c == '\r' || c == '\f')
+                        plain = false;
+                if (plain) return "url(" + tok.value + ")";
+                std::string s = "url(\"";
+                for (char c : tok.value) {
+                    if (c == '"' || c == '\\') s += '\\';
+                    if (c == '\n') { s += "\\a "; continue; }
+                    s += c;
+                }
+                return s + "\")";
+            }
             case TokenType::Dimension: return tok.value + tok.unit;
             case TokenType::Percentage: return tok.value + "%";
             case TokenType::Number: return tok.value;

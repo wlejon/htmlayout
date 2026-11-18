@@ -477,6 +477,53 @@ static void testContainerStyleQueries() {
     check(containerApplies("(width > 300px) and style(--theme: dark)", inner),
           "size + style query uses the size container");
 }
+// An unquoted url() is one token (CSS Syntax 3 §4.3.6): a data: URL's ';'
+// does not end the declaration.
+static void testUnquotedUrlToken() {
+    printf("--- unquoted url() token ---\n");
+    auto s = parse(".a { background-image: url(data:image/gif;base64,R0l=); color: red }"
+                   ".b { background: url( a\\(1\\).png ) no-repeat }");
+    check(s.rules.size() == 2, "two rules");
+    if (s.rules.size() != 2) return;
+    check(s.rules[0].declarations.size() == 2, "the url's ';' does not split the declaration");
+    if (!s.rules[0].declarations.empty())
+        check(s.rules[0].declarations[0].value == "url(data:image/gif;base64,R0l=)", "data url kept whole");
+    if (!s.rules[1].declarations.empty())
+        check(s.rules[1].declarations[0].value == "url(\"a(1).png\") no-repeat", "escaped url re-quoted");
+    auto inl = parseInlineStyle("background-image: url(data:image/png;base64,QQ==); width: 1px");
+    check(inl.size() == 2, "inline style keeps the data url whole");
+    auto imp = parse("@import url(sub/x.css); .c { color: red }");
+    check(imp.imports.size() == 1 && imp.imports[0].url == "sub/x.css", "@import url(unquoted)");
+}
+
+// A sheet with a base: the cascade rewrites its relative url()s through the
+// consumer's rebaser, and leaves absolute ones, data: and fragments alone.
+static void testUrlRebaser() {
+    printf("--- url rebaser ---\n");
+    auto sheet = parse(".x { background-image: url(img/a.png), url('b.png'), url(data:x;y), url(#f), url(/abs.png) }"
+                       "@media (min-width: 1px) { .y { cursor: url(c.cur), auto } }");
+    sheet.baseUrl = "/app/css";
+    Cascade c;
+    c.setUrlRebaser([](const std::string& url, const std::string& base) { return base + "/" + url; });
+    c.addStylesheet(sheet);
+    MockElement x; x.tag = "div"; x.classes = "x";
+    auto cs = c.resolve(x);
+    auto it = cs.find("background-image");
+    check(it != cs.end() && it->second ==
+              "url(\"/app/css/img/a.png\"), url(\"/app/css/b.png\"), url(data:x;y), url(#f), url(/abs.png)",
+          "relative urls rebased, others kept");
+    MockElement y; y.tag = "div"; y.classes = "y";
+    auto cy = c.resolve(y);
+    auto iy = cy.find("cursor");
+    check(iy != cy.end() && iy->second == "url(\"/app/css/c.cur\"), auto", "rebased inside @media");
+    Stylesheet noBase = parse(".z { background-image: url(img/a.png) }");
+    Cascade d;
+    d.setUrlRebaser([](const std::string&, const std::string&) { return std::string("WRONG"); });
+    d.addStylesheet(noBase);
+    MockElement z; z.tag = "div"; z.classes = "z";
+    auto cz = d.resolve(z);
+    check(cz["background-image"] == "url(img/a.png)", "a sheet with no base is left as written");
+}
 
 void testParserExtra() {
     printf("=== Parser extras ===\n");
@@ -501,4 +548,6 @@ void testParserExtra() {
     testContainerConditionLogic();
     testContainerStyleQueries();
     testPseudoLayersAndOrigins();
+    testUnquotedUrlToken();
+    testUrlRebaser();
 }

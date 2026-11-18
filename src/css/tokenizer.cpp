@@ -226,9 +226,37 @@ private:
         std::string name = consumeName();
         if (peek() == '(') {
             advance();
+            // url( with an unquoted argument is one url token up to its ')'
+            // (CSS Syntax 3 §4.3.4, §4.3.6): `url(data:image/gif;base64,...)`
+            // keeps its ';' and ',' rather than ending the declaration there.
+            const bool isUrl = name.size() == 3 && (name[0] | 0x20) == 'u' && (name[1] | 0x20) == 'r' &&
+                               (name[2] | 0x20) == 'l';
+            if (isUrl) {
+                size_t k = 0;
+                while (isWhitespace(peek(k))) ++k;
+                const char q = peek(k);
+                if (q != '"' && q != '\'') return consumeUrlToken();
+            }
             return Token{TokenType::Function, name, 0.0, ""};
         }
         return Token{TokenType::Ident, name, 0.0, ""};
+    }
+
+    Token consumeUrlToken() {
+        while (!atEnd() && isWhitespace(peek())) advance();
+        std::string url;
+        while (!atEnd()) {
+            char c = advance();
+            if (c == ')') return Token{TokenType::Url, url, 0.0, ""};
+            if (isWhitespace(c)) {
+                while (!atEnd() && isWhitespace(peek())) advance();
+                if (!atEnd() && peek() == ')') { advance(); return Token{TokenType::Url, url, 0.0, ""}; }
+                continue;  // a bad url; keep what there is rather than drop the rest of the sheet
+            }
+            if (c == '\\') { consumeEscapedCodePoint(url); continue; }
+            url += c;
+        }
+        return Token{TokenType::Url, url, 0.0, ""};
     }
 
     Token consumeToken() {

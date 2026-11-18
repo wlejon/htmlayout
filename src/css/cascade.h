@@ -136,6 +136,16 @@ public:
     // any resolver set before.
     void setImportResolver(BasedImportResolver resolver);
 
+    // Set a callback that resolves a relative url() of a sheet that has a
+    // base (Stylesheet::baseUrl) against it: `url` as written, `baseUrl` the
+    // sheet's. addStylesheet() rewrites such url()s in every declaration to
+    // the answer, quoted, so a value read later (painting, getComputedStyle)
+    // names the file the sheet meant, not one next to the document (CSS
+    // Values 4 §4.5.1). Without it, or for a sheet with no base, url()s stay
+    // as written.
+    using UrlRebaser = std::function<std::string(const std::string& url, const std::string& baseUrl)>;
+    void setUrlRebaser(UrlRebaser rebaser) { urlRebaser_ = std::move(rebaser); }
+
     // Add a stylesheet to a given scope.
     // scope = nullptr means document-level (global).
     // scope = shadow_root_ptr means shadow-scoped styles.
@@ -885,6 +895,8 @@ private:
 
     // @import resolution
     BasedImportResolver importResolver_;
+    UrlRebaser urlRebaser_;
+    void addRebasedStylesheet(const Stylesheet& sheet, void* scope, const MediaContext* media, Origin origin);
     std::unordered_set<std::string> loadedImports_;
 
     // Layer ordering: layerNames_ maps a layer's index (declaration order,

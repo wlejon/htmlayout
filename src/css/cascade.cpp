@@ -115,8 +115,92 @@ void Cascade::setImportResolver(BasedImportResolver resolver) {
     importResolver_ = std::move(resolver);
 }
 
+namespace {
+
+// A url() that names a place on its own: a scheme (data:, http:, bro:), a
+// fragment-only reference (an SVG paint server in the document), or an
+// absolute path.
+bool urlIsAbsolute(const std::string& u) {
+    if (u.empty() || u[0] == '#' || u[0] == '/' || u[0] == '\\') return true;
+    if (u.size() > 2 && std::isalpha(static_cast<unsigned char>(u[0])) && u[1] == ':' &&
+        (u[2] == '/' || u[2] == '\\'))
+        return true;  // a Windows drive path
+    size_t i = 0;
+    while (i < u.size() && (std::isalnum(static_cast<unsigned char>(u[i])) || u[i] == '+' || u[i] == '-' || u[i] == '.')) ++i;
+    return i >= 2 && i < u.size() && u[i] == ':';
+}
+
+// `value` with each relative url() rewritten through `rebase`, quoted. False
+// when there was none to rewrite.
+bool rebaseValueUrls(std::string& value, const std::string& base, const Cascade::UrlRebaser& rebase) {
+    if (value.find('(') == std::string::npos) return false;
+    std::string out;
+    bool changed = false;
+    size_t i = 0;
+    while (i < value.size()) {
+        const bool atUrl = i + 4 <= value.size() &&
+                           (value[i] == 'u' || value[i] == 'U') && (value[i + 1] == 'r' || value[i + 1] == 'R') &&
+                           (value[i + 2] == 'l' || value[i + 2] == 'L') && value[i + 3] == '(' &&
+                           (i == 0 || !(std::isalnum(static_cast<unsigned char>(value[i - 1])) || value[i - 1] == '-'));
+        if (!atUrl) { out += value[i++]; continue; }
+        size_t close = value.find(')', i + 4);
+        if (close == std::string::npos) { out.append(value, i, std::string::npos); break; }
+        std::string body = value.substr(i + 4, close - i - 4);
+        size_t b = body.find_first_not_of(" \t\n"), e = body.find_last_not_of(" \t\n");
+        body = b == std::string::npos ? std::string() : body.substr(b, e - b + 1);
+        if (body.size() >= 2 && (body.front() == '"' || body.front() == '\'') && body.back() == body.front())
+            body = body.substr(1, body.size() - 2);
+        if (urlIsAbsolute(body)) { out.append(value, i, close + 1 - i); i = close + 1; continue; }
+        std::string resolved = rebase(body, base);
+        if (resolved.empty()) { out.append(value, i, close + 1 - i); i = close + 1; continue; }
+        out += "url(\"";
+        for (char ch : resolved) { if (ch == '"' || ch == '\\') out += '\\'; out += ch; }
+        out += "\")";
+        changed = true;
+        i = close + 1;
+    }
+    if (changed) value = std::move(out);
+    return changed;
+}
+
+bool rebaseRules(std::vector<Rule>& rules, const std::string& base, const Cascade::UrlRebaser& rebase) {
+    bool changed = false;
+    for (auto& r : rules)
+        for (auto& d : r.declarations) changed |= rebaseValueUrls(d.value, base, rebase);
+    return changed;
+}
+
+bool rebaseMedia(std::vector<MediaBlock>& blocks, const std::string& base, const Cascade::UrlRebaser& rebase) {
+    bool changed = false;
+    for (auto& mb : blocks) changed |= rebaseRules(mb.rules, base, rebase);
+    return changed;
+}
+
+}  // namespace
+
 void Cascade::addStylesheet(const Stylesheet& sheet, void* scope,
                              const MediaContext* media, Origin origin) {
+    if (!urlRebaser_ || sheet.baseUrl.empty()) {
+        addRebasedStylesheet(sheet, scope, media, origin);
+        return;
+    }
+    Stylesheet rebased = sheet;
+    const std::string& base = sheet.baseUrl;
+    bool changed = rebaseRules(rebased.rules, base, urlRebaser_);
+    changed |= rebaseMedia(rebased.mediaBlocks, base, urlRebaser_);
+    for (auto& lb : rebased.layerBlocks) {
+        changed |= rebaseRules(lb.rules, base, urlRebaser_);
+        changed |= rebaseMedia(lb.mediaBlocks, base, urlRebaser_);
+    }
+    for (auto& cb : rebased.containerBlocks) changed |= rebaseRules(cb.rules, base, urlRebaser_);
+    for (auto& kf : rebased.keyframes)
+        for (auto& stop : kf.stops)
+            for (auto& d : stop.declarations) changed |= rebaseValueUrls(d.value, base, urlRebaser_);
+    addRebasedStylesheet(changed ? rebased : sheet, scope, media, origin);
+}
+
+void Cascade::addRebasedStylesheet(const Stylesheet& sheet, void* scope,
+                                   const MediaContext* media, Origin origin) {
     ++generation_;
     // Process @import rules first (imported rules precede this sheet in source order)
     if (importResolver_) {
