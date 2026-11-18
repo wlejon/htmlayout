@@ -7,6 +7,7 @@
 #include <charconv>
 #include <cstdint>
 #include <cctype>
+#include <cstring>
 
 namespace htmlayout::css {
 
@@ -558,6 +559,74 @@ private:
         return rule;
     }
 
+    // The url()s of a @font-face `src` list a font loader can use, in order:
+    // each comma-separated entry's url, skipping local() and an entry whose
+    // format() names one no browser engine reads any more ("embedded-opentype"
+    // for IE's .eot, "svg") — or, with no format(), whose file is .eot/.svg.
+    // 2048's Clear Sans lists eot, svg, then woff, and a browser takes the woff.
+    static std::vector<std::string> fontFaceSources(const std::string& value) {
+        std::vector<std::string> entries;
+        std::string cur;
+        int depth = 0;
+        char quote = 0;
+        for (char c : value) {
+            if (quote) {
+                if (c == quote) quote = 0;
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (c == '(') {
+                ++depth;
+            } else if (c == ')') {
+                if (depth > 0) --depth;
+            } else if (c == ',' && depth == 0) {
+                entries.push_back(cur);
+                cur.clear();
+                continue;
+            }
+            cur += c;
+        }
+        entries.push_back(cur);
+        auto unquote = [](std::string v) {
+            while (!v.empty() && std::isspace(static_cast<unsigned char>(v.front()))) v.erase(0, 1);
+            while (!v.empty() && std::isspace(static_cast<unsigned char>(v.back()))) v.pop_back();
+            if (v.size() >= 2 && (v.front() == '"' || v.front() == '\'') && v.back() == v.front())
+                v = v.substr(1, v.size() - 2);
+            return v;
+        };
+        auto lower = [](std::string v) {
+            for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return v;
+        };
+        std::vector<std::string> out;
+        for (const std::string& e : entries) {
+            const size_t u = e.find("url(");
+            if (u == std::string::npos) continue;  // local(), or nothing usable
+            const size_t close = e.find(')', u + 4);
+            if (close == std::string::npos) continue;
+            const std::string url = unquote(e.substr(u + 4, close - u - 4));
+            if (url.empty()) continue;
+            const std::string rest = lower(e.substr(close + 1));
+            std::string format;
+            if (const size_t f = rest.find("format("); f != std::string::npos) {
+                const size_t fe = rest.find(')', f + 7);
+                format = unquote(rest.substr(f + 7, fe == std::string::npos ? std::string::npos : fe - f - 7));
+            }
+            if (format == "embedded-opentype" || format == "svg") continue;
+            if (format.empty()) {
+                std::string path = lower(url);
+                const size_t q = path.find_first_of("?#");
+                if (q != std::string::npos) path.erase(q);
+                auto endsWith = [&path](const char* ext) {
+                    const size_t n = std::strlen(ext);
+                    return path.size() >= n && path.compare(path.size() - n, n, ext) == 0;
+                };
+                if (endsWith(".eot") || endsWith(".svg") || endsWith(".svgz")) continue;
+            }
+            out.push_back(url);
+        }
+        return out;
+    }
+
     // Parse @font-face { font-family: ...; src: url(...); ... }
     FontFaceRule parseFontFaceRule() {
         FontFaceRule rule;
@@ -594,19 +663,8 @@ private:
                     (rule.family.front() == '"' || rule.family.front() == '\''))
                     rule.family = rule.family.substr(1, rule.family.size() - 2);
             } else if (d.property == "src") {
-                // Extract url(...) from src value
-                auto pos = d.value.find("url(");
-                if (pos != std::string::npos) {
-                    auto start = pos + 4;
-                    auto end = d.value.find(')', start);
-                    if (end != std::string::npos) {
-                        rule.src = d.value.substr(start, end - start);
-                        // Strip quotes
-                        if (!rule.src.empty() &&
-                            (rule.src.front() == '"' || rule.src.front() == '\''))
-                            rule.src = rule.src.substr(1, rule.src.size() - 2);
-                    }
-                }
+                rule.sources = fontFaceSources(d.value);
+                rule.src = rule.sources.empty() ? std::string() : rule.sources.front();
             } else if (d.property == "font-weight") {
                 if (d.value == "bold") rule.weight = 700;
                 else if (d.value == "normal") rule.weight = 400;

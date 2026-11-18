@@ -396,6 +396,13 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
     bool allInline = true;
     int inflowCount = 0;
 
+    // Floats: in max-content every float sits beside the ones before it, so
+    // a run of them (2048's rows of float:left cells) contributes the SUM of
+    // their widths. A float that clears the run, or a block-level child,
+    // starts a new run; the widest run is what the block needs.
+    float floatRun = 0.0f;
+    float floatRunMax = 0.0f;
+
     auto isWhitespaceOnly = [](std::string_view s) {
         for (char c : s) {
             if (!std::isspace(static_cast<unsigned char>(c))) return false;
@@ -482,7 +489,14 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
             const bool inlineLevel = cdisp == "inline" || cdisp == "inline-block" ||
                                      cdisp == "inline-flex" || cdisp == "inline-grid" ||
                                      cdisp == "inline-table";
-            if (!inlineLevel) allInline = false;
+            const std::string& cfloat = styleVal(child, Prop::Float);
+            const bool floating = !isFlexContainer && (cfloat == "left" || cfloat == "right");
+            // A float shares the line with inline content, so it does not end
+            // the single-line case below.
+            if (!inlineLevel && !floating) {
+                allInline = false;
+                floatRun = 0.0f;
+            }
             ++inflowCount;
             // White space where this inline box meets the previous one. The
             // box measures itself with its own edge trimmed, so the space
@@ -539,6 +553,12 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
                     ? minW + mh : minW + ph + bh + mh;
                 if (childMax < minTotal) childMax = minTotal;
             }
+            if (floating) {
+                const std::string& clr = styleVal(child, Prop::Clear);
+                if (clr == "left" || clr == "right" || clr == "both") floatRun = 0.0f;
+                floatRun += childMax;
+                floatRunMax = std::max(floatRunMax, floatRun);
+            }
             sumChildMax += pendingSpace;
             pendingSpace = 0.0f;
             prevInlineContent = true;
@@ -576,7 +596,7 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
     // Pure inline formatting context: all in-flow children share one line,
     // so max-content is their combined width, not the widest single piece.
     if (allInline && inflowCount > 1) return sumChildMax;
-    return maxChildMax;
+    return std::max(maxChildMax, floatRunMax);
 }
 
 } // namespace htmlayout::layout

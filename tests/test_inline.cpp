@@ -995,6 +995,39 @@ static void testMaxContentInlineSeamWhitespace() {
     }
 }
 
+// Floats side by side: a block whose children are a run of floats (2048's
+// grid rows of float:left cells plus a clearfix ::after) has the run's
+// summed width as its max-content width, so a shrink-to-fit container keeps
+// the row on one line. A float that clears starts a new run.
+static void testMaxContentFloatRun() {
+    printf("--- Max-content: a run of floats sums ---\n");
+    FixedTextMetrics metrics;
+    InlineMockNode row;  initBlock(row);
+    InlineMockNode cells[4];
+    for (int i = 0; i < 4; ++i) {
+        initBlock(cells[i]);
+        cells[i].style["float"] = "left";
+        cells[i].style["width"] = "100px";
+        cells[i].style["margin-right"] = i < 3 ? "10px" : "0";
+        row.addChild(&cells[i]);
+    }
+    InlineMockNode clearfix;  initBlock(clearfix);
+    clearfix.style["clear"] = "both";
+    row.addChild(&clearfix);
+    check(approx(computeMaxContentWidth(&row, metrics), 430.0f),
+          "max-content: four floats in a row sum (100*4 + 10*3)");
+
+    InlineMockNode outer;  initBlock(outer);
+    outer.addChild(&row);
+    check(approx(computeMaxContentWidth(&outer, metrics), 430.0f),
+          "max-content: the row's width carries up to its container");
+
+    cells[2].style["clear"] = "left";
+    row.cachedMaxContentW = -1.0f;  // the style changed; drop the cached width
+    check(approx(computeMaxContentWidth(&row, metrics), 220.0f),
+          "max-content: a clearing float starts a new run (widest run 2 cells)");
+}
+
 void testInlineLayout() {
     // Text breaking
     testTextBreakSingleLine();
@@ -1035,4 +1068,5 @@ void testInlineLayout() {
     testMaxContentKerningAcrossSpaces();
     testNowrapSeamWhitespace();
     testMaxContentInlineSeamWhitespace();
+    testMaxContentFloatRun();
 }

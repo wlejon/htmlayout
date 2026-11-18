@@ -106,7 +106,10 @@ struct KeyframeBlock {
 // A @font-face rule: declares a custom font family
 struct FontFaceRule {
     std::string family;       // font-family name
-    std::string src;          // url(...) source
+    std::string src;          // url(...) source: the first of `sources`
+    // Every url() of the src list a loader can use, in order: a loader that
+    // cannot read one goes on to the next (CSS Fonts 4 §4.3).
+    std::vector<std::string> sources;
     int weight = 400;         // font-weight (100-900)
     bool italic = false;      // font-style: italic
     // URL of the stylesheet that declared the rule; `src` is relative to it

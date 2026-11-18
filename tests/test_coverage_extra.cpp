@@ -330,6 +330,17 @@ static void testFontFaceRule() {
 
     auto s3 = parse("@font-face { font-family: A; src: url(a.ttf); font-weight: bold; }");
     check(!s3.fontFaces.empty() && s3.fontFaces[0].weight == 700, "@font-face bold=700");
+
+    // A src list: eot / svg (by format or by extension) and local() are
+    // skipped; the rest are kept in order for the loader to fall back over.
+    auto s4 = parse("@font-face { font-family: C; src: url(c.eot); "
+                    "src: url('c.eot?#iefix') format('embedded-opentype'), local(\"C Sans\"), "
+                    "url(c.svg#c) format('svg'), url(\"c.woff\") format(\"woff\"), url(c.ttf), url(d.svg); }");
+    check(!s4.fontFaces.empty() && s4.fontFaces[0].src == "c.woff",
+          "@font-face src list: the first usable source is src");
+    check(!s4.fontFaces.empty() && s4.fontFaces[0].sources.size() == 2 &&
+              s4.fontFaces[0].sources[1] == "c.ttf",
+          "@font-face src list: usable sources kept in order");
 }
 
 static void testKeyframesRule() {
