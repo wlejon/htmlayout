@@ -428,7 +428,7 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         } else if (parts.size() == 1) {
             out.push_back({"flex-grow", parts[0]});
             out.push_back({"flex-shrink", "1"});
-            out.push_back({"flex-basis", "0"});
+            out.push_back({"flex-basis", "0%"});
         } else if (parts.size() == 2) {
             out.push_back({"flex-grow", parts[0]});
             if (isBorderWidth(parts[1]) && parts[1].find_first_of("abcdefghijklmnopqrstuvwxyz%") != std::string::npos) {
@@ -436,7 +436,7 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
                 out.push_back({"flex-basis", parts[1]});
             } else {
                 out.push_back({"flex-shrink", parts[1]});
-                out.push_back({"flex-basis", "0"});
+                out.push_back({"flex-basis", "0%"});
             }
         } else {
             out.push_back({"flex-grow", parts[0]});
@@ -481,29 +481,53 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
             if (kw == "inherit" || kw == "initial" || kw == "unset" || kw == "revert" ||
                 kw == "revert-layer") {
                 for (const char* p : {"font-style", "font-weight", "font-size", "line-height",
-                                      "font-family", "font-variant-numeric"})
+                                      "font-family", "font-stretch", "font-variant-caps",
+                                      "font-variant-numeric"})
                     out.push_back({p, kw});
                 return out;
             }
         }
-        std::string fontStyle = "normal", fontWeight = "normal",
-                    fontSize = "16px", lineHeight = "normal", fontFamily;
+        std::string fontStyle = "normal", fontWeight = "normal", fontVariant = "normal",
+                    fontStretch = "normal", fontSize = "16px", lineHeight = "normal", fontFamily;
 
+        // [ style || variant || weight || stretch ]? size [ / line-height ]? family
+        // (CSS Fonts 4 §2.8): the leading keywords come in any order, and
+        // `normal` stands for whichever of them is not otherwise given.
         size_t i = 0;
-        if (i < parts.size() && isFontStyle(parts[i]))
-            fontStyle = parts[i++];
-        if (i < parts.size() && isFontWeight(parts[i]))
-            fontWeight = parts[i++];
+        for (; i + 1 < parts.size(); ++i) {
+            const std::string kw = asciiLower(parts[i]);
+            if (kw == "normal") continue;
+            if (isFontStyle(kw)) {
+                fontStyle = kw;
+                // oblique <angle>
+                if (kw == "oblique" && i + 2 < parts.size() && asciiLower(parts[i + 1]).find("deg") != std::string::npos)
+                    fontStyle += " " + parts[++i];
+                continue;
+            }
+            if (kw == "small-caps") { fontVariant = kw; continue; }
+            if (isFontWeight(kw)) { fontWeight = kw; continue; }
+            if (kw == "ultra-condensed" || kw == "extra-condensed" || kw == "condensed" ||
+                kw == "semi-condensed" || kw == "semi-expanded" || kw == "expanded" ||
+                kw == "extra-expanded" || kw == "ultra-expanded") { fontStretch = kw; continue; }
+            break;
+        }
         if (i < parts.size()) {
-            auto& sizeStr = parts[i];
+            // size, then an optional line-height written `14px/1.5`,
+            // `14px / 1.5`, `14px /1.5` or `14px/ 1.5`.
+            const std::string sizeStr = parts[i++];
             auto slashPos = sizeStr.find('/');
             if (slashPos != std::string::npos) {
                 fontSize = sizeStr.substr(0, slashPos);
                 lineHeight = sizeStr.substr(slashPos + 1);
+                if (lineHeight.empty() && i < parts.size()) lineHeight = parts[i++];
             } else {
                 fontSize = sizeStr;
+                if (i < parts.size() && parts[i][0] == '/') {
+                    lineHeight = parts[i].substr(1);
+                    ++i;
+                    if (lineHeight.empty() && i < parts.size()) lineHeight = parts[i++];
+                }
             }
-            i++;
         }
         for (; i < parts.size(); i++) {
             if (!fontFamily.empty()) fontFamily += " ";
@@ -516,8 +540,10 @@ std::vector<ExpandedDecl> expandShorthand(const std::string& property,
         out.push_back({"font-size", fontSize});
         out.push_back({"line-height", lineHeight});
         out.push_back({"font-family", fontFamily});
+        out.push_back({"font-stretch", fontStretch});
         // The shorthand resets every font-variant-* longhand (CSS Fonts 4
         // §2.8); font-feature-settings is not one of its subproperties.
+        out.push_back({"font-variant-caps", fontVariant});
         out.push_back({"font-variant-numeric", "normal"});
         return out;
     }

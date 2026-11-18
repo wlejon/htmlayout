@@ -549,9 +549,10 @@ bool Cascade::ruleMatchesElement(const ScopedRule& rule, const ElementRef& elem)
         }
         return false;
     }
-    // Scope check: null-scope rules (UA defaults) apply everywhere;
-    // non-null-scope rules only match elements in their shadow root
-    if (rule.scope != nullptr && rule.scope != elem.scope()) return false;
+    // Scope check: the UA sheet applies in every tree; an author rule only
+    // in its own (a document sheet's to the light tree, a shadow root's to
+    // that shadow tree): document styles do not reach into a shadow tree.
+    if (rule.scope != elem.scope() && !(rule.scope == nullptr && rule.origin == Origin::UserAgent)) return false;
     return rule.selector.matches(elem);
 }
 

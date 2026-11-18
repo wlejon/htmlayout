@@ -1639,7 +1639,7 @@ static void testTextWrapsBesideFloat() {
           "block height includes the wrapped lines");
 }
 
-// ===== Floats inside an inline run don't break the line (CSS2 §9.5) =====
+// ===== A float inside an inline run goes on the current line (CSS2 §9.5) =====
 static void testMidRunFloatKeepsLine() {
     printf("--- float between inline siblings: the line continues ---\n");
     LxNode root; root.initBase();
@@ -1658,15 +1658,14 @@ static void testMidRunFloatKeepsLine() {
 
     LxMetrics m;
     layoutTree(&root, 800, m);
-    printf("  ib1 y=%.1f ib2 (%.1f,%.1f); float y=%.1f (expect below line at 20)\n",
-           ib1.box.contentRect.y, ib2.box.contentRect.x, ib2.box.contentRect.y,
-           fl.box.contentRect.y);
+    // The float fits beside the line's content, so it goes on that line at
+    // its left edge and the line's inline content moves right (Chromium).
     check(approx(ib2.box.contentRect.y, ib1.box.contentRect.y, 0.1f),
           "the inline run continues on the same line after the float");
-    check(approx(ib2.box.contentRect.x, 50, 0.1f),
-          "second inline-block follows the first horizontally");
-    check(approx(fl.box.contentRect.y, 20, 0.1f),
-          "the mid-run float is placed below the current line");
+    check(approx(fl.box.contentRect.y, 0, 0.1f) && approx(fl.box.contentRect.x, 0, 0.1f),
+          "the mid-run float that fits is placed on the current line");
+    check(approx(ib1.box.contentRect.x, 80, 0.1f) && approx(ib2.box.contentRect.x, 130, 0.1f),
+          "the line's inline-blocks sit right of the float");
 }
 
 // ===== shape-outside: circle() =====

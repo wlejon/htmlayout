@@ -450,12 +450,36 @@ bool tryLayoutInlineBlockOrReplaced(LayoutNode* node, float availableWidth,
                     float strutBase = std::floor((ibLineHeight - ibNatural) * 0.5f) + asc;
                     child->box.contentRect.y = cursorY + strutBase - child->box.baselineOffset;
                 }
+                // What the child adds to the line's height. An atomic
+                // inline adds its margin box. A non-replaced inline adds its
+                // LEADED box — its own line-height around its glyphs — not
+                // its content area or padding (CSS2 §10.8.1): a <span> or a
+                // ::before icon in `line-height: 1` text must not grow the
+                // line to the font's natural height (xeokit's toolbar
+                // buttons were 66 px tall for Chromium's 43).
+                float contrib = ch;
+                if (styleVal(child, Prop::Display) == "inline" &&
+                    child->box.baselineOffset >= 0) {
+                    float cfs = resolveLength(styleVal(child, Prop::FontSize), 16.0f, 16.0f);
+                    const std::string& cff = styleVal(child, Prop::FontFamily);
+                    const std::string& cfw = styleVal(child, Prop::FontWeight);
+                    float cLH = resolveLineHeight(styleVal(child, Prop::LineHeight), cfs,
+                        cff, cfw, metrics);
+                    float cNat = metrics.lineHeight(cff, cfs, cfw);
+                    if (cNat <= 0) cNat = cfs * 1.2f;
+                    float cHalf = std::floor((cLH - cNat) * 0.5f);
+                    // The last line's natural box ends at the content
+                    // bottom; its leaded box ends half-leading past that.
+                    float leadBottom = child->box.contentRect.y + child->box.contentRect.height -
+                        cNat - cHalf + cLH;
+                    contrib = leadBottom - cursorY;
+                }
                 ibLine.push_back({child, -1, cw, gapUsed});
                 cursorX += cw;
                 // The line still includes the block's strut (CSS2 §10.8):
                 // a line of only atomic inlines shorter than the
                 // line-height must not shrink the line box below it.
-                lineMaxH = std::max(lineMaxH, std::max(ch, ibLineHeight));
+                lineMaxH = std::max(lineMaxH, std::max(contrib, ibLineHeight));
                 // CSS2 §10.8.1: this box's own baseline is its LAST line
                 // box's baseline. This simplified stacker keeps lines on
                 // the strut baseline — half-leading + ascent below the

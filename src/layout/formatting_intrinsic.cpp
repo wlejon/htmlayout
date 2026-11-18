@@ -558,6 +558,12 @@ static float computeMaxContentWidthImpl(LayoutNode* node, TextMetrics& metrics) 
                 if (clr == "left" || clr == "right" || clr == "both") floatRun = 0.0f;
                 floatRun += childMax;
                 floatRunMax = std::max(floatRunMax, floatRun);
+                // A float is not on the line's inline axis: a collapsible
+                // space before it renders no gap (layout drops it), and the
+                // space stays pending for inline content after it.
+                maxChildMax = std::max(maxChildMax, childMax);
+                sumChildMax += childMax;
+                continue;
             }
             sumChildMax += pendingSpace;
             pendingSpace = 0.0f;

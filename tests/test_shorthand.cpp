@@ -6,6 +6,7 @@
 #include "css/font_features.h"
 
 #include <cctype>
+#include <map>
 #include <string>
 
 using namespace htmlayout::css;
@@ -159,7 +160,7 @@ static void testFlex() {
     check(r2[0].value == "1" && r2[1].value == "1" && r2[2].value == "auto", "flex: auto = 1 1 auto");
 
     auto r3 = expandShorthand("flex", "1");
-    check(r3[0].value == "1" && r3[2].value == "0", "flex: 1 = grow:1 basis:0");
+    check(r3[0].value == "1" && r3[2].value == "0%", "flex: 1 = grow:1 basis:0%");
 
     auto r4 = expandShorthand("flex", "2 1 100px");
     check(r4[0].value == "2", "flex 3v: grow=2");
@@ -192,14 +193,33 @@ static void testGap() {
 static void testFont() {
     printf("--- Shorthand: font ---\n");
     auto r = expandShorthand("font", "italic bold 16px/1.5 Arial, sans-serif");
-    check(r.size() == 6, "font -> 6 longhands");
+    check(r.size() == 8, "font -> 8 longhands");
     check(r[0].property == "font-style" && r[0].value == "italic", "font: style=italic");
     check(r[1].property == "font-weight" && r[1].value == "bold", "font: weight=bold");
     check(r[2].property == "font-size" && r[2].value == "16px", "font: size=16px");
     check(r[3].property == "line-height" && r[3].value == "1.5", "font: line-height=1.5");
     check(r[4].property == "font-family", "font: family property");
-    check(r[5].property == "font-variant-numeric" && r[5].value == "normal",
+    check(r[5].property == "font-stretch" && r[5].value == "normal", "font: resets font-stretch");
+    check(r[6].property == "font-variant-caps" && r[6].value == "normal", "font: resets font-variant-caps");
+    check(r[7].property == "font-variant-numeric" && r[7].value == "normal",
           "font: resets font-variant-numeric");
+
+    // The leading keywords come in any order, `normal` in any slot, and the
+    // line-height slash may stand apart.
+    auto any = [](const char* v) {
+        std::map<std::string, std::string> m;
+        for (auto& d : expandShorthand("font", v)) m[d.property] = d.value;
+        return m;
+    };
+    auto m1 = any("bold italic 14px/1.5 Arial, sans-serif");
+    check(m1["font-weight"] == "bold" && m1["font-style"] == "italic" && m1["font-size"] == "14px" &&
+          m1["line-height"] == "1.5" && m1["font-family"] == "Arial, sans-serif", "font: weight before style");
+    auto m2 = any("normal small-caps 700 condensed 12px / 20px serif");
+    check(m2["font-variant-caps"] == "small-caps" && m2["font-weight"] == "700" && m2["font-stretch"] == "condensed" &&
+          m2["font-size"] == "12px" && m2["line-height"] == "20px" && m2["font-family"] == "serif",
+          "font: variant, stretch, spaced slash");
+    auto m3 = any("12px /2 serif");
+    check(m3["line-height"] == "2" && m3["font-family"] == "serif", "font: slash on the line-height");
 
     auto r2 = expandShorthand("font", "14px monospace");
     check(r2[2].value == "14px", "font simple: size=14px");
@@ -211,7 +231,7 @@ static void testFont() {
         auto rk = expandShorthand("font", kw);
         std::string lower = kw;
         for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        bool all = rk.size() == 6;
+        bool all = rk.size() == 8;
         for (auto& d : rk) all = all && d.value == lower;
         check(all, (std::string("font: ") + kw + " sets every longhand to the keyword").c_str());
         bool hasFamily = false;

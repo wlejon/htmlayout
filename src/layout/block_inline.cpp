@@ -244,17 +244,42 @@ void layoutInlineRun(LayoutNode* node, float childAvailable, float fontSize,
         };
         for (size_t i = 0; i < items.size(); i++) {
             if (items[i].isFloat) {
-                // A float breaking into the middle of a line is placed below
-                // the line under construction (its top may not sit above the
-                // current line box, CSS2 §9.5.1 rule 6); at a line start it
-                // sits at the line's own top and narrows that line.
+                // A float met in the middle of a line goes on that line,
+                // narrowing it, when it fits beside the content already
+                // there (CSS2 §9.5.1: as high as possible, but not above the
+                // current line box). One that does not fit is placed below
+                // the line under construction. At a line start it sits at
+                // the line's own top.
                 float placeY = lineY;
-                if (cursorX > 0) {
-                    auto [a, b] = lineExtents(lineStart, i);
-                    placeY = lineY + a + b;
+                bool onThisLine = cursorX <= 0;
+                if (!onThisLine) {
+                    LayoutNode* flt = items[i].node;
+                    layoutNode(flt, childAvailable, metrics);
+                    const float fw = flt->box.fullWidth() + flt->box.margin.left +
+                                     flt->box.margin.right;
+                    const float lineAvail = (curR - curL) - (lines.empty() ? textIndent : 0.0f);
+                    // Collapsible white space ending the line so far renders
+                    // no gap before the float: it does not count.
+                    float used = cursorX;
+                    size_t l = i;
+                    while (l > lineStart && !isContent(l - 1)) --l;
+                    if (l > lineStart) {
+                        const IFCItem& last = items[l - 1];
+                        if (!last.isElement && !last.preserved && !last.forceBreak) {
+                            size_t n = 0;
+                            while (n < last.text.size() && last.text[last.text.size() - 1 - n] == ' ') ++n;
+                            used -= n == last.text.size() ? last.width
+                                                          : std::min(last.width, last.spaceW * static_cast<float>(n));
+                        }
+                    }
+                    onThisLine = used + fw <= lineAvail + kFitSlack;
+                    if (!onThisLine) {
+                        auto [a, b] = lineExtents(lineStart, i);
+                        placeY = lineY + a + b;
+                    }
                 }
                 if (env.placeFloat) env.placeFloat(items[i].node, placeY);
-                if (cursorX == 0) {
+                if (onThisLine) {
                     auto b = bandAt(lineY);
                     curL = b.first;
                     curR = b.second;

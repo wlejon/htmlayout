@@ -380,6 +380,51 @@ static void testInlineBlockHalfLeading() {
               "text beside an absolute box keeps its half-leading");
         check(near(ib.box.contentRect.height, 40), "the inline-block is one 40px line");
     }
+    {
+        // A span whose line-height is below its font's natural height adds
+        // its leaded box to the line, not its content area (an icon
+        // ::before in a `line-height: 1` button).
+        INode block; block.init(); block.style_["width"] = "400px";
+        INode ib; ib.init("inline-block"); ib.style_["line-height"] = "16px";
+        INode sp; sp.span(); sp.style_["line-height"] = "16px";
+        INode t; t.textNode("0");
+        sp.addChild(&t); ib.addChild(&sp); block.addChild(&ib);
+        layoutTree(&block, 800, m);
+        check(sp.box.contentRect.height > 16.5f, "the span's content area is taller than its line-height");
+        check(near(ib.box.contentRect.height, 16), "the inline-block is one 16px line, not the span's content area");
+    }
+}
+
+static void testFloatBesideLineContent() {
+    printf("--- inline boxes: a float met mid-line goes on that line when it fits ---\n");
+    IMetrics m;
+    auto build = [](INode& block, INode& t, INode& f, INode& t2, const char* width) {
+        block.init(); block.style_["width"] = width;
+        t.textNode("abc ");
+        f.init(); f.style_["float"] = "right"; f.style_["width"] = "20px"; f.style_["height"] = "10px";
+        t2.textNode(" ");
+        block.addChild(&t); block.addChild(&f); block.addChild(&t2);
+    };
+    {
+        INode block, t, f, t2;
+        build(block, t, f, t2, "50px");   // "abc" is 30px, the float 20px: they fit
+        layoutTree(&block, 800, m);
+        check(near(f.box.contentRect.y, 0), "the float sits on the first line beside the text");
+        check(near(f.box.contentRect.x, 30), "at the right edge of the line");
+        check(near(block.box.contentRect.height, 20), "the block is one line tall");
+    }
+    {
+        INode block, t, f, t2;
+        build(block, t, f, t2, "40px");   // 30 + 20 > 40: below the line
+        layoutTree(&block, 800, m);
+        check(near(f.box.contentRect.y, 20), "a float that does not fit goes below the line");
+    }
+    {
+        INode block, t, f, t2;
+        build(block, t, f, t2, "auto");
+        check(near(computeMaxContentWidth(&block, m), 50),
+              "max-content counts no space before or after a float");
+    }
 }
 
 void testInlineBoxes() {
@@ -395,4 +440,5 @@ void testInlineBoxes() {
     testBreakBeforeSpan();
     testBlockInsideInlineStaysAtomic();
     testInlineBlockHalfLeading();
+    testFloatBesideLineContent();
 }

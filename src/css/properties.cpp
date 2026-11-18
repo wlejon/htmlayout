@@ -78,6 +78,8 @@ const std::vector<PropertyDef>& knownProperties() {
         {"font-size",         "16px",      true},
         {"font-weight",       "normal",    true},
         {"font-style",        "normal",    true},
+        {"font-stretch",      "normal",    true},
+        {"font-variant-caps", "normal",    true},
         // OpenType feature selection (css/font_features.h resolves both into
         // one feature list); measurement and paint shape with it.
         {"font-variant-numeric",  "normal", true},
@@ -228,9 +230,9 @@ const std::vector<PropertyDef>& knownProperties() {
         {"grid-row",              "auto",   false},
         {"grid-column",           "auto",   false},
         {"grid-area",             "auto",   false},
-        {"justify-items",         "stretch", false},
+        {"justify-items",         "normal", false},
         {"justify-self",          "auto",   false},
-        {"place-items",           "stretch", false},
+        {"place-items",           "normal", false},
         {"place-content",         "normal", false},
         {"place-self",            "auto",   false},
 

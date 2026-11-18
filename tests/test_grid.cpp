@@ -507,7 +507,7 @@ static void testGridProperties() {
     check(initialValue("grid-template-rows") == "none", "grid-template-rows initial = none");
     check(initialValue("grid-area") == "auto", "grid-area initial = auto");
     check(initialValue("grid-auto-flow") == "row", "grid-auto-flow initial = row");
-    check(initialValue("justify-items") == "stretch", "justify-items initial = stretch");
+    check(initialValue("justify-items") == "normal", "justify-items initial = normal (behaves as stretch in grid)");
 }
 
 // ========== grid-template-areas tests ==========
